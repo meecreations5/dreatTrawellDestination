@@ -1,13 +1,13 @@
-export const dynamic = "force-dynamic";
-"use client";
 
-import { useState } from "react";
+"use client";
+export const dynamic = "force-dynamic";
+
+import { useState, useEffect } from "react";
 import AdminSidebar from "@/components/admin/AdminSidebar";
 import AdminTopBar from "@/components/admin/AdminTopBar";
 import AdminBreadcrumb from "@/components/admin/AdminBreadcrumb";
 import { useAuth } from "@/hooks/useAuth";
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
 
 export default function AdminLayout({ children }) {
   const { user, loading } = useAuth(true);
