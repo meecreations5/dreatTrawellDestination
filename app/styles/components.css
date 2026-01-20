@@ -1,0 +1,13 @@
+@layer components {
+  .card {
+    @apply bg-white rounded-xl shadow-card p-4;
+  }
+
+  .card-title {
+    @apply text-sm font-semibold text-text-primary;
+  }
+
+  .muted-text {
+    @apply text-sm text-text-secondary;
+  }
+}
