@@ -1,4 +1,5 @@
 import {
+  LayoutDashboard,
   CalendarDays,
   MessageSquare,
   Target,
@@ -6,6 +7,21 @@ import {
 } from "lucide-react";
 
 export const APP_NAV = [
+  /* =========================
+     DASHBOARD
+  ========================== */
+  {
+    id: "dashboard",
+    label: "Dashboard",
+    icon: LayoutDashboard,
+    base: "/dashboard",
+    routes: ["/dashboard"],
+    showInNav: true
+  },
+
+  /* =========================
+     ATTENDANCE
+  ========================== */
   {
     id: "attendance",
     label: "Attendance",
@@ -38,6 +54,9 @@ export const APP_NAV = [
     ]
   },
 
+  /* =========================
+     ENGAGEMENTS
+  ========================== */
   {
     id: "engagements",
     label: "Engagement",
@@ -66,6 +85,9 @@ export const APP_NAV = [
     ]
   },
 
+  /* =========================
+     LEADS
+  ========================== */
   {
     id: "leads",
     label: "Leads",
@@ -91,10 +113,12 @@ export const APP_NAV = [
         label: "Create",
         href: "/leads/create"
       }
-      
     ]
   },
 
+  /* =========================
+     PROFILE
+  ========================== */
   {
     id: "profile",
     label: "Profile",

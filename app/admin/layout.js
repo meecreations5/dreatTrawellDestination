@@ -1,27 +1,51 @@
-
 "use client";
-export const dynamic = "force-dynamic";
 
 import { useState, useEffect } from "react";
+import { useRouter, usePathname } from "next/navigation";
 import AdminSidebar from "@/components/admin/AdminSidebar";
 import AdminTopBar from "@/components/admin/AdminTopBar";
 import AdminBreadcrumb from "@/components/admin/AdminBreadcrumb";
 import { useAuth } from "@/hooks/useAuth";
-import { useRouter } from "next/navigation";
+
+export const dynamic = "force-dynamic";
 
 export default function AdminLayout({ children }) {
-  const { user, loading } = useAuth(true);
+  const { user, loading } = useAuth();
   const router = useRouter();
-
+  const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
 
-  useEffect(() => {
-    if (loading) return;
-    if (!user) router.replace("/login");
-    if (user && !user.isAdmin) router.replace("/dashboard");
-  }, [user, loading, router]);
+  const isLoginPage = pathname === "/admin/login";
 
-  if (loading || !user || !user.isAdmin) return null;
+  useEffect(() => {
+    // 🔥 DO NOT GUARD LOGIN PAGE
+    if (isLoginPage) return;
+
+    if (loading) return;
+
+    if (!user) {
+      router.replace("/admin/login");
+      return;
+    }
+
+    if (!user.isAdmin) {
+      router.replace("/admin/dashboard");
+    }
+  }, [user, loading, isLoginPage, router]);
+
+  // ✅ Allow login page to render freely
+  if (isLoginPage) {
+    return <>{children}</>;
+  }
+
+  // ⛔ Guard all other admin routes
+  if (loading || !user || !user.isAdmin) {
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-slate-50">
+        <p className="text-slate-500">Redirecting…</p>
+      </main>
+    );
+  }
 
   return (
     <section>
