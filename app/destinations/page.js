@@ -1,6 +1,7 @@
-// destinations/page.js 
+// app/destinations/page.js
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   collection,
@@ -10,18 +11,45 @@ import {
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
-export default async function DestinationsListingPage() {
-  const q = query(
-    collection(db, "destinations"),
-    where("status", "==", "published"),
-    where("active", "==", true)
-  );
+export default function DestinationsListingPage() {
+  const [destinations, setDestinations] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const snap = await getDocs(q);
-  const destinations = snap.docs.map(d => ({
-    id: d.id,
-    ...d.data()
-  }));
+  useEffect(() => {
+    if (!db) return; // 🔑 critical guard
+
+    const load = async () => {
+      try {
+        const q = query(
+          collection(db, "destinations"),
+          where("status", "==", "published"),
+          where("active", "==", true)
+        );
+
+        const snap = await getDocs(q);
+        setDestinations(
+          snap.docs.map(d => ({
+            id: d.id,
+            ...d.data()
+          }))
+        );
+      } catch (err) {
+        console.error("Failed to load destinations", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    load();
+  }, []);
+
+  if (loading) {
+    return (
+      <main className="p-6 text-center text-gray-500">
+        Loading destinations…
+      </main>
+    );
+  }
 
   return (
     <main className="max-w-6xl mx-auto p-6 space-y-10">
@@ -45,6 +73,7 @@ export default async function DestinationsListingPage() {
               <img
                 src={d.coverPhoto.url}
                 className="h-48 w-full object-cover"
+                alt={d.name}
               />
             )}
 
