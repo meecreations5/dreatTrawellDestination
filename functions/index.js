@@ -24,7 +24,7 @@ async function generateEmployeeId(role, associateType) {
   // Employee (includes Admin)
   if (role === "employee") {
     counterKey = "employee";
-    prefix = "EMP";
+    prefix = "DT-EMP";
   }
 
   // Associate
@@ -169,3 +169,59 @@ exports.createTeamUser = onCall(async (request) => {
     isAdmin: payload.isAdmin
   };
 });
+
+exports.deleteUser = onCall(async (request) => {
+  const { auth, data } = request;
+  const { uid } = data;
+
+  if (!auth) {
+    throw new HttpsError(
+      "unauthenticated",
+      "Login required"
+    );
+  }
+
+  // Admin check
+  const adminSnap = await admin
+    .firestore()
+    .doc(`users/${auth.uid}`)
+    .get();
+
+  if (!adminSnap.exists || adminSnap.data().isAdmin !== true) {
+    throw new HttpsError(
+      "permission-denied",
+      "Only admins can delete users"
+    );
+  }
+
+  if (!uid) {
+    throw new HttpsError(
+      "invalid-argument",
+      "User ID is required"
+    );
+  }
+
+  const userRef = admin.firestore().doc(`users/${uid}`);
+  const userSnap = await userRef.get();
+
+  if (!userSnap.exists) {
+    throw new HttpsError(
+      "not-found",
+      "User not found"
+    );
+  }
+
+  try {
+    // 🔥 HARD DELETE
+    await admin.auth().deleteUser(uid);
+    await userRef.delete();
+
+    return { status: "hard-deleted" };
+  } catch (err) {
+    throw new HttpsError(
+      "internal",
+      err.message || "Failed to delete user"
+    );
+  }
+});
+

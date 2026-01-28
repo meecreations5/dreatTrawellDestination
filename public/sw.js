@@ -50,10 +50,13 @@ self.addEventListener("activate", event => {
 self.addEventListener("fetch", event => {
   const { request } = event;
 
-  /* Only handle GET requests */
+  /* ✅ Only handle GET */
   if (request.method !== "GET") return;
 
-  /* Ignore Firebase / APIs */
+  /* ✅ Ignore non-http(s) requests (FIXES chrome-extension error) */
+  if (!request.url.startsWith("http")) return;
+
+  /* ✅ Ignore Firebase / APIs */
   if (
     request.url.includes("firestore.googleapis.com") ||
     request.url.includes("firebase") ||
@@ -79,6 +82,7 @@ self.addEventListener("fetch", event => {
               cache.put(request, clone);
             });
           }
+
           return response;
         })
         .catch(() => caches.match("/dashboard"));

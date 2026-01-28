@@ -8,11 +8,11 @@ import {
   doc
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { LayoutGrid, List, Download } from "lucide-react";
-
+import { LayoutGrid, List, Download, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import AdminGuard from "@/components/AdminGuard";
 import PageSkeleton from "@/components/ui/PageSkeleton";
-
+import { getFunctions, httpsCallable } from "firebase/functions";
 /* =========================
    UI ATOMS
 ========================= */
@@ -31,14 +31,19 @@ const UserStatusToggle = ({ user }) => (
       });
     }}
     className={`text-xs px-2 py-1 rounded-md border
-      ${
-        user.active
-          ? "bg-green-50 text-green-700 border-green-200"
-          : "bg-gray-100 text-gray-600 border-gray-200"
+      ${user.active
+        ? "bg-green-50 text-green-700 border-green-200"
+        : "bg-gray-100 text-gray-600 border-gray-200"
       }`}
   >
     {user.active ? "Active" : "Inactive"}
   </button>
+);
+
+
+const deleteUserFn = httpsCallable(
+  getFunctions(),
+  "deleteUser"
 );
 
 /* =========================
@@ -91,6 +96,12 @@ export default function AdminUsersPage() {
   const [search, setSearch] = useState("");
   const [role, setRole] = useState("all");
   const [selected, setSelected] = useState([]);
+
+  const router = useRouter(); // ✅ ADD THIS
+
+
+  const functions = getFunctions();
+  const deleteUserFn = httpsCallable(functions, "deleteUser");
 
   /* =========================
      LOAD USERS
@@ -245,21 +256,19 @@ export default function AdminUsersPage() {
               <div className="flex border border-gray-100 rounded-lg overflow-hidden">
                 <button
                   onClick={() => setView("card")}
-                  className={`p-2 ${
-                    view === "card"
-                      ? "bg-blue-600 text-white"
-                      : "text-gray-500 hover:bg-gray-50"
-                  }`}
+                  className={`p-2 ${view === "card"
+                    ? "bg-blue-600 text-white"
+                    : "text-gray-500 hover:bg-gray-50"
+                    }`}
                 >
                   <LayoutGrid size={14} />
                 </button>
                 <button
                   onClick={() => setView("table")}
-                  className={`p-2 ${
-                    view === "table"
-                      ? "bg-blue-600 text-white"
-                      : "text-gray-500 hover:bg-gray-50"
-                  }`}
+                  className={`p-2 ${view === "table"
+                    ? "bg-blue-600 text-white"
+                    : "text-gray-500 hover:bg-gray-50"
+                    }`}
                 >
                   <List size={14} />
                 </button>
@@ -293,6 +302,7 @@ export default function AdminUsersPage() {
                   <th className="px-4 py-3 text-left">User</th>
                   <th className="px-4 py-3 text-left">Role</th>
                   <th className="px-4 py-3 text-left">Status</th>
+                  <th className="px-4 py-3 text-left">Action</th>
                 </tr>
               </thead>
 
@@ -317,7 +327,13 @@ export default function AdminUsersPage() {
                     </td>
 
                     <td className="px-4 py-3">
-                      <div className="font-medium">{u.name}</div>
+                      <button
+                        type="button"
+                        onClick={() => router.push(`/admin/users/${u.id}`)}
+                        className="font-medium text-blue-600 hover:underline text-left"
+                      >
+                        {u.name}
+                      </button>
                       <div className="text-xs text-gray-500">{u.email}</div>
                     </td>
 
@@ -327,6 +343,29 @@ export default function AdminUsersPage() {
 
                     <td className="px-4 py-3">
                       <UserStatusToggle user={u} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={async () => {
+                          if (
+                            !confirm(
+                              `PERMANENTLY delete ${u.name}? This cannot be undone.`
+                            )
+                          )
+                            return;
+
+                          await deleteUserFn({ uid: u.id });
+
+                          // Remove immediately from UI
+                          setUsers(users =>
+                            users.filter(x => x.id !== u.id)
+                          );
+                        }}
+                        className="text-red-600 hover:text-red-700"
+                        title="Delete user"
+                      >
+                        <Trash2 size={16} />
+                      </button>
                     </td>
                   </tr>
                 ))}
