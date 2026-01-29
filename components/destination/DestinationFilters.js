@@ -1,3 +1,10 @@
+"use client";
+
+import {
+  LayoutGrid,
+  List
+} from "lucide-react";
+
 export default function DestinationFilters({
   view,
   setView,
@@ -7,46 +14,121 @@ export default function DestinationFilters({
   return (
     <div
       className="
-        bg-white border border-gray-200 rounded-lg
-        p-3 flex flex-wrap gap-3 items-center
+        sticky top-0 z-20
+        bg-white/90 backdrop-blur
+        border border-gray-100
+        rounded-xl
+        p-3
+        mb-4
       "
     >
-      {/* SEARCH */}
-      <input
-        type="text"
-        placeholder="Search destination"
-        className="
-          text-sm border rounded-md px-3 py-1.5
-          focus:outline-none focus:ring-2 focus:ring-blue-100
-        "
-        value={filters.search}
-        onChange={e =>
-          setFilters(f => ({
-            ...f,
-            search: e.target.value
-          }))
-        }
-      />
+      <div className="flex flex-wrap gap-3 items-center justify-between">
 
-      {/* VIEW TOGGLE (same button style) */}
-      <div className="ml-auto flex border rounded-md overflow-hidden">
-        {["card", "table"].map(v => (
-          <button
-            key={v}
-            onClick={() => setView(v)}
-            className={`
-              px-3 py-1.5 text-sm
-              ${view === v
-                ? "bg-blue-600 text-white"
-                : "bg-white hover:bg-gray-50"}
-            `}
+        {/* LEFT FILTERS */}
+        <div className="flex flex-wrap gap-2">
+          {/* SEARCH */}
+          <input
+            type="text"
+            placeholder="Search destination"
+            value={filters.search}
+            onChange={e =>
+              setFilters(f => ({
+                ...f,
+                search: e.target.value
+              }))
+            }
+            className="
+              text-xs px-3 py-2
+              border border-gray-100
+              rounded-lg
+              bg-white
+              focus:outline-none
+            "
+          />
+
+          {/* STATUS FILTER (optional ready) */}
+          <select
+            value={filters.status || "all"}
+            onChange={e =>
+              setFilters(f => ({
+                ...f,
+                status: e.target.value
+              }))
+            }
+            className="
+              text-xs px-3 py-2
+              border border-gray-100
+              rounded-lg
+              bg-white
+            "
           >
-            {v}
-          </button>
-        ))}
-      </div>
+            <option value="all">
+              All Status
+            </option>
+            <option value="draft">
+              Draft
+            </option>
+            <option value="published">
+              Published
+            </option>
+          </select>
 
-      
+          {/* ACTIVE FILTER (optional ready) */}
+          <select
+            value={filters.active || "all"}
+            onChange={e =>
+              setFilters(f => ({
+                ...f,
+                active: e.target.value
+              }))
+            }
+            className="
+              text-xs px-3 py-2
+              border border-gray-100
+              rounded-lg
+              bg-white
+            "
+          >
+            <option value="all">
+              All Visibility
+            </option>
+            <option value="active">
+              Active
+            </option>
+            <option value="inactive">
+              Inactive
+            </option>
+          </select>
+        </div>
+
+        {/* RIGHT ACTIONS */}
+        <div className="flex items-center gap-2">
+          {/* VIEW TOGGLE */}
+          <div className="flex border border-gray-100 rounded-lg overflow-hidden">
+            <button
+              onClick={() => setView("card")}
+              className={`p-2 ${
+                view === "card"
+                  ? "bg-blue-600 text-white"
+                  : "text-gray-500 hover:bg-gray-50"
+              }`}
+            >
+              <LayoutGrid size={14} />
+            </button>
+
+            <button
+              onClick={() => setView("table")}
+              className={`p-2 ${
+                view === "table"
+                  ? "bg-blue-600 text-white"
+                  : "text-gray-500 hover:bg-gray-50"
+              }`}
+            >
+              <List size={14} />
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

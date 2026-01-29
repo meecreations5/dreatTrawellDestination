@@ -33,25 +33,24 @@ export default function DestinationsPage() {
      REALTIME LOAD
   ========================== */
   useEffect(() => {
-    const q = query(
-      collection(db, "destinations"),
-      where("status", "==", "published"),
-      where("active", "==", true),
-      orderBy("name", "asc")
+  const q = query(
+    collection(db, "destinations"),
+    orderBy("name", "asc")
+  );
+
+  const unsub = onSnapshot(q, snap => {
+    setDestinations(
+      snap.docs.map(d => ({
+        id: d.id,
+        ...d.data()
+      }))
     );
+    setLoading(false);
+  });
 
-    const unsub = onSnapshot(q, snap => {
-      setDestinations(
-        snap.docs.map(d => ({
-          id: d.id,
-          ...d.data()
-        }))
-      );
-      setLoading(false);
-    });
+  return () => unsub();
+}, []);
 
-    return () => unsub();
-  }, []);
 
   /* =========================
      FILTERED DATA
