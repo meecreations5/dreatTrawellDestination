@@ -309,7 +309,7 @@ export default function AdminTravelAgentsPage() {
                           </Link>
 
                           <Link
-                            href={`/admin/travel-agents/${agent.id}/edit`}
+                            href={`/admin/travel-agents/${agent.id}`}
                             className="text-gray-600 hover:underline"
                           >
                             Edit
