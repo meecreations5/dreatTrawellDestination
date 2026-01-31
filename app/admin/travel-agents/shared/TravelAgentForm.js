@@ -17,6 +17,7 @@ import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import AdminGuard from "@/components/AdminGuard";
 import { generateTravelAgentCode } from "@/lib/generateTravelAgentCode";
+import { checkDuplicateAgent, normalize } from "@/lib/checkDuplicateAgent";
 
 /* =========================
    FORM SHAPE (SOURCE OF TRUTH)
@@ -142,6 +143,8 @@ function SkeletonCard() {
   );
 }
 
+
+
 /* =========================
    COMPONENT
 ========================= */
@@ -156,8 +159,11 @@ export default function TravelAgentForm({ mode, agentId }) {
   const [addressLoading, setAddressLoading] = useState(false);
   const [addressError, setAddressError] = useState("");
 
+
+
   const sanitize = obj =>
     JSON.parse(JSON.stringify(obj, (_, v) => v ?? null));
+
 
   /* ================= LOAD ================= */
   useEffect(() => {
@@ -232,10 +238,36 @@ export default function TravelAgentForm({ mode, agentId }) {
 
   /* ================= SAVE ================= */
   const save = async () => {
-    if (!form.agencyName) return alert("Agency name required");
+    if (!form.agencyName) {
+      alert("Agency name required");
+      return;
+    }
 
+    // normalize generic contact values
+    const phone = normalize(form.genericContact.phone);
+    const email = normalize(form.genericContact.email);
+
+    // duplicate check (ONLY generic contact)
+    const isDuplicate = await checkDuplicateAgent(
+      phone,
+      email,
+      isEdit ? agentId : null // allow same doc in edit mode
+    );
+
+    if (isDuplicate) {
+      alert(
+        "Duplicate Travel Agent detected.\n\nGeneric contact mobile or email already exists."
+      );
+      return;
+    }
+
+    // build payload
     const payload = sanitize({
       ...form,
+      genericContact: {
+        phone,
+        email
+      },
       destinations: form.destinations,
       destinationIds: form.destinations.map(d => d.id),
       avgTicketSize: form.avgTicketSize
@@ -244,10 +276,11 @@ export default function TravelAgentForm({ mode, agentId }) {
       updatedAt: serverTimestamp()
     });
 
+    // save to Firestore
     if (isEdit) {
       await updateDoc(doc(db, "travelAgents", agentId), payload);
     } else {
-      await setDoc(doc(db, "travelAgents", crypto.randomUUID()), {
+      await setDoc(doc(collection(db, "travelAgents")), {
         ...payload,
         agentCode: await generateTravelAgentCode(),
         createdByUid: user.uid,
@@ -257,6 +290,7 @@ export default function TravelAgentForm({ mode, agentId }) {
 
     router.replace("/admin/travel-agents");
   };
+
 
   if (loading) {
     return (
@@ -322,7 +356,7 @@ export default function TravelAgentForm({ mode, agentId }) {
           <Section title="Destinations">
             <div className="flex flex-wrap gap-2 mb-3">
               {form.destinations.map(d => (
-                <Chip key={d.id} label={d.name}
+                <Chip key={d.id || `${d.name}-${Math.random()}`} label={d.name}
                   onRemove={() => {
                     const dest = form.destinations.filter(x => x.id !== d.id);
                     setForm({ ...form, destinations: dest, destinationIds: dest.map(x => x.id) });
