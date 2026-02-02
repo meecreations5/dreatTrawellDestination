@@ -243,31 +243,29 @@ export default function TravelAgentForm({ mode, agentId }) {
       return;
     }
 
-    // normalize generic contact values
     const phone = normalize(form.genericContact.phone);
     const email = normalize(form.genericContact.email);
 
-    // duplicate check (ONLY generic contact)
-    const isDuplicate = await checkDuplicateAgent(
-      phone,
-      email,
-      isEdit ? agentId : null // allow same doc in edit mode
-    );
-
-    if (isDuplicate) {
-      alert(
-        "Duplicate Travel Agent detected.\n\nGeneric contact mobile or email already exists."
+    // ❗ Only block in EDIT mode if generic contact
+    // matches ANOTHER agent (not itself)
+    if (isEdit) {
+      const isDuplicate = await checkDuplicateAgent(
+        phone,
+        email,
+        agentId // exclude current agent
       );
-      return;
+
+      if (isDuplicate) {
+        alert(
+          "Generic contact already exists for another Travel Agent."
+        );
+        return;
+      }
     }
 
-    // build payload
     const payload = sanitize({
       ...form,
-      genericContact: {
-        phone,
-        email
-      },
+      genericContact: { phone, email },
       destinations: form.destinations,
       destinationIds: form.destinations.map(d => d.id),
       avgTicketSize: form.avgTicketSize
@@ -276,7 +274,6 @@ export default function TravelAgentForm({ mode, agentId }) {
       updatedAt: serverTimestamp()
     });
 
-    // save to Firestore
     if (isEdit) {
       await updateDoc(doc(db, "travelAgents", agentId), payload);
     } else {
@@ -290,6 +287,7 @@ export default function TravelAgentForm({ mode, agentId }) {
 
     router.replace("/admin/travel-agents");
   };
+
 
 
   if (loading) {
