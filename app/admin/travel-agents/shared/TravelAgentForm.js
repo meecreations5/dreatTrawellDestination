@@ -158,6 +158,11 @@ export default function TravelAgentForm({ mode, agentId }) {
   const [allDestinations, setAllDestinations] = useState([]);
   const [addressLoading, setAddressLoading] = useState(false);
   const [addressError, setAddressError] = useState("");
+  const [originalGenericContact, setOriginalGenericContact] = useState({
+    phone: "",
+    email: ""
+  });
+
 
 
 
@@ -176,15 +181,24 @@ export default function TravelAgentForm({ mode, agentId }) {
       if (!snap.exists()) return router.replace("/admin/travel-agents");
 
       const d = snap.data();
+
+      const phone = normalize(d.genericContact?.phone);
+      const email = normalize(d.genericContact?.email);
+
       setForm({
         ...EMPTY_FORM,
         ...d,
         destinations: d.destinations || [],
         destinationIds: (d.destinations || []).map(x => x.id)
       });
+
+      // ✅ STORE ORIGINAL GENERIC CONTACT
+      setOriginalGenericContact({ phone, email });
+
       setLoading(false);
     });
   }, [isEdit, agentId, router]);
+
 
   useEffect(() => {
     getDocs(
@@ -246,13 +260,16 @@ export default function TravelAgentForm({ mode, agentId }) {
     const phone = normalize(form.genericContact.phone);
     const email = normalize(form.genericContact.email);
 
-    // ❗ Only block in EDIT mode if generic contact
-    // matches ANOTHER agent (not itself)
-    if (isEdit) {
+    // ✅ CHECK ONLY IF GENERIC CONTACT CHANGED
+    const genericContactChanged =
+      phone !== originalGenericContact.phone ||
+      email !== originalGenericContact.email;
+
+    if (isEdit && genericContactChanged) {
       const isDuplicate = await checkDuplicateAgent(
         phone,
         email,
-        agentId // exclude current agent
+        agentId
       );
 
       if (isDuplicate) {
@@ -287,6 +304,7 @@ export default function TravelAgentForm({ mode, agentId }) {
 
     router.replace("/admin/travel-agents");
   };
+
 
 
 
