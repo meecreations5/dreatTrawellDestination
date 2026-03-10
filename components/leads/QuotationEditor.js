@@ -1,96 +1,102 @@
-  // componenets/leads/QuotationEditor
+// componenets/leads/QuotationEditor
 
-  "use client";
+"use client";
 
-  import { useState } from "react";
-  import dynamic from "next/dynamic";
-  import { useAuth } from "@/hooks/useAuth";
-  import { sendWhatsAppWeb } from "@/lib/whatsapp";
-  import { sendEmailViaBrevo } from "@/lib/sendEmailViaBrevo";
-  import { createQuotationRevision } from "@/lib/createQuotationRevision";
-  import SelectableChip from "@/components/ui/SelectableChip";
+import { useState } from "react";
+import dynamic from "next/dynamic";
+import { useAuth } from "@/hooks/useAuth";
+import { sendWhatsAppWeb } from "@/lib/whatsapp";
+import { sendEmailViaBrevo } from "@/lib/sendEmailViaBrevo";
+import { createQuotationRevision } from "@/lib/createQuotationRevision";
+import SelectableChip from "@/components/ui/SelectableChip";
 
-  const ReactQuill = dynamic(() => import("react-quill-new"), {
-    ssr: false
-  });
+const ReactQuill = dynamic(() => import("react-quill-new"), {
+  ssr: false
+});
 
-  import "react-quill-new/dist/quill.snow.css";
+import "react-quill-new/dist/quill.snow.css";
 
-  const inputClass = `
-    w-full border border-gray-200 rounded-lg
-    px-3 py-2 text-sm bg-white
-    focus:outline-none focus:ring-2 focus:ring-blue-100
-  `;
+const inputClass = `
+  w-full border border-gray-200 rounded-lg
+  px-3 py-2 text-sm bg-white
+  focus:outline-none focus:ring-2 focus:ring-blue-100
+`;
 
-  export default function QuotationEditor({ lead, onClose }) {
-    const { user } = useAuth();
+export default function QuotationEditor({ lead, onClose }) {
+  const { user } = useAuth();
 
-    const [html, setHtml] = useState("");
-    const [price, setPrice] = useState("");
-    const [note, setNote] = useState("");
-    const [sendEmail, setSendEmail] = useState(true);
-    const [sendWhatsApp, setSendWhatsApp] = useState(false);
-    const [saving, setSaving] = useState(false);
+  const [html, setHtml] = useState("");
+  const [price, setPrice] = useState("");
+  const [note, setNote] = useState("");
+  const [sendEmail, setSendEmail] = useState(true);
+  const [sendWhatsApp, setSendWhatsApp] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-    if (!user) return null;
+  if (!user) return null;
 
-    const submit = async () => {
-      if (saving) return;
+  const submit = async () => {
+    if (saving) return;
 
-      if (!html || !price)
-        return alert("Itinerary & price required");
+    if (!html || !price)
+      return alert("Itinerary & price required");
 
-      if (!sendEmail && !sendWhatsApp)
-        return alert("Select at least one channel");
+    if (!sendEmail && !sendWhatsApp)
+      return alert("Select at least one channel");
 
-      setSaving(true);
+    setSaving(true);
 
-      try {
-        const sendVia = [
-          sendEmail && "email",
-          sendWhatsApp && "whatsapp"
-        ].filter(Boolean);
+    try {
+      const sendVia = [
+        sendEmail && "email",
+        sendWhatsApp && "whatsapp"
+      ].filter(Boolean);
 
-        const revision = await createQuotationRevision({
-          leadId: lead.id,
-          itineraryHtml: html,
-          totalPrice: Number(price),
-          note,
-          sendVia,
-          user
-        });
+      const revision = await createQuotationRevision({
+        leadId: lead.id,
+        itineraryHtml: html,
+        totalPrice: Number(price),
+        note,
+        sendVia,
+        user
+      });
 
-        if (sendEmail && lead.spoc?.email) {
-          sendEmailViaBrevo({
-            toEmail: lead.spoc.email,
-            toName: lead.spoc.name,
-            subject: `Quotation ${lead.leadCode} (Rev ${revision})`,
-            html
-          }).catch(console.error);
-        }
-
-        if (sendWhatsApp && lead.spoc?.mobile) {
-          sendWhatsAppWeb({
-            mobile: lead.spoc.mobile,
-            message: encodeURIComponent(
-              `Quotation ${lead.leadCode} (Rev ${revision})\n₹${price}`
-            )
-          });
-        }
-
-        onClose();
-      } finally {
-        setSaving(false);
+      if (sendEmail && lead.spoc?.email) {
+        sendEmailViaBrevo({
+          toEmail: lead.spoc.email,
+          toName: lead.spoc.name,
+          subject: `Quotation ${lead.leadCode} (Rev ${revision})`,
+          html
+        }).catch(console.error);
       }
-    };
 
-    return (
-      <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-        <div className="bg-white max-w-4xl w-full rounded-xl p-6 space-y-4">
+      if (sendWhatsApp && lead.spoc?.mobile) {
+        sendWhatsAppWeb({
+          mobile: lead.spoc.mobile,
+          message: encodeURIComponent(
+            `Quotation ${lead.leadCode} (Rev ${revision})\n₹${price}`
+          )
+        });
+      }
 
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className="bg-white max-w-4xl w-full rounded-xl flex flex-col max-h-[90vh]">
+
+        {/* HEADER */}
+        <div className="p-6 border-b">
           <h2 className="text-sm font-semibold">
             Create Quotation
           </h2>
+        </div>
+
+        {/* SCROLLABLE CONTENT */}
+        <div className="p-6 space-y-4 overflow-y-auto flex-1">
 
           {/* EDITOR */}
           <div className="border rounded-lg overflow-hidden">
@@ -143,7 +149,7 @@
             />
           </div>
 
-          {/* 🧾 SPOC DETAILS – MINIMAL + ICONS */}
+          {/* SPOC DETAILS */}
           {(sendEmail || sendWhatsApp) && (
             <div className="text-sm text-gray-600 space-y-1 pl-1">
 
@@ -181,33 +187,35 @@
             </div>
           )}
 
-
-          {/* ACTIONS */}
-          <div className="flex gap-2 pt-3 border-t">
-            <button
-              onClick={onClose}
-              disabled={saving}
-              className="flex-1 border rounded-md py-2"
-            >
-              Cancel
-            </button>
-
-            <button
-              onClick={submit}
-              disabled={saving}
-              className="flex-1 bg-blue-600 text-white rounded-md py-2 disabled:opacity-60"
-            >
-              {saving ? "Sending…" : "Send Quotation"}
-            </button>
-          </div>
         </div>
 
-        {/* Quill height fix */}
-        <style jsx global>{`
-          .quotation-editor .ql-editor {
-            min-height: 320px;
-          }
-        `}</style>
+        {/* FOOTER */}
+        <div className="flex gap-2 p-6 border-t">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="flex-1 border rounded-md py-2"
+          >
+            Cancel
+          </button>
+
+          <button
+            onClick={submit}
+            disabled={saving}
+            className="flex-1 bg-blue-600 text-white rounded-md py-2 disabled:opacity-60"
+          >
+            {saving ? "Sending…" : "Send Quotation"}
+          </button>
+        </div>
+
       </div>
-    );
-  }
+
+      {/* QUILL HEIGHT */}
+      <style jsx global>{`
+        .quotation-editor .ql-editor {
+          min-height: 220px;
+        }
+      `}</style>
+    </div>
+  );
+}
