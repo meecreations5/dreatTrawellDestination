@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { collection, onSnapshot } from "firebase/firestore";
+import { collection, onSnapshot, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -27,6 +27,7 @@ export default function AdminDashboardGraph() {
   const mountTimeRef = useRef(performance.now());
   const authLoggedRef = useRef(false);
   const dataLoggedRef = useRef(false);
+  const [quotations, setQuotations] = useState([]);
 
   /* =========================
      STATE (ALWAYS FIRST)
@@ -81,34 +82,42 @@ export default function AdminDashboardGraph() {
 
     const unsubLeads = onSnapshot(
       collection(db, "leads"),
-      snap => {
-        setLeads(
-          snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        );
+      async (snap) => {
 
-        if (!dataLoggedRef.current) {
-          dataLoggedRef.current = true;
-          console.log(
-            "[TimeLog] Firestore data loaded in",
-            Math.round(performance.now() - mountTimeRef.current),
-            "ms"
+        const leadsData = snap.docs.map(d => ({
+          id: d.id,
+          ...d.data()
+        }));
+
+        setLeads(leadsData);
+
+        /* LOAD QUOTATIONS */
+        const quotes = [];
+
+        for (const leadDoc of snap.docs) {
+
+          const leadId = leadDoc.id;
+
+          const qSnap = await getDocs(
+            collection(db, "leads", leadId, "quotations")
           );
+
+          qSnap.forEach(q => {
+            quotes.push({
+              id: q.id,
+              leadId: leadId,   // IMPORTANT
+              ...q.data()
+            });
+          });
         }
+
+        setQuotations(quotes);
+
       }
     );
 
-    const unsubEngagements = onSnapshot(
-      collection(db, "engagements"),
-      snap =>
-        setEngagements(
-          snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        )
-    );
+    return () => unsubLeads();
 
-    return () => {
-      unsubLeads();
-      unsubEngagements();
-    };
   }, [user]);
 
   /* =========================
@@ -148,42 +157,48 @@ export default function AdminDashboardGraph() {
      LEAD METRICS
   ========================== */
   const metrics = useMemo(() => {
-    let totalQuoted = 0;
+
     let totalWon = 0;
-    let quotedCount = 0;
+    let totalQuoted = 0;
     let wonCount = 0;
 
-    filteredLeads.forEach(l => {
-      const amount =
-        l.lastQuotedAmount ||
-        l.totalQuotedAmount ||
-        0;
+    for (const lead of filteredLeads) {
 
-      if (amount) {
-        totalQuoted += amount;
-        quotedCount += 1;
-      }
+      const leadQuotes = quotations.filter(
+        q => q.leadId === lead.id
+      );
 
-      if (l.stage === "closed_won") {
+      if (!leadQuotes.length) continue;
+
+      /* latest quotation */
+      const latestQuote = leadQuotes.sort(
+        (a, b) => (b.revisionNumber || 0) - (a.revisionNumber || 0)
+      )[0];
+
+      const amount = Number(latestQuote.totalPrice || 0);
+
+      totalQuoted += amount;
+
+      if (lead.stage === "closed_won") {
         totalWon += amount;
-        wonCount += 1;
+        wonCount++;
       }
-    });
+
+    }
 
     return {
       totalLeads: filteredLeads.length,
       totalQuoted,
       totalWon,
-      avgDeal:
-        wonCount > 0
-          ? Math.round(totalWon / wonCount)
-          : 0,
-      winRate:
-        quotedCount > 0
-          ? Math.round((wonCount / quotedCount) * 100)
-          : 0
+      avgDeal: wonCount
+        ? Math.round(totalWon / wonCount)
+        : 0,
+      winRate: totalQuoted
+        ? Math.round((wonCount / filteredLeads.length) * 100)
+        : 0
     };
-  }, [filteredLeads]);
+
+  }, [filteredLeads, quotations]);
 
   /* =========================
      ENGAGEMENT METRICS
@@ -215,14 +230,14 @@ export default function AdminDashboardGraph() {
   }, [engagements]);
 
   useEffect(() => {
-  if (user && leads.length && engagements.length) {
-    console.log(
-      "[TimeLog] Dashboard ready in",
-      Math.round(performance.now() - mountTimeRef.current),
-      "ms"
-    );
-  }
-}, [user, leads, engagements]);
+    if (user && leads.length && engagements.length) {
+      console.log(
+        "[TimeLog] Dashboard ready in",
+        Math.round(performance.now() - mountTimeRef.current),
+        "ms"
+      );
+    }
+  }, [user, leads, engagements]);
 
   /* =========================
      RENDER GUARDS (AFTER HOOKS)
@@ -235,7 +250,7 @@ export default function AdminDashboardGraph() {
     return <p className="p-6 text-red-600">Access denied</p>;
   }
 
-  
+
 
   /* =========================
      DASHBOARD UI
