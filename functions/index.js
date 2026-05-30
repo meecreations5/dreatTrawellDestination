@@ -1,18 +1,39 @@
-const { onCall } = require("firebase-functions/v2/https");
+const { HttpsError, onCall } = require("firebase-functions/v2/https");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 
 setGlobalOptions({ maxInstances: 10 });
 
-// Initialize Admin SDK
 admin.initializeApp();
-
-/* =========================
-   HELPERS
-========================= */
 
 function pad(num, size = 3) {
   return String(num).padStart(size, "0");
+}
+
+async function assertActiveAdmin(auth) {
+  if (!auth) {
+    throw new HttpsError("unauthenticated", "Login required");
+  }
+
+  const snap = await admin
+    .firestore()
+    .collection("users")
+    .where("uid", "==", auth.uid)
+    .limit(1)
+    .get();
+
+  if (snap.empty) {
+    throw new HttpsError("permission-denied", "Admin profile not found");
+  }
+
+  const adminUser = snap.docs[0].data();
+
+  if (adminUser.isAdmin !== true || adminUser.active !== true) {
+    throw new HttpsError(
+      "permission-denied",
+      "Only active admins can perform this action"
+    );
+  }
 }
 
 async function generateEmployeeId(role, associateType) {
@@ -21,35 +42,34 @@ async function generateEmployeeId(role, associateType) {
   let counterKey = null;
   let prefix = null;
 
-  // Employee (includes Admin)
   if (role === "employee") {
     counterKey = "employee";
     prefix = "DT-EMP";
   }
 
-  // Associate
   if (role === "associate") {
     const map = {
       freelancer: "FRL",
       consultant: "CON",
-      "self-employed": "SEL"
+      "self-employed": "SEL",
     };
 
     if (!map[associateType]) {
-      throw new Error("Invalid associate type");
+      throw new HttpsError("invalid-argument", "Invalid associate type");
     }
 
     counterKey = `associate_${associateType}`;
     prefix = `ASC-${map[associateType]}`;
   }
 
-  // Partner
   if (role === "partner") {
     counterKey = "partner";
     prefix = "PRT";
   }
 
-  if (!counterKey) return null;
+  if (!counterKey) {
+    throw new HttpsError("invalid-argument", "Invalid role");
+  }
 
   const ref = db.doc(`counters/${counterKey}`);
 
@@ -64,27 +84,10 @@ async function generateEmployeeId(role, associateType) {
   });
 }
 
-/* =========================
-   CLOUD FUNCTION
-========================= */
-
 exports.createTeamUser = onCall(async (request) => {
   const { auth, data } = request;
 
-  // 1️⃣ Must be authenticated
-  if (!auth) {
-    throw new Error("Unauthenticated");
-  }
-
-  // 2️⃣ Admin privilege check (Admin = Employee + isAdmin)
-  const adminSnap = await admin
-    .firestore()
-    .doc(`users/${auth.uid}`)
-    .get();
-
-  if (!adminSnap.exists || adminSnap.data().isAdmin !== true) {
-    throw new Error("Permission denied");
-  }
+  await assertActiveAdmin(auth);
 
   let {
     email,
@@ -92,136 +95,103 @@ exports.createTeamUser = onCall(async (request) => {
     role,
     mobile = "",
     associateType,
-    isAdmin = false
+    isAdmin = false,
+    active = true,
+    authProvider = "google",
   } = data;
 
+  email = email?.trim().toLowerCase();
+  name = name?.trim();
+  mobile = mobile?.trim();
+
   if (!email || !name || !role) {
-    throw new Error("Missing required fields");
+    throw new HttpsError("invalid-argument", "Missing required fields");
   }
 
-  /* =========================
-     ROLE NORMALIZATION
-  ========================= */
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new HttpsError("invalid-argument", "Invalid email address");
+  }
 
-  // Legacy support
   if (role === "team") role = "employee";
+
   if (role === "admin") {
     role = "employee";
     isAdmin = true;
   }
 
   const allowedRoles = ["employee", "associate", "partner"];
+  const allowedProviders = ["google", "microsoft"];
+
   if (!allowedRoles.includes(role)) {
-    throw new Error("Invalid role");
+    throw new HttpsError("invalid-argument", "Invalid role");
   }
 
-  /* =========================
-     CREATE AUTH USER
-  ========================= */
+  if (!allowedProviders.includes(authProvider)) {
+    throw new HttpsError("invalid-argument", "Invalid auth provider");
+  }
 
-  const userRecord = await admin.auth().createUser({
-    email,
-    displayName: name
-  });
+  if (role !== "associate") {
+    associateType = "";
+  }
 
-  const uid = userRecord.uid;
+  const existingSnap = await admin
+    .firestore()
+    .collection("users")
+    .where("email", "==", email)
+    .limit(1)
+    .get();
 
-  /* =========================
-     EMPLOYEE ID GENERATION
-  ========================= */
+  if (!existingSnap.empty) {
+    throw new HttpsError("already-exists", "User already exists");
+  }
 
-  const employeeId = await generateEmployeeId(
-    role,
-    associateType
-  );
-
-  /* =========================
-     FIRESTORE USER DOC
-  ========================= */
+  const userRef = admin.firestore().collection("users").doc();
+  const employeeId = await generateEmployeeId(role, associateType);
 
   const payload = {
-    uid,
+    uid: null,
     email,
     name,
     mobile,
     role,
     isAdmin: role === "employee" ? isAdmin === true : false,
     employeeId,
-    active: true,
+    active: active === true,
+    authProvider,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
 
   if (role === "associate") {
     payload.associateType = associateType;
   }
 
-  await admin.firestore().doc(`users/${uid}`).set(payload);
-
-  /* =========================
-     RESPONSE
-  ========================= */
+  await userRef.set(payload);
 
   return {
-    uid,
-    employeeId,
-    role,
-    isAdmin: payload.isAdmin
+    id: userRef.id,
+    ...payload,
   };
 });
 
 exports.deleteUser = onCall(async (request) => {
   const { auth, data } = request;
-  const { uid } = data;
+  const { id } = data;
 
-  if (!auth) {
-    throw new HttpsError(
-      "unauthenticated",
-      "Login required"
-    );
+  await assertActiveAdmin(auth);
+
+  if (!id) {
+    throw new HttpsError("invalid-argument", "User document ID is required");
   }
 
-  // Admin check
-  const adminSnap = await admin
-    .firestore()
-    .doc(`users/${auth.uid}`)
-    .get();
-
-  if (!adminSnap.exists || adminSnap.data().isAdmin !== true) {
-    throw new HttpsError(
-      "permission-denied",
-      "Only admins can delete users"
-    );
-  }
-
-  if (!uid) {
-    throw new HttpsError(
-      "invalid-argument",
-      "User ID is required"
-    );
-  }
-
-  const userRef = admin.firestore().doc(`users/${uid}`);
+  const userRef = admin.firestore().collection("users").doc(id);
   const userSnap = await userRef.get();
 
   if (!userSnap.exists) {
-    throw new HttpsError(
-      "not-found",
-      "User not found"
-    );
+    throw new HttpsError("not-found", "User not found");
   }
 
-  try {
-    // 🔥 HARD DELETE
-    await admin.auth().deleteUser(uid);
-    await userRef.delete();
+  await userRef.delete();
 
-    return { status: "hard-deleted" };
-  } catch (err) {
-    throw new HttpsError(
-      "internal",
-      err.message || "Failed to delete user"
-    );
-  }
+  return { status: "deleted" };
 });
-

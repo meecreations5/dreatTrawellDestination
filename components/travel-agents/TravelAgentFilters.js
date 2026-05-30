@@ -1,21 +1,20 @@
 "use client";
 
 import { LayoutGrid, List } from "lucide-react";
+import TravelAgentExportCSV from "./TravelAgentExportCSV";
 
 export default function TravelAgentFilterBar({
   view,
   setView,
   filters,
   setFilters,
-  destinations,
-  onExport
+  destinations = [],
+  exportAgents = []
 }) {
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-4 flex flex-wrap items-center gap-3 justify-between">
-
       {/* LEFT: FILTERS */}
       <div className="flex flex-wrap gap-3 items-center">
-
         {/* SEARCH */}
         <input
           value={filters.search}
@@ -93,45 +92,47 @@ export default function TravelAgentFilterBar({
           className="border border-gray-200 rounded-md px-2 py-1.5 text-sm"
         >
           <option value="">All Stages</option>
-          <option value="lead">Lead</option>
-          <option value="onboarded">Onboarded</option>
-          <option value="active">Active</option>
+          <option value="New">New</option>
+          <option value="Lead">Lead</option>
+          <option value="Onboarded">Onboarded</option>
+          <option value="Active">Active</option>
+          <option value="Inactive">Inactive</option>
         </select>
       </div>
 
       {/* RIGHT: VIEW + EXPORT */}
       <div className="flex items-center gap-3">
-
         {/* VIEW TOGGLE */}
         <div className="flex border border-gray-100 rounded-lg overflow-hidden">
           <button
+            type="button"
             onClick={() => setView("card")}
-            className={`p-2 ${view === "card"
+            className={`p-2 ${
+              view === "card"
                 ? "bg-blue-600 text-white"
                 : "text-gray-500 hover:bg-gray-50"
-              }`}
+            }`}
+            title="Card view"
           >
             <LayoutGrid size={14} />
           </button>
 
           <button
+            type="button"
             onClick={() => setView("table")}
-            className={`p-2 ${view === "table"
+            className={`p-2 ${
+              view === "table"
                 ? "bg-blue-600 text-white"
                 : "text-gray-500 hover:bg-gray-50"
-              }`}
+            }`}
+            title="Table view"
           >
             <List size={14} />
           </button>
         </div>
 
-        {/* EXPORT */}
-        <button
-          onClick={onExport}
-          className="text-xs border border-gray-200 px-3 py-1.5 rounded-md hover:bg-gray-50"
-        >
-          Export CSV
-        </button>
+        {/* EXPORT ALL FIELDS */}
+        <TravelAgentExportCSV agents={exportAgents} />
       </div>
     </div>
   );

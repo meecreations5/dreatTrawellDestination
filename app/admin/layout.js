@@ -29,7 +29,7 @@ export default function AdminLayout({ children }) {
     }
 
     if (!user.isAdmin) {
-      router.replace("/admin/dashboard");
+      router.replace("/dashboard");
     }
   }, [user, loading, isLoginPage, router]);
 

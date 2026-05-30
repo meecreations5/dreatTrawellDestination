@@ -80,6 +80,14 @@ export default function AdminDashboardGraph() {
   useEffect(() => {
     if (!user) return;
 
+    const unsubEngagements = onSnapshot(
+      collection(db, "engagements"),
+      snap =>
+        setEngagements(
+          snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        )
+    );
+
     const unsubLeads = onSnapshot(
       collection(db, "leads"),
       async (snap) => {
@@ -116,7 +124,10 @@ export default function AdminDashboardGraph() {
       }
     );
 
-    return () => unsubLeads();
+    return () => {
+      unsubEngagements();
+      unsubLeads();
+    };
 
   }, [user]);
 

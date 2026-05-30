@@ -1,17 +1,22 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { GoogleAuthProvider, signInWithPopup } from "firebase/auth";
-import { Users } from "lucide-react";
+import { Building2, Users } from "lucide-react";
 
-import { auth } from "@/lib/firebase";
+import {
+  getLoginErrorMessage,
+  loginWithGoogle,
+  loginWithMicrosoft
+} from "@/lib/auth";
 import { useAuth } from "@/hooks/useAuth";
 
 export default function LoginPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
+  const [error, setError] = useState("");
+  const [submittingProvider, setSubmittingProvider] = useState("");
 
   useEffect(() => {
     if (!loading && user) {
@@ -19,24 +24,28 @@ export default function LoginPage() {
     }
   }, [user, loading, router]);
 
-  const login = async () => {
-    const provider = new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
-  };
+  const login = async (provider) => {
+    setError("");
+    setSubmittingProvider(provider);
 
-  if (loading) {
-    return (
-      <main className="min-h-screen flex items-center justify-center bg-slate-50">
-        <p className="text-slate-500">Checking session…</p>
-      </main>
-    );
-  }
+    try {
+      if (provider === "microsoft") {
+        await loginWithMicrosoft();
+      } else {
+        await loginWithGoogle();
+      }
+
+      router.replace("/dashboard");
+    } catch (err) {
+      setError(getLoginErrorMessage(err));
+    } finally {
+      setSubmittingProvider("");
+    }
+  };
 
   return (
     <main className="min-h-screen flex items-center justify-center px-4 bg-slate-50">
       <div className="w-full max-w-sm bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-6 text-center">
-        
-        {/* BRAND */}
         <div className="space-y-3">
           <Image
             src="/logo.png"
@@ -55,23 +64,48 @@ export default function LoginPage() {
           </p>
         </div>
 
-        {/* LOGIN ACTION */}
-        <button
-          onClick={login}
-          className="
-            w-full flex items-center justify-center gap-3
-            rounded-lg border border-slate-200
-            px-4 py-3 text-sm font-medium
-            hover:bg-slate-50 transition
-          "
-        >
-          <Users className="w-5 h-5 text-blue-600" />
-          Sign in with Google
-        </button>
+        <div className="space-y-3">
+          <button
+            disabled={!!submittingProvider}
+            onClick={() => login("microsoft")}
+            className="
+              w-full flex items-center justify-center gap-3
+              rounded-lg border border-blue-200 bg-blue-50
+              px-4 py-3 text-sm font-medium text-blue-700
+              hover:bg-blue-100 transition disabled:opacity-60
+            "
+          >
+            <Building2 className="w-5 h-5" />
+            {submittingProvider === "microsoft"
+              ? "Signing in..."
+              : "Sign in with Microsoft"}
+          </button>
 
-        {/* FOOT NOTE */}
+          <button
+            disabled={!!submittingProvider}
+            onClick={() => login("google")}
+            className="
+              w-full flex items-center justify-center gap-3
+              rounded-lg border border-slate-200
+              px-4 py-3 text-sm font-medium
+              hover:bg-slate-50 transition disabled:opacity-60
+            "
+          >
+            <Users className="w-5 h-5 text-blue-600" />
+            {submittingProvider === "google"
+              ? "Signing in..."
+              : "Sign in with Google"}
+          </button>
+        </div>
+
+        {error && (
+          <p className="text-xs text-red-600">
+            {error}
+          </p>
+        )}
+
         <p className="text-xs text-slate-400">
-          Authorized team members only
+          {loading ? "Checking session..." : "Authorized team members only"}
         </p>
       </div>
     </main>

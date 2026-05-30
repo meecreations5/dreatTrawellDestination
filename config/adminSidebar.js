@@ -20,7 +20,8 @@ import {
   Settings,
   History,
   ClipboardCheck,
-  Calendar
+  Calendar,
+  UploadCloud
 } from "lucide-react";
 
 export const adminSidebar = [
@@ -50,6 +51,11 @@ export const adminSidebar = [
         label: "Add Agent",
         icon: UserPlus,
         href: "/admin/travel-agents/new"
+      },
+      {
+        label: "Bulk Upload",
+        icon: UploadCloud,
+        href: "/admin/travel-agents/bulk-upload"
       },
       {
         label: "Engagements",
