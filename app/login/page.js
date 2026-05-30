@@ -8,31 +8,41 @@ import { Building2, Users } from "lucide-react";
 import {
   getLoginErrorMessage,
   loginWithGoogle,
-  loginWithMicrosoft
+  loginWithMicrosoft,
 } from "@/lib/auth";
 import { useAuth } from "@/hooks/useAuth";
 
 export default function LoginPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
+
+  const [mounted, setMounted] = useState(false);
   const [error, setError] = useState("");
   const [submittingProvider, setSubmittingProvider] = useState("");
 
   useEffect(() => {
-    if (!loading && user) {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (mounted && !loading && user) {
       router.replace("/dashboard");
     }
-  }, [user, loading, router]);
+  }, [mounted, user, loading, router]);
 
   const login = async (provider) => {
     setError("");
     setSubmittingProvider(provider);
 
     try {
-      if (provider === "microsoft") {
-        await loginWithMicrosoft();
-      } else {
-        await loginWithGoogle();
+      const loggedInUser =
+        provider === "microsoft"
+          ? await loginWithMicrosoft()
+          : await loginWithGoogle();
+
+      if (!loggedInUser) {
+        setError("Login failed. Please try again.");
+        return;
       }
 
       router.replace("/dashboard");
@@ -42,6 +52,10 @@ export default function LoginPage() {
       setSubmittingProvider("");
     }
   };
+
+  if (!mounted) {
+    return null;
+  }
 
   return (
     <main className="min-h-screen flex items-center justify-center px-4 bg-slate-50">
@@ -66,7 +80,7 @@ export default function LoginPage() {
 
         <div className="space-y-3">
           <button
-            disabled={!!submittingProvider}
+            disabled={loading || !!submittingProvider}
             onClick={() => login("microsoft")}
             className="
               w-full flex items-center justify-center gap-3
@@ -82,7 +96,7 @@ export default function LoginPage() {
           </button>
 
           <button
-            disabled={!!submittingProvider}
+            disabled={loading || !!submittingProvider}
             onClick={() => login("google")}
             className="
               w-full flex items-center justify-center gap-3
@@ -105,7 +119,9 @@ export default function LoginPage() {
         )}
 
         <p className="text-xs text-slate-400">
-          {loading ? "Checking session..." : "Authorized team members only"}
+          {loading
+            ? "Checking session..."
+            : "Authorized team members only"}
         </p>
       </div>
     </main>
