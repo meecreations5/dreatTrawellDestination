@@ -12,7 +12,6 @@ import {
 
 import { db } from "@/lib/firebase";
 import AdminGuard from "@/components/AdminGuard";
-import { generateTravelAgentCode } from "@/lib/generateTravelAgentCode";
 
 const TEMPLATE_HEADERS = [
   "Agency Name",
@@ -93,6 +92,22 @@ const pick = (row, keys, fallback = "") => {
   return fallback;
 };
 
+const isValidAgencyName = value => {
+  const name = clean(value);
+
+  if (!name) return false;
+
+  const hasLetter = /[a-zA-Z]/.test(name);
+
+  if (!hasLetter) return false;
+
+  if (name.startsWith(",") || name.includes(",,,,,")) {
+    return false;
+  }
+
+  return true;
+};
+
 const splitCsvLine = line => {
   const result = [];
   let current = "";
@@ -134,18 +149,23 @@ const parseCsv = text => {
 
   if (!lines.length) return [];
 
-  const headers = splitCsvLine(lines[0]).map(header => header.trim());
+  const headers = splitCsvLine(lines[0]).map(header =>
+    header.replace(/^\uFEFF/, "").trim()
+  );
 
   return lines.slice(1).map((line, index) => {
     const values = splitCsvLine(line);
 
     const row = {
       _rowId: crypto.randomUUID(),
-      _rowNumber: index + 2
+      _rowNumber: index + 2,
+      _rawColumnCount: values.length,
+      _expectedColumnCount: headers.length,
+      _columnMismatch: values.length !== headers.length
     };
 
     headers.forEach((header, i) => {
-      row[header] = values[i]?.replace(/^"|"$/g, "") || "";
+      row[header] = values[i]?.replace(/^"|"$/g, "").trim() || "";
     });
 
     return row;
@@ -197,6 +217,62 @@ const buildExistingIndexes = agents => {
   };
 };
 
+const getAllExistingValues = agents => {
+  const emails = new Set();
+  const phones = new Set();
+  const codes = new Set();
+
+  agents.forEach(agent => {
+    const spoc = getPrimarySpoc(agent);
+
+    if (agent.agentCode) {
+      codes.add(normalize(agent.agentCode));
+    }
+
+    [
+      agent.genericContact?.email,
+      spoc?.email,
+      ...(agent.spocs || []).map(item => item.email)
+    ]
+      .map(normalize)
+      .filter(Boolean)
+      .forEach(email => emails.add(email));
+
+    [
+      agent.genericContact?.phone,
+      spoc?.mobile,
+      ...(agent.spocs || []).map(item => item.mobile)
+    ]
+      .map(normalizePhone)
+      .filter(Boolean)
+      .forEach(phone => phones.add(phone));
+  });
+
+  return {
+    emails,
+    phones,
+    codes
+  };
+};
+
+const getNextCodeNumber = codes => {
+  let max = 0;
+
+  codes.forEach(code => {
+    const match = code.toUpperCase().match(/DT-TA-(\d+)/);
+
+    if (match?.[1]) {
+      max = Math.max(max, Number(match[1]));
+    }
+  });
+
+  return max + 1;
+};
+
+const formatAgentCode = number => {
+  return `DT-TA-${String(number).padStart(4, "0")}`;
+};
+
 const getRowBasics = row => {
   const agencyName = clean(pick(row, ["Agency Name", "agencyName"]));
 
@@ -239,18 +315,6 @@ const compareWithExisting = (row, existingAgent) => {
   );
 
   compare(
-    "Agency Type",
-    pick(row, ["Agency Type", "agencyType"]),
-    existingAgent.agencyType
-  );
-
-  compare(
-    "Status",
-    pick(row, ["Status", "status"]),
-    existingAgent.status
-  );
-
-  compare(
     "Email",
     pick(row, ["Email", "genericEmail"]),
     existingAgent.genericContact?.email
@@ -260,18 +324,6 @@ const compareWithExisting = (row, existingAgent) => {
     "Phone",
     pick(row, ["Phone", "genericPhone"]),
     existingAgent.genericContact?.phone
-  );
-
-  compare(
-    "City",
-    pick(row, ["City", "city"]),
-    existingAgent.address?.city
-  );
-
-  compare(
-    "State",
-    pick(row, ["State", "state"]),
-    existingAgent.address?.state
   );
 
   compare(
@@ -308,17 +360,11 @@ const analyzeRows = (rows, existingAgents) => {
     const phoneKey = normalizePhone(phone);
 
     if (emailKey) {
-      csvEmailCount.set(
-        emailKey,
-        (csvEmailCount.get(emailKey) || 0) + 1
-      );
+      csvEmailCount.set(emailKey, (csvEmailCount.get(emailKey) || 0) + 1);
     }
 
     if (phoneKey) {
-      csvPhoneCount.set(
-        phoneKey,
-        (csvPhoneCount.get(phoneKey) || 0) + 1
-      );
+      csvPhoneCount.set(phoneKey, (csvPhoneCount.get(phoneKey) || 0) + 1);
     }
   });
 
@@ -332,8 +378,14 @@ const analyzeRows = (rows, existingAgents) => {
     const emailKey = normalize(email);
     const phoneKey = normalizePhone(phone);
 
-    if (!agencyName) {
-      errors.push("Agency Name is required");
+    if (row._columnMismatch) {
+      errors.push(
+        `CSV column mismatch. Expected ${row._expectedColumnCount}, found ${row._rawColumnCount}.`
+      );
+    }
+
+    if (!isValidAgencyName(agencyName)) {
+      errors.push("Valid Agency Name is required. Row looks malformed or shifted.");
     }
 
     if (!email && !phone) {
@@ -358,13 +410,8 @@ const analyzeRows = (rows, existingAgents) => {
       matchTypes.push("Mobile");
     }
 
-    const existingByEmail = emailKey
-      ? indexes.emailMap.get(emailKey)
-      : null;
-
-    const existingByPhone = phoneKey
-      ? indexes.phoneMap.get(phoneKey)
-      : null;
+    const existingByEmail = emailKey ? indexes.emailMap.get(emailKey) : null;
+    const existingByPhone = phoneKey ? indexes.phoneMap.get(phoneKey) : null;
 
     if (existingByEmail) {
       errors.push("Email already exists");
@@ -376,8 +423,7 @@ const analyzeRows = (rows, existingAgents) => {
       matchTypes.push("Mobile");
     }
 
-    const existingAgent =
-      existingByEmail || existingByPhone || null;
+    const existingAgent = existingByEmail || existingByPhone || null;
 
     const compareChanges = compareWithExisting(row, existingAgent);
 
@@ -406,7 +452,7 @@ const analyzeRows = (rows, existingAgents) => {
   });
 };
 
-const buildAgentPayload = async row => {
+const buildAgentPayload = (row, generatedAgentCode) => {
   const agencyName = clean(pick(row, ["Agency Name", "agencyName"]));
 
   const spocName = clean(pick(row, ["SPOC Name", "spocName"]));
@@ -415,8 +461,6 @@ const buildAgentPayload = async row => {
 
   const genericEmail = clean(pick(row, ["Email", "genericEmail"]));
   const genericPhone = clean(pick(row, ["Phone", "genericPhone"]));
-
-  const generatedAgentCode = await generateTravelAgentCode();
 
   return {
     accountManagerUid: clean(
@@ -648,29 +692,94 @@ export default function TravelAgentBulkUploadPage() {
   };
 
   const importValidRows = async () => {
-    const validRows = rows.filter(row =>
-      ["ready", "review"].includes(row._analysis?.validationStatus)
-    );
+    const malformedRows = rows.filter(row => row._columnMismatch);
+
+    if (malformedRows.length > 0) {
+      alert(
+        `${malformedRows.length} malformed row(s) found. Please fix CSV before upload.`
+      );
+      return;
+    }
+
+    const validRows = rows.filter(row => {
+      const validationStatus = row._analysis?.validationStatus;
+      const uploadStatus = row._analysis?.uploadStatus;
+
+      return (
+        ["ready", "review"].includes(validationStatus) &&
+        !["uploaded", "uploading"].includes(uploadStatus)
+      );
+    });
 
     if (!validRows.length) {
-      alert("No valid rows to import");
+      alert("No valid pending rows to import");
       return;
     }
 
     setImporting(true);
 
     try {
+      const latestSnap = await getDocs(collection(db, "travelAgents"));
+
+      const latestAgents = latestSnap.docs.map(item => ({
+        id: item.id,
+        ...item.data()
+      }));
+
+      const existingValues = getAllExistingValues(latestAgents);
+
+      let nextCodeNumber = getNextCodeNumber(existingValues.codes);
+
       for (const row of validRows) {
         updateRowAnalysis(row._rowId, {
           uploadStatus: "uploading",
-          uploadMessage: "Generating code and uploading..."
+          uploadMessage: "Checking duplicates and uploading..."
         });
 
         try {
-          const payload = await buildAgentPayload(row);
+          const basics = getRowBasics(row);
+
+          const emailKey = normalize(basics.email);
+          const phoneKey = normalizePhone(basics.phone);
+
+          if (emailKey && existingValues.emails.has(emailKey)) {
+            updateRowAnalysis(row._rowId, {
+              uploadStatus: "failed",
+              uploadMessage: "Email already exists during final check"
+            });
+            continue;
+          }
+
+          if (phoneKey && existingValues.phones.has(phoneKey)) {
+            updateRowAnalysis(row._rowId, {
+              uploadStatus: "failed",
+              uploadMessage: "Mobile number already exists during final check"
+            });
+            continue;
+          }
+
+          let generatedAgentCode = formatAgentCode(nextCodeNumber);
+
+          while (existingValues.codes.has(normalize(generatedAgentCode))) {
+            nextCodeNumber += 1;
+            generatedAgentCode = formatAgentCode(nextCodeNumber);
+          }
+
+          existingValues.codes.add(normalize(generatedAgentCode));
+          nextCodeNumber += 1;
+
+          const payload = buildAgentPayload(row, generatedAgentCode);
           const ref = doc(collection(db, "travelAgents"));
 
           await setDoc(ref, payload);
+
+          if (emailKey) {
+            existingValues.emails.add(emailKey);
+          }
+
+          if (phoneKey) {
+            existingValues.phones.add(phoneKey);
+          }
 
           updateRowAnalysis(row._rowId, {
             uploadStatus: "uploaded",
@@ -688,6 +797,9 @@ export default function TravelAgentBulkUploadPage() {
       }
 
       alert("Bulk upload completed");
+    } catch (error) {
+      console.error("Bulk upload failed:", error);
+      alert(error?.message || "Bulk upload failed");
     } finally {
       setImporting(false);
     }
@@ -769,9 +881,7 @@ export default function TravelAgentBulkUploadPage() {
           {fileName && (
             <div className="text-xs text-gray-500">
               Selected file:{" "}
-              <span className="font-medium text-gray-700">
-                {fileName}
-              </span>
+              <span className="font-medium text-gray-700">{fileName}</span>
             </div>
           )}
         </div>
@@ -951,7 +1061,7 @@ export default function TravelAgentBulkUploadPage() {
                             )}
                           </td>
 
-                          <td className="px-3 py-3 min-w-[220px]">
+                          <td className="px-3 py-3 min-w-[240px]">
                             <div className="space-y-2">
                               <StatusBadge type={analysis.validationStatus}>
                                 {analysis.validationStatus === "ready"

@@ -1,83 +1,106 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { SlidersHorizontal } from "lucide-react";
-import BottomSheetModal from "@/components/ui/BottomSheetModal";
-import AgentFilters from "./AgentFilter";
-
-/* =========================
-   MOBILE DETECTION
-========================= */
-function useIsMobile() {
-  const [isMobile, setIsMobile] = useState(false);
-
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 768px)");
-    setIsMobile(mq.matches);
-
-    const handler = e => setIsMobile(e.matches);
-    mq.addEventListener("change", handler);
-
-    return () =>
-      mq.removeEventListener("change", handler);
-  }, []);
-
-  return isMobile;
-}
-
 export default function AgentFilterBar({
   filters,
-  setFilters
+  setFilters,
+  cities = [],
+  onClear
 }) {
-  const isMobile = useIsMobile();
-  const [open, setOpen] = useState(false);
+  const updateFilter = (key, value) => {
+    setFilters(prev => ({
+      ...prev,
+      [key]: value
+    }));
+  };
 
-  /* =========================
-     DESKTOP FILTER BAR (FIXED)
-  ========================= */
-  if (!isMobile) {
-    return (
-      <div className="sticky top-0 z-20 bg-gray-50 border-b border-gray-200 px-4 py-3">
-        {/* 🔴 THIS CONTAINER WAS MISSING BEFORE */}
-        <div className="flex flex-row gap-4 items-end">
-          <AgentFilters
-            filters={filters}
-            setFilters={setFilters}
+  return (
+    <div className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm">
+      <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+        {/* SEARCH */}
+        <div className="md:col-span-2">
+          <label className="block text-xs font-medium text-gray-500 mb-1">
+            Search
+          </label>
+
+          <input
+            value={filters.search}
+            onChange={e => updateFilter("search", e.target.value)}
+            placeholder="Search agency, code, SPOC, city, phone"
+            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-50"
           />
+        </div>
+
+        {/* CITY */}
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">
+            City
+          </label>
+
+          <select
+            value={filters.city}
+            onChange={e => updateFilter("city", e.target.value)}
+            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-50"
+          >
+            <option value="all">All Cities</option>
+
+            {cities.map(city => (
+              <option key={city} value={city}>
+                {city}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* CHANNEL */}
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">
+            Channel
+          </label>
+
+          <select
+            value={filters.channel}
+            onChange={e => updateFilter("channel", e.target.value)}
+            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-50"
+          >
+            <option value="all">All Channels</option>
+            <option value="call">Call</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="email">Email</option>
+            <option value="meeting">Meeting</option>
+          </select>
+        </div>
+
+        {/* SORT */}
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">
+            Sort By
+          </label>
+
+          <select
+            value={filters.sortBy}
+            onChange={e => updateFilter("sortBy", e.target.value)}
+            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-50"
+          >
+            <option value="agency_az">Agency Name A-Z</option>
+            <option value="agency_za">Agency Name Z-A</option>
+            <option value="recently_engaged">Latest Engagement First</option>
+            <option value="oldest_engaged">Oldest Engagement First</option>
+            <option value="needs_followup">Needs Follow-up First</option>
+            <option value="most_leads">Most Leads</option>
+          </select>
+        </div>
+
+        {/* CLEAR */}
+        <div className="flex items-end">
+          <button
+            type="button"
+            onClick={onClear}
+            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"
+          >
+            Clear
+          </button>
         </div>
       </div>
-    );
-  }
-
-  /* =========================
-     MOBILE
-  ========================= */
-  return (
-    <>
-      {!open && (
-        <button
-          onClick={() => setOpen(true)}
-          className="fixed bottom-20 right-4 z-30 bg-blue-600 text-white rounded-full p-4 shadow-lg"
-        >
-          <SlidersHorizontal className="w-5 h-5" />
-        </button>
-      )}
-
-
-      <BottomSheetModal
-        open={open}
-        onClose={() => setOpen(false)}
-        title="Filters"
-      >
-        {/* Mobile stack */}
-        <div className="flex flex-col gap-4">
-          <AgentFilters
-            filters={filters}
-            setFilters={setFilters}
-            onApply={() => setOpen(false)}
-          />
-        </div>
-      </BottomSheetModal>
-    </>
+    </div>
   );
 }

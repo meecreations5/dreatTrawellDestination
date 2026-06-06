@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   collection,
   onSnapshot,
   orderBy,
-  query,
-  where
+  query
 } from "firebase/firestore";
+
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -16,7 +16,6 @@ import AgentFilterBar from "@/components/travel-agents/AgentFilterBar";
 import TravelChip from "@/components/ui/TravelChip";
 import EmptyState from "@/components/ui/EmptyState";
 import CardSkeleton from "@/components/ui/CardSkeleton";
-import {AgentFilters} from "@/components/travel-agents/AgentFilter";
 
 /* =========================
    CHANNEL → ICON MAP
@@ -29,41 +28,346 @@ const CHANNEL_ICON_MAP = {
 };
 
 /* =========================
-   AGENT CARD
+   HELPERS
 ========================= */
-function AgentCard({
-  agent,
-  lastEngagement,
-  leadCount,
-  city
-}) {
-  const channelIcon =
-    CHANNEL_ICON_MAP[lastEngagement?.channel];
+function normalize(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function toMillis(value) {
+  if (!value) return 0;
+
+  if (typeof value?.toMillis === "function") {
+    return value.toMillis();
+  }
+
+  if (typeof value?.toDate === "function") {
+    return value.toDate().getTime();
+  }
+
+  if (value?.seconds) {
+    return value.seconds * 1000;
+  }
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
+function formatDate(value) {
+  const millis = toMillis(value);
+  if (!millis) return "";
+
+  return new Date(millis).toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric"
+  });
+}
+
+function timeAgo(value) {
+  const millis = toMillis(value);
+  if (!millis) return "";
+
+  const diff = Date.now() - millis;
+  const minutes = Math.floor(diff / (1000 * 60));
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (hours < 24) return `${hours} hr ago`;
+  if (days === 1) return "Yesterday";
+  if (days < 7) return `${days} days ago`;
+  if (days < 30) return `${Math.floor(days / 7)} weeks ago`;
+
+  return `${Math.floor(days / 30)} months ago`;
+}
+
+function formatChannel(value) {
+  if (!value) return "";
+
+  return String(value)
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function getLeadCity(lead) {
+  return (
+    lead.city ||
+    lead.location?.city ||
+    lead.destinationCity ||
+    lead.destination?.city ||
+    ""
+  );
+}
+
+function getAgentCity(agent, meta) {
+  return (
+    agent.address?.city ||
+    meta?.city ||
+    agent.city ||
+    agent.location?.city ||
+    ""
+  );
+}
+
+function getPrimarySpoc(agent) {
+  if (!Array.isArray(agent.spocs) || agent.spocs.length === 0) {
+    return null;
+  }
 
   return (
-    <div className="bg-white rounded-xl p-4 space-y-3">
+    agent.spocs.find(spoc => spoc?.isPrimary) ||
+    agent.spocs.find(spoc => normalize(spoc?.status) === "active") ||
+    agent.spocs[0]
+  );
+}
+
+function getAgentPhone(agent) {
+  const primarySpoc = getPrimarySpoc(agent);
+
+  return (
+    agent.genericContact?.phone ||
+    primarySpoc?.mobile ||
+    primarySpoc?.phone ||
+    agent.phone ||
+    agent.mobile ||
+    agent.contactNumber ||
+    agent.spocMobile ||
+    agent.whatsappNumber ||
+    ""
+  );
+}
+
+function getAgentEmail(agent) {
+  const primarySpoc = getPrimarySpoc(agent);
+
+  return (
+    agent.genericContact?.email ||
+    primarySpoc?.email ||
+    agent.email ||
+    agent.contactEmail ||
+    agent.spocEmail ||
+    agent.primaryEmail ||
+    ""
+  );
+}
+
+function getContactName(agent) {
+  const primarySpoc = getPrimarySpoc(agent);
+
+  return (
+    primarySpoc?.name ||
+    agent.spocName ||
+    agent.contactPerson ||
+    agent.contactName ||
+    agent.primaryContactName ||
+    ""
+  );
+}
+
+function getTelHref(phone) {
+  const cleanPhone = String(phone || "").replace(/[^\d+]/g, "");
+  return cleanPhone ? `tel:${cleanPhone}` : "";
+}
+
+function getWhatsAppHref(phone) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  return digits ? `https://wa.me/${digits}` : "";
+}
+
+function isStaleEngagement(lastEngagement) {
+  const millis = toMillis(lastEngagement?.createdAt);
+  if (!millis) return false;
+
+  const diffDays = Math.floor(
+    (Date.now() - millis) / (1000 * 60 * 60 * 24)
+  );
+
+  return diffDays > 15;
+}
+
+function getAgentHealth({ lastEngagement, leadCount }) {
+  if (!lastEngagement && leadCount > 0) return "At Risk";
+  if (!lastEngagement) return "No Activity";
+  if (isStaleEngagement(lastEngagement)) return "Stale";
+  if (leadCount >= 5) return "High Potential";
+  return "Healthy";
+}
+
+function getPriority({ lastEngagement, leadCount }) {
+  if (!lastEngagement && leadCount > 0) {
+    return {
+      label: "High Priority",
+      className: "bg-amber-50 text-amber-700 border-amber-100"
+    };
+  }
+
+  if (!lastEngagement) {
+    return {
+      label: "Follow-up Needed",
+      className: "bg-orange-50 text-orange-700 border-orange-100"
+    };
+  }
+
+  if (isStaleEngagement(lastEngagement)) {
+    return {
+      label: "Follow-up Due",
+      className: "bg-orange-50 text-orange-700 border-orange-100"
+    };
+  }
+
+  if (leadCount >= 5) {
+    return {
+      label: "Active Agent",
+      className: "bg-emerald-50 text-emerald-700 border-emerald-100"
+    };
+  }
+
+  return {
+    label: "Normal",
+    className: "bg-gray-50 text-gray-600 border-gray-100"
+  };
+}
+
+/* =========================
+   STAT CARD
+========================= */
+function StatCard({ label, value }) {
+  return (
+    <div className="bg-white border border-gray-100 rounded-xl px-4 py-3 shadow-sm">
+      <p className="text-xs text-gray-500">{label}</p>
+      <p className="mt-1 text-lg font-semibold text-gray-900">
+        {value}
+      </p>
+    </div>
+  );
+}
+
+/* =========================
+   FILTER TABS
+========================= */
+function AgentTabs({ filters, setFilters, stats }) {
+  const tabs = [
+    { label: "All", value: "all", count: stats.totalAgents },
+    { label: "Engaged", value: "engaged", count: stats.engaged },
+    {
+      label: "Needs Follow-up",
+      value: "not_engaged",
+      count: stats.needsFollowUp
+    },
+    {
+      label: "High Leads",
+      value: "high_leads",
+      count: stats.highLeadAgents
+    }
+  ];
+
+  return (
+    <div className="flex gap-2 overflow-x-auto pb-1">
+      {tabs.map(tab => {
+        const active = filters.engagement === tab.value;
+
+        return (
+          <button
+            key={tab.value}
+            type="button"
+            onClick={() =>
+              setFilters(prev => ({
+                ...prev,
+                engagement: tab.value
+              }))
+            }
+            className={`shrink-0 rounded-full px-4 py-2 text-xs font-medium border transition ${
+              active
+                ? "bg-blue-600 text-white border-blue-600"
+                : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+            }`}
+          >
+            {tab.label}
+            <span
+              className={`ml-2 ${
+                active ? "text-blue-100" : "text-gray-400"
+              }`}
+            >
+              {tab.count}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* =========================
+   AGENT CARD
+========================= */
+function AgentCard({ agent, lastEngagement, leadCount, city }) {
+  const channel = normalize(lastEngagement?.channel);
+  const channelIcon = CHANNEL_ICON_MAP[channel];
+
+  const latestDate = formatDate(lastEngagement?.createdAt);
+  const latestAgo = timeAgo(lastEngagement?.createdAt);
+
+  const priority = getPriority({
+    lastEngagement,
+    leadCount
+  });
+
+  const health = getAgentHealth({
+    lastEngagement,
+    leadCount
+  });
+
+  const contactName = getContactName(agent);
+  const phone = getAgentPhone(agent);
+  const email = getAgentEmail(agent);
+  const telHref = getTelHref(phone);
+  const whatsappHref = getWhatsAppHref(phone);
+
+  const healthColor =
+    health === "At Risk" || health === "Stale"
+      ? "warning"
+      : health === "High Potential" || health === "Healthy"
+      ? "success"
+      : "neutral";
+
+  return (
+    <div className="bg-white border border-gray-100 rounded-xl p-4 space-y-4 shadow-sm hover:shadow-md transition">
       {/* HEADER */}
-      <div className="flex justify-between">
-        <div>
-          <p className="font-semibold text-sm">
-            {agent.agencyName}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-semibold text-sm text-gray-900 truncate">
+            {agent.agencyName || "Unnamed Agency"}
           </p>
-          <p className="text-xs text-gray-500">
-            {agent.agentCode}
-          </p>
+
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
+            {agent.agentCode && <span>{agent.agentCode}</span>}
+            {contactName && <span>• {contactName}</span>}
+          </div>
+        </div>
+
+        <div className="flex flex-col items-end gap-1">
+          <span
+            className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-medium ${priority.className}`}
+          >
+            {priority.label}
+          </span>
+
+          <span className="shrink-0 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] font-medium text-gray-600">
+            {agent.kycStatus || agent.status || "Active"}
+          </span>
         </div>
       </div>
 
       {/* CHIPS */}
       <div className="flex flex-wrap gap-2">
-        {/* LEADS */}
         <TravelChip
-          label={`${leadCount} Leads`}
+          label={`${leadCount || 0} Lead${leadCount === 1 ? "" : "s"}`}
           icon="leads"
           color="primary"
         />
 
-        {/* LOCATION */}
         {city && (
           <TravelChip
             label={city}
@@ -72,243 +376,1061 @@ function AgentCard({
           />
         )}
 
-        {/* CHANNEL */}
         {lastEngagement && channelIcon && (
           <TravelChip
-            label={lastEngagement.channel}
+            label={formatChannel(lastEngagement.channel)}
             icon={channelIcon}
             color="neutral"
           />
         )}
 
-        {/* STATUS */}
-        {lastEngagement ? (
-          <TravelChip
-            label="Engaged"
-            icon="engaged"
-            color="success"
-          />
+        <TravelChip
+          label={health}
+          icon={health === "Healthy" ? "engaged" : "warning"}
+          color={healthColor}
+        />
+      </div>
+
+      {/* CONTACT DETAILS */}
+      <div className="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2 space-y-2">
+        {phone ? (
+          <a
+            href={telHref}
+            className="flex items-center justify-between gap-3 rounded-md hover:bg-white px-1 py-1 transition"
+          >
+            <span className="min-w-0 text-xs text-gray-600">
+              <span className="font-medium text-gray-800">Phone:</span>{" "}
+              <span className="break-all">{phone}</span>
+            </span>
+
+            <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+              Call
+            </span>
+          </a>
         ) : (
-          <TravelChip
-            label="Needs follow-up"
-            icon="warning"
-            color="warning"
-          />
+          <p className="text-xs text-gray-400">No phone added</p>
+        )}
+
+        {email ? (
+          <a
+            href={`mailto:${email}`}
+            className="flex items-center justify-between gap-3 rounded-md hover:bg-white px-1 py-1 transition"
+          >
+            <span className="min-w-0 text-xs text-gray-600 truncate">
+              <span className="font-medium text-gray-800">Email:</span>{" "}
+              {email}
+            </span>
+
+            <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-700">
+              Email
+            </span>
+          </a>
+        ) : (
+          <p className="text-xs text-gray-400">No email added</p>
         )}
       </div>
 
+      {/* LATEST ENGAGEMENT */}
+      {lastEngagement ? (
+        <div
+          className={`rounded-lg px-3 py-2 border ${
+            isStaleEngagement(lastEngagement)
+              ? "bg-orange-50 border-orange-100"
+              : "bg-blue-50 border-blue-100"
+          }`}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">
+              Latest engagement
+            </p>
+
+            {latestAgo && (
+              <p className="text-[11px] font-medium text-blue-700">
+                {latestAgo}
+              </p>
+            )}
+          </div>
+
+          <p className="mt-1 text-xs text-gray-700">
+            {formatChannel(lastEngagement.channel) || "Engagement logged"}
+            {latestDate ? ` • ${latestDate}` : ""}
+          </p>
+
+          {lastEngagement.notes && (
+            <p className="mt-1 text-xs text-gray-500 line-clamp-2">
+              {lastEngagement.notes}
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2">
+          <p className="text-xs text-amber-700">
+            No engagement logged yet. Add a follow-up to keep this agent active.
+          </p>
+        </div>
+      )}
+
       {/* ACTIONS */}
-      <div className="pt-2 flex gap-4 text-xs">
+      <div className="grid grid-cols-2 gap-2 pt-1">
         <Link
           href={`/travel-agents/${agent.id}`}
-          className="text-blue-600 hover:underline"
+          className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 text-center"
         >
-          View agent
+          View Details
         </Link>
 
         <Link
-          href={`/engagements/new?agentId=${agent.id}`}
-          className="text-gray-600 hover:underline"
+          href={`/engagements/new?agentId=${agent.id}&channel=call`}
+          className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700 text-center"
         >
-          Add engagement
+          Log Call
         </Link>
+
+        {phone && (
+          <a
+            href={telHref}
+            className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 hover:bg-blue-100 text-center"
+          >
+            Call Now
+          </a>
+        )}
+
+        {whatsappHref && (
+          <a
+            href={whatsappHref}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 text-center"
+          >
+            WhatsApp
+          </a>
+        )}
+
+        {email && (
+          <a
+            href={`mailto:${email}`}
+            className="col-span-2 rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 text-center"
+          >
+            Send Email
+          </a>
+        )}
       </div>
     </div>
   );
 }
 
+/* =========================
+   TABLE VIEW
+========================= */
+function AgentTable({
+  agents,
+  leadMetaMap,
+  lastEngagementMap,
+  latestEngagedAgent,
+  agentRefs
+}) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+      <div className="overflow-x-auto">
+        <table className="min-w-[1100px] w-full text-sm">
+          <thead className="bg-gray-50 border-b border-gray-100">
+            <tr>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                Agency
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                SPOC
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                City
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                Leads
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                Contact
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                Latest Engagement
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                Status
+              </th>
+              <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500">
+                Actions
+              </th>
+            </tr>
+          </thead>
+
+          <tbody className="divide-y divide-gray-100">
+            {agents.map(agent => {
+              const meta = leadMetaMap[agent.id] || {};
+              const leadCount = meta.count || 0;
+              const city = getAgentCity(agent, meta);
+              const lastEngagement = lastEngagementMap[agent.id];
+
+              const phone = getAgentPhone(agent);
+              const email = getAgentEmail(agent);
+              const contactName = getContactName(agent);
+
+              const telHref = getTelHref(phone);
+              const whatsappHref = getWhatsAppHref(phone);
+
+              const health = getAgentHealth({
+                lastEngagement,
+                leadCount
+              });
+
+              const priority = getPriority({
+                lastEngagement,
+                leadCount
+              });
+
+              const isLatestEngagement =
+                latestEngagedAgent?.id === agent.id;
+
+              return (
+                <tr
+                  key={agent.id}
+                  ref={el => {
+                    agentRefs.current[agent.id] = el;
+                  }}
+                  className={
+                    isLatestEngagement
+                      ? "bg-blue-50/70"
+                      : "hover:bg-gray-50"
+                  }
+                >
+                  <td className="px-4 py-3 align-top">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium text-gray-900 truncate">
+                          {agent.agencyName || "Unnamed Agency"}
+                        </p>
+
+                        {isLatestEngagement && (
+                          <span className="shrink-0 rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-medium text-white">
+                            Latest
+                          </span>
+                        )}
+                      </div>
+
+                      {agent.agentCode && (
+                        <p className="mt-1 text-xs text-gray-500">
+                          {agent.agentCode}
+                        </p>
+                      )}
+                    </div>
+                  </td>
+
+                  <td className="px-4 py-3 align-top">
+                    <p className="text-sm text-gray-700">
+                      {contactName || "—"}
+                    </p>
+                  </td>
+
+                  <td className="px-4 py-3 align-top">
+                    <p className="text-sm text-gray-700">
+                      {city || "—"}
+                    </p>
+                  </td>
+
+                  <td className="px-4 py-3 align-top">
+                    <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+                      {leadCount} Lead{leadCount === 1 ? "" : "s"}
+                    </span>
+                  </td>
+
+                  <td className="px-4 py-3 align-top">
+                    <div className="space-y-1">
+                      {phone ? (
+                        <a
+                          href={telHref}
+                          className="block text-xs font-medium text-blue-700 hover:underline"
+                        >
+                          {phone}
+                        </a>
+                      ) : (
+                        <p className="text-xs text-gray-400">
+                          No phone
+                        </p>
+                      )}
+
+                      {email ? (
+                        <a
+                          href={`mailto:${email}`}
+                          className="block max-w-[190px] truncate text-xs text-gray-600 hover:text-blue-700 hover:underline"
+                        >
+                          {email}
+                        </a>
+                      ) : (
+                        <p className="text-xs text-gray-400">
+                          No email
+                        </p>
+                      )}
+                    </div>
+                  </td>
+
+                  <td className="px-4 py-3 align-top">
+                    {lastEngagement ? (
+                      <div>
+                        <p className="text-xs font-medium text-gray-800">
+                          {formatChannel(lastEngagement.channel) ||
+                            "Engagement"}
+                        </p>
+
+                        <p className="mt-1 text-xs text-gray-500">
+                          {timeAgo(lastEngagement.createdAt)}
+                          {formatDate(lastEngagement.createdAt)
+                            ? ` • ${formatDate(lastEngagement.createdAt)}`
+                            : ""}
+                        </p>
+
+                        {lastEngagement.notes && (
+                          <p className="mt-1 max-w-[220px] truncate text-xs text-gray-400">
+                            {lastEngagement.notes}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
+                        No activity
+                      </span>
+                    )}
+                  </td>
+
+                  <td className="px-4 py-3 align-top">
+                    <div className="space-y-1">
+                      <span
+                        className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${priority.className}`}
+                      >
+                        {priority.label}
+                      </span>
+
+                      <p className="text-xs text-gray-500">
+                        {health}
+                      </p>
+
+                      <p className="text-xs text-gray-400">
+                        {agent.kycStatus || agent.status || "Active"}
+                      </p>
+                    </div>
+                  </td>
+
+                  <td className="px-4 py-3 align-top text-right">
+                    <div className="flex justify-end gap-2">
+                      <Link
+                        href={`/travel-agents/${agent.id}`}
+                        className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        View
+                      </Link>
+
+                      {phone && (
+                        <a
+                          href={telHref}
+                          className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                        >
+                          Call
+                        </a>
+                      )}
+
+                      {email && (
+                        <a
+                          href={`mailto:${email}`}
+                          className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                        >
+                          Email
+                        </a>
+                      )}
+
+                      {whatsappHref && (
+                        <a
+                          href={whatsappHref}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                        >
+                          WA
+                        </a>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* =========================
+   PAGE
+========================= */
 export default function UserTravelAgentsPage() {
   const { user, loading } = useAuth();
 
   const [agents, setAgents] = useState([]);
   const [engagements, setEngagements] = useState([]);
   const [leads, setLeads] = useState([]);
-  const [loadingList, setLoadingList] = useState(true);
+
+  const [loadingAgents, setLoadingAgents] = useState(true);
+  const [loadingEngagements, setLoadingEngagements] = useState(true);
+  const [loadingLeads, setLoadingLeads] = useState(true);
+
+  const [error, setError] = useState("");
 
   const [filters, setFilters] = useState({
     search: "",
     engagement: "all",
-    channel: "all"
+    channel: "all",
+    city: "all",
+    sortBy: "agency_az"
   });
 
-  /* LOAD AGENTS */
+  const [view, setView] = useState("grid");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(12);
+
+  const agentRefs = useRef({});
+
   useEffect(() => {
-    if (!user) return;
+    if (loading) return;
+
+    if (!user) {
+      setLoadingAgents(false);
+      return;
+    }
+
+    setLoadingAgents(true);
 
     const unsub = onSnapshot(
       collection(db, "travelAgents"),
       snap => {
         setAgents(
-          snap.docs.map(d => ({
-            id: d.id,
-            ...d.data()
+          snap.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
           }))
         );
-        setLoadingList(false);
+        setLoadingAgents(false);
+      },
+      err => {
+        console.error("Travel agents load error:", err);
+        setError("Unable to load travel agents.");
+        setLoadingAgents(false);
       }
     );
 
     return () => unsub();
-  }, [user]);
+  }, [user, loading]);
 
-  /* LOAD ENGAGEMENTS */
   useEffect(() => {
-    if (!user) return;
+    if (loading) return;
+
+    if (!user) {
+      setLoadingEngagements(false);
+      return;
+    }
+
+    setLoadingEngagements(true);
 
     const q = query(
       collection(db, "engagements"),
-      where("createdByUid", "==", user.uid),
       orderBy("createdAt", "desc")
     );
 
-    const unsub = onSnapshot(q, snap => {
-      setEngagements(
-        snap.docs.map(d => ({
-          id: d.id,
-          ...d.data()
-        }))
-      );
-    });
-
-    return () => unsub();
-  }, [user]);
-
-  /* LOAD LEADS */
-  useEffect(() => {
-    if (!user) return;
-
-    const q = query(
-      collection(db, "leads"),
-      where("assignedToUid", "==", user.uid)
+    const unsub = onSnapshot(
+      q,
+      snap => {
+        setEngagements(
+          snap.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          }))
+        );
+        setLoadingEngagements(false);
+      },
+      err => {
+        console.error("Engagements load error:", err);
+        setError("Unable to load engagements.");
+        setLoadingEngagements(false);
+      }
     );
 
-    const unsub = onSnapshot(q, snap => {
-      setLeads(
-        snap.docs.map(d => ({
-          id: d.id,
-          ...d.data()
-        }))
-      );
-    });
+    return () => unsub();
+  }, [user, loading]);
+
+  useEffect(() => {
+    if (loading) return;
+
+    if (!user) {
+      setLoadingLeads(false);
+      return;
+    }
+
+    setLoadingLeads(true);
+
+    const unsub = onSnapshot(
+      collection(db, "leads"),
+      snap => {
+        setLeads(
+          snap.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          }))
+        );
+        setLoadingLeads(false);
+      },
+      err => {
+        console.error("Leads load error:", err);
+        setError("Unable to load leads.");
+        setLoadingLeads(false);
+      }
+    );
 
     return () => unsub();
-  }, [user]);
+  }, [user, loading]);
 
-  /* MAP LAST ENGAGEMENT */
+  const scopedAgents = useMemo(() => {
+    return agents;
+  }, [agents]);
+
   const lastEngagementMap = useMemo(() => {
     const map = {};
-    engagements.forEach(e => {
-      if (!map[e.agentId]) map[e.agentId] = e;
+
+    engagements.forEach(engagement => {
+      if (!engagement.agentId) return;
+
+      const existing = map[engagement.agentId];
+
+      if (
+        !existing ||
+        toMillis(engagement.createdAt) > toMillis(existing.createdAt)
+      ) {
+        map[engagement.agentId] = engagement;
+      }
     });
+
     return map;
   }, [engagements]);
 
-  /* MAP LEADS META */
   const leadMetaMap = useMemo(() => {
     const map = {};
-    leads.forEach(l => {
-      if (!l.agentId) return;
 
-      if (!map[l.agentId]) {
-        map[l.agentId] = {
+    leads.forEach(lead => {
+      if (!lead.agentId) return;
+
+      const city = getLeadCity(lead);
+
+      if (!map[lead.agentId]) {
+        map[lead.agentId] = {
           count: 0,
-          city: l.city || l.location?.city || ""
+          city: ""
         };
       }
 
-      map[l.agentId].count += 1;
+      map[lead.agentId].count += 1;
+
+      if (!map[lead.agentId].city && city) {
+        map[lead.agentId].city = city;
+      }
     });
+
     return map;
   }, [leads]);
 
-  /* APPLY FILTERS */
-  const filteredAgents = useMemo(() => {
-    return agents.filter(agent => {
-      const last = lastEngagementMap[agent.id];
+  const cityOptions = useMemo(() => {
+    const cities = new Set();
 
-      if (filters.search) {
-        const s = filters.search.toLowerCase();
-        if (
-          !agent.agencyName?.toLowerCase().includes(s) &&
-          !agent.agentCode?.toLowerCase().includes(s)
-        ) {
+    scopedAgents.forEach(agent => {
+      const meta = leadMetaMap[agent.id] || {};
+      const city = getAgentCity(agent, meta);
+
+      if (city) {
+        cities.add(city.trim());
+      }
+    });
+
+    return Array.from(cities).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: "base" })
+    );
+  }, [scopedAgents, leadMetaMap]);
+
+  const stats = useMemo(() => {
+    const engaged = scopedAgents.filter(agent => {
+      return Boolean(lastEngagementMap[agent.id]);
+    }).length;
+
+    const staleFollowUps = scopedAgents.filter(agent => {
+      const last = lastEngagementMap[agent.id];
+      return last && isStaleEngagement(last);
+    }).length;
+
+    const noActivity = scopedAgents.filter(agent => {
+      return !lastEngagementMap[agent.id];
+    }).length;
+
+    const totalLeads = scopedAgents.reduce((sum, agent) => {
+      return sum + (leadMetaMap[agent.id]?.count || 0);
+    }, 0);
+
+    const highLeadAgents = scopedAgents.filter(agent => {
+      return (leadMetaMap[agent.id]?.count || 0) >= 5;
+    }).length;
+
+    return {
+      totalAgents: scopedAgents.length,
+      engaged,
+      noActivity,
+      staleFollowUps,
+      totalLeads,
+      highLeadAgents,
+      needsFollowUp: noActivity + staleFollowUps
+    };
+  }, [scopedAgents, lastEngagementMap, leadMetaMap]);
+
+  const filteredAgents = useMemo(() => {
+    return scopedAgents.filter(agent => {
+      const last = lastEngagementMap[agent.id];
+      const meta = leadMetaMap[agent.id] || {};
+      const leadCount = meta.count || 0;
+      const city = getAgentCity(agent, meta);
+      const primarySpoc = getPrimarySpoc(agent);
+
+      const search = normalize(filters.search);
+
+      if (search) {
+        const searchableText = [
+          agent.agencyName,
+          agent.agentCode,
+          getContactName(agent),
+          getAgentPhone(agent),
+          getAgentEmail(agent),
+          agent.genericContact?.phone,
+          agent.genericContact?.email,
+          primarySpoc?.name,
+          primarySpoc?.mobile,
+          primarySpoc?.email,
+          agent.website,
+          city
+        ]
+          .map(normalize)
+          .join(" ");
+
+        if (!searchableText.includes(search)) {
           return false;
         }
       }
 
-      if (filters.engagement === "engaged" && !last)
+      if (
+        filters.city !== "all" &&
+        normalize(city) !== normalize(filters.city)
+      ) {
         return false;
+      }
+
+      if (filters.engagement === "engaged" && !last) {
+        return false;
+      }
 
       if (
         filters.engagement === "not_engaged" &&
-        last
-      )
+        last &&
+        !isStaleEngagement(last)
+      ) {
         return false;
+      }
+
+      if (filters.engagement === "high_leads" && leadCount < 5) {
+        return false;
+      }
 
       if (
         filters.channel !== "all" &&
-        last?.channel !== filters.channel
-      )
+        normalize(last?.channel) !== normalize(filters.channel)
+      ) {
         return false;
+      }
 
       return true;
     });
-  }, [agents, filters, lastEngagementMap]);
+  }, [scopedAgents, filters, lastEngagementMap, leadMetaMap]);
 
-  if (loading || loadingList) {
+  const sortedAgents = useMemo(() => {
+    const list = [...filteredAgents];
+
+    if (filters.sortBy === "agency_az") {
+      list.sort((a, b) =>
+        String(a.agencyName || "").localeCompare(
+          String(b.agencyName || ""),
+          undefined,
+          { sensitivity: "base" }
+        )
+      );
+    }
+
+    if (filters.sortBy === "agency_za") {
+      list.sort((a, b) =>
+        String(b.agencyName || "").localeCompare(
+          String(a.agencyName || ""),
+          undefined,
+          { sensitivity: "base" }
+        )
+      );
+    }
+
+    if (filters.sortBy === "recently_engaged") {
+      list.sort((a, b) => {
+        return (
+          toMillis(lastEngagementMap[b.id]?.createdAt) -
+          toMillis(lastEngagementMap[a.id]?.createdAt)
+        );
+      });
+    }
+
+    if (filters.sortBy === "oldest_engaged") {
+      list.sort((a, b) => {
+        const aTime = toMillis(lastEngagementMap[a.id]?.createdAt);
+        const bTime = toMillis(lastEngagementMap[b.id]?.createdAt);
+
+        if (!aTime && !bTime) return 0;
+        if (!aTime) return 1;
+        if (!bTime) return -1;
+
+        return aTime - bTime;
+      });
+    }
+
+    if (filters.sortBy === "needs_followup") {
+      list.sort((a, b) => {
+        const aLast = lastEngagementMap[a.id];
+        const bLast = lastEngagementMap[b.id];
+
+        const aNeedsFollowUp = !aLast || isStaleEngagement(aLast);
+        const bNeedsFollowUp = !bLast || isStaleEngagement(bLast);
+
+        return Number(bNeedsFollowUp) - Number(aNeedsFollowUp);
+      });
+    }
+
+    if (filters.sortBy === "most_leads") {
+      list.sort((a, b) => {
+        const aCount = leadMetaMap[a.id]?.count || 0;
+        const bCount = leadMetaMap[b.id]?.count || 0;
+
+        return bCount - aCount;
+      });
+    }
+
+    return list;
+  }, [filteredAgents, filters.sortBy, lastEngagementMap, leadMetaMap]);
+
+  const latestEngagedAgent = useMemo(() => {
+    let latestAgent = null;
+    let latestTime = 0;
+
+    sortedAgents.forEach(agent => {
+      const last = lastEngagementMap[agent.id];
+      const time = toMillis(last?.createdAt);
+
+      if (time > latestTime) {
+        latestTime = time;
+        latestAgent = agent;
+      }
+    });
+
+    return latestAgent;
+  }, [sortedAgents, lastEngagementMap]);
+
+  const totalPages = Math.max(
+    1,
+    Math.ceil(sortedAgents.length / pageSize)
+  );
+
+  const paginatedAgents = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    const end = start + pageSize;
+
+    return sortedAgents.slice(start, end);
+  }, [sortedAgents, page, pageSize]);
+
+  const paginationStart =
+    sortedAgents.length === 0 ? 0 : (page - 1) * pageSize + 1;
+
+  const paginationEnd = Math.min(
+    page * pageSize,
+    sortedAgents.length
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [
+    filters.search,
+    filters.engagement,
+    filters.channel,
+    filters.city,
+    filters.sortBy,
+    pageSize
+  ]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
+
+  const jumpToLatestEngagement = () => {
+    if (!latestEngagedAgent) return;
+
+    const index = sortedAgents.findIndex(
+      agent => agent.id === latestEngagedAgent.id
+    );
+
+    if (index === -1) return;
+
+    const targetPage = Math.floor(index / pageSize) + 1;
+
+    setPage(targetPage);
+
+    setTimeout(() => {
+      agentRefs.current[latestEngagedAgent.id]?.scrollIntoView({
+        behavior: "smooth",
+        block: "center"
+      });
+    }, 150);
+  };
+
+  const clearFilters = () => {
+    setFilters({
+      search: "",
+      engagement: "all",
+      channel: "all",
+      city: "all",
+      sortBy: "agency_az"
+    });
+  };
+
+  const isPageLoading =
+    loading ||
+    loadingAgents ||
+    loadingEngagements ||
+    loadingLeads;
+
+  if (isPageLoading) {
     return (
       <main className="max-w-6xl mx-auto px-4 py-6 space-y-4 bg-gray-50 min-h-screen">
-        <CardSkeleton />
-        <CardSkeleton />
+        {Array.from({ length: 5 }).map((_, index) => (
+          <CardSkeleton key={index} />
+        ))}
       </main>
     );
   }
 
   return (
     <main className="bg-gray-50 min-h-screen">
-      <div className="max-w-6xl mx-auto px-4 py-6">
+      <div className="max-w-7xl mx-auto px-4 py-6 space-y-5">
         {/* HEADER */}
-        <div>
-          <h1 className="text-lg font-semibold text-gray-900">
-            Travel Agents
-          </h1>
-          <p className="text-sm text-gray-500">
-            {filteredAgents.length} results
-          </p>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h1 className="text-lg font-semibold text-gray-900">
+              Travel Agents
+            </h1>
+
+            <p className="text-sm text-gray-500">
+              Showing {paginationStart}-{paginationEnd} of{" "}
+              {sortedAgents.length} travel agents
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {latestEngagedAgent && (
+              <button
+                type="button"
+                onClick={jumpToLatestEngagement}
+                className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 hover:bg-blue-100"
+              >
+                Jump to Latest Engagement
+              </button>
+            )}
+
+            <select
+              value={String(pageSize)}
+              onChange={e => setPageSize(Number(e.target.value))}
+              className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 outline-none"
+            >
+              <option value="6">6 / page</option>
+              <option value="12">12 / page</option>
+              <option value="24">24 / page</option>
+              <option value="48">48 / page</option>
+            </select>
+
+            <div className="flex rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
+              <button
+                type="button"
+                onClick={() => setView("grid")}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md ${
+                  view === "grid"
+                    ? "bg-blue-600 text-white"
+                    : "text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                Grid
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setView("list")}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md ${
+                  view === "list"
+                    ? "bg-blue-600 text-white"
+                    : "text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                List
+              </button>
+            </div>
+          </div>
         </div>
 
-        {/* FILTER BAR */}
-        <AgentFilterBar
-          filters={filters}
-          setFilters={setFilters}
-        />
+        {/* STATS */}
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+          <StatCard label="Total Agents" value={stats.totalAgents} />
+          <StatCard label="Total Leads" value={stats.totalLeads} />
+          <StatCard label="Engaged" value={stats.engaged} />
+          <StatCard label="No Activity" value={stats.noActivity} />
+          <StatCard label="Stale" value={stats.staleFollowUps} />
+          <StatCard label="High Leads" value={stats.highLeadAgents} />
+        </div>
 
-        {/* LIST */}
-        {filteredAgents.length === 0 ? (
-          <EmptyState
-            icon="🧳"
-            title="No agents found"
-            description="Try adjusting your filters"
+        {/* FILTER AREA */}
+        <div className="sticky top-0 z-20 bg-gray-50/95 backdrop-blur py-3 space-y-3">
+          <AgentTabs
+            filters={filters}
+            setFilters={setFilters}
+            stats={stats}
           />
-        ) : (
-          <div className="space-y-4">
-            {filteredAgents.map(agent => {
-              const meta =
-                leadMetaMap[agent.id] || {};
 
-              return (
-                <AgentCard
-                  key={agent.id}
-                  agent={agent}
-                  lastEngagement={
-                    lastEngagementMap[agent.id]
-                  }
-                  leadCount={meta.count || 0}
-                  city={meta.city}
-                />
-              );
-            })}
+          <AgentFilterBar
+            filters={filters}
+            setFilters={setFilters}
+            cities={cityOptions}
+            onClear={clearFilters}
+          />
+        </div>
+
+        {/* ERROR */}
+        {error && (
+          <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {error}
           </div>
+        )}
+
+        {/* CONTENT */}
+        {sortedAgents.length === 0 ? (
+          <div className="bg-white border border-gray-100 rounded-xl p-8">
+            <EmptyState
+              icon="🧳"
+              title="No travel agents found"
+              description="No agents match your current filters. Clear filters to view all travel agents."
+            />
+
+            <div className="mt-4 flex justify-center">
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+              >
+                Clear Filters
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {view === "grid" ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {paginatedAgents.map(agent => {
+                  const meta = leadMetaMap[agent.id] || {};
+                  const city = getAgentCity(agent, meta);
+                  const isLatestEngagement =
+                    latestEngagedAgent?.id === agent.id;
+
+                  return (
+                    <div
+                      key={agent.id}
+                      ref={el => {
+                        agentRefs.current[agent.id] = el;
+                      }}
+                      className={
+                        isLatestEngagement
+                          ? "rounded-xl ring-2 ring-blue-500 ring-offset-2 ring-offset-gray-50"
+                          : ""
+                      }
+                    >
+                      {isLatestEngagement && (
+                        <div className="mb-2 inline-flex rounded-full bg-blue-600 px-3 py-1 text-[11px] font-medium text-white">
+                          Latest Engagement
+                        </div>
+                      )}
+
+                      <AgentCard
+                        agent={agent}
+                        lastEngagement={lastEngagementMap[agent.id]}
+                        leadCount={meta.count || 0}
+                        city={city}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <AgentTable
+                agents={paginatedAgents}
+                leadMetaMap={leadMetaMap}
+                lastEngagementMap={lastEngagementMap}
+                latestEngagedAgent={latestEngagedAgent}
+                agentRefs={agentRefs}
+              />
+            )}
+
+            {/* PAGINATION */}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-t border-gray-100 pt-4">
+              <p className="text-xs text-gray-500">
+                Showing {paginationStart}-{paginationEnd} of{" "}
+                {sortedAgents.length}
+              </p>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPage(prev => Math.max(1, prev - 1))
+                  }
+                  disabled={page === 1}
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-gray-50"
+                >
+                  Previous
+                </button>
+
+                <span className="text-xs text-gray-500">
+                  Page {page} of {totalPages}
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPage(prev => Math.min(totalPages, prev + 1))
+                  }
+                  disabled={page === totalPages}
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-gray-50"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </>
         )}
       </div>
     </main>
