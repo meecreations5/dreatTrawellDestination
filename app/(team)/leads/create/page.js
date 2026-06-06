@@ -265,25 +265,18 @@ export default function ManualLeadCreatePage() {
     [destinationId, destinations]
   );
 
-  const destinationAgents = useMemo(() => {
-    if (!destinationId) return [];
-
-    return agents.filter(agent => {
-      if (!Array.isArray(agent.destinationIds)) return false;
-      return agent.destinationIds.includes(destinationId);
-    });
-  }, [agents, destinationId]);
+  const availableAgents = useMemo(() => {
+    return agents;
+  }, [agents]);
 
   const filteredAgentSuggestions = useMemo(() => {
     const keyword = agentSearch.trim().toLowerCase();
 
-    if (!destinationId) return [];
-
     if (!keyword) {
-      return destinationAgents.slice(0, 20);
+      return availableAgents.slice(0, 20);
     }
 
-    return destinationAgents
+    return availableAgents
       .filter(agent => {
         const agencyName = String(agent.agencyName || "").toLowerCase();
         const agentCode = String(agent.agentCode || "").toLowerCase();
@@ -304,11 +297,11 @@ export default function ManualLeadCreatePage() {
         );
       })
       .slice(0, 20);
-  }, [agentSearch, destinationAgents, destinationId]);
+  }, [agentSearch, availableAgents]);
 
   const agent = useMemo(
-    () => destinationAgents.find(a => a.id === agentId),
-    [agentId, destinationAgents]
+    () => availableAgents.find(a => a.id === agentId),
+    [agentId, availableAgents]
   );
 
   const spocs = useMemo(() => getAgentSpocs(agent), [agent]);
@@ -334,18 +327,6 @@ export default function ManualLeadCreatePage() {
     Boolean(spoc) &&
     !saving &&
     !pageLoading;
-
-  useEffect(() => {
-    if (!agentId) return;
-
-    const stillValid = destinationAgents.some(a => a.id === agentId);
-
-    if (!stillValid) {
-      setAgentId("");
-      setAgentSearch("");
-      setSpocIndex(0);
-    }
-  }, [agentId, destinationAgents]);
 
   useEffect(() => {
     if (spocIndex >= spocs.length) {
@@ -484,10 +465,6 @@ export default function ManualLeadCreatePage() {
                     value={destinationId}
                     onChange={e => {
                       setDestinationId(e.target.value);
-                      setAgentId("");
-                      setAgentSearch("");
-                      setSpocIndex(0);
-                      setShowAgentSuggestions(false);
                       setFormError("");
                     }}
                   >
@@ -526,16 +503,9 @@ export default function ManualLeadCreatePage() {
                       type="text"
                       className={`${inputClass} pl-9 pr-9`}
                       value={agentSearch}
-                      disabled={!destinationId}
-                      placeholder={
-                        destinationId
-                          ? "Search agent by agency name, code, city..."
-                          : "Select destination first"
-                      }
+                      placeholder="Search agent by agency name, code, city..."
                       onFocus={() => {
-                        if (destinationId) {
-                          setShowAgentSuggestions(true);
-                        }
+                        setShowAgentSuggestions(true);
                       }}
                       onChange={e => {
                         setAgentSearch(e.target.value);
@@ -558,7 +528,7 @@ export default function ManualLeadCreatePage() {
                     )}
                   </div>
 
-                  {showAgentSuggestions && destinationId && (
+                  {showAgentSuggestions && (
                     <div className="absolute z-30 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-72 overflow-y-auto">
                       {filteredAgentSuggestions.length > 0 ? (
                         filteredAgentSuggestions.map((agent, index) => (
@@ -611,9 +581,9 @@ export default function ManualLeadCreatePage() {
                     </div>
                   )}
 
-                  {destinationId && destinationAgents.length === 0 && (
+                  {availableAgents.length === 0 && (
                     <p className="text-xs text-amber-600">
-                      No active agents are mapped to this destination.
+                      No active travel agents found.
                     </p>
                   )}
 
