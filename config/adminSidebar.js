@@ -192,6 +192,6 @@ export const adminSidebar = [
   {
     label: "Settings",
     icon: Settings,
-    href: "/admin/settings"
+    href: "/admin/settings/branding"
   }
 ];
