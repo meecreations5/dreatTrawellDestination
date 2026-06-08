@@ -1,3 +1,5 @@
+// components/settings/BrandingSettingsPage.jsx
+
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -29,7 +31,7 @@ function BrandingSkeleton() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-2 space-y-4">
-          {Array.from({ length: 9 }).map((_, index) => (
+          {Array.from({ length: 10 }).map((_, index) => (
             <div key={index}>
               <div className="h-3 bg-gray-100 rounded w-24 mb-2" />
               <div className="h-10 bg-gray-100 rounded-lg" />
@@ -208,7 +210,6 @@ export default function BrandingSettingsPage() {
 
   return (
     <main className="p-6 max-w-6xl mx-auto space-y-6">
-      {/* HEADER */}
       <div className="bg-gradient-to-r from-blue-600 to-cyan-500 rounded-2xl p-6 text-white">
         <p className="text-xs uppercase tracking-wide opacity-80">
           Admin Settings
@@ -225,7 +226,6 @@ export default function BrandingSettingsPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* FORM */}
         <Card className="lg:col-span-2 space-y-5">
           <div>
             <h2 className="text-sm font-semibold text-gray-900">
@@ -246,11 +246,10 @@ export default function BrandingSettingsPage() {
                 className={`${inputClass} mt-1`}
                 value={form.companyName}
                 onChange={e => updateField("companyName", e.target.value)}
-                placeholder="DreamTrawell"
+                placeholder="DreamTrawell Destination"
               />
             </div>
 
-            {/* LOGO UPLOAD */}
             <div>
               <label className="text-xs text-gray-500">
                 Upload Company Logo
@@ -300,9 +299,6 @@ export default function BrandingSettingsPage() {
                 }
                 placeholder="Uploaded logo URL will appear here"
               />
-              <p className="text-[11px] text-gray-500 mt-1">
-                You can also paste an external logo URL manually.
-              </p>
             </div>
 
             <div>
@@ -313,8 +309,25 @@ export default function BrandingSettingsPage() {
                 className={`${inputClass} mt-1`}
                 value={form.websiteUrl}
                 onChange={e => updateField("websiteUrl", e.target.value)}
-                placeholder="https://dreamtrawell.com"
+                placeholder="https://go.dreamtrawelldestination.com"
               />
+            </div>
+
+            <div>
+              <label className="text-xs text-gray-500">
+                Email Asset Base URL
+              </label>
+              <input
+                className={`${inputClass} mt-1`}
+                value={form.emailAssetBaseUrl || ""}
+                onChange={e =>
+                  updateField("emailAssetBaseUrl", e.target.value)
+                }
+                placeholder="https://go.dreamtrawelldestination.com"
+              />
+              <p className="text-[11px] text-gray-500 mt-1">
+                Used for email social icons.
+              </p>
             </div>
 
             <div>
@@ -327,7 +340,7 @@ export default function BrandingSettingsPage() {
                 onChange={e =>
                   updateField("supportEmail", e.target.value)
                 }
-                placeholder="support@dreamtrawell.com"
+                placeholder="info@dreamtrawelldestination.com"
               />
             </div>
 
@@ -346,14 +359,14 @@ export default function BrandingSettingsPage() {
             </div>
           </div>
 
-          {/* SOCIAL */}
           <div className="border-t pt-5 space-y-4">
             <div>
               <h2 className="text-sm font-semibold text-gray-900">
                 Social Media Accounts
               </h2>
               <p className="text-xs text-gray-500 mt-1">
-                These links will appear in generated email signatures.
+                These links will appear as PNG icons in generated email
+                signatures.
               </p>
             </div>
 
@@ -428,7 +441,6 @@ export default function BrandingSettingsPage() {
           </div>
         </Card>
 
-        {/* PREVIEW */}
         <div className="space-y-4">
           <Card className="space-y-3">
             <h2 className="text-sm font-semibold text-gray-900">
@@ -449,7 +461,7 @@ export default function BrandingSettingsPage() {
 
             <div>
               <p className="text-sm font-semibold text-gray-900">
-                {form.companyName || "DreamTrawell"}
+                {form.companyName || "DreamTrawell Destination"}
               </p>
               <p className="text-xs text-gray-500 break-all">
                 {form.websiteUrl || "Website not set"}
