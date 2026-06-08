@@ -4,17 +4,19 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  doc,
-  getDoc,
   serverTimestamp,
   setDoc
 } from "firebase/firestore";
 
-import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import Card from "@/components/ui/Card";
 
 import { getBrandingSettings } from "@/lib/brandingSettings";
+
+import {
+  getUserProfileByUid,
+  getUserProfileDocRefByUid
+} from "@/lib/userProfileRef";
 
 import {
   buildEmailSignatureHtml,
@@ -71,58 +73,80 @@ function ProfileSkeleton() {
   );
 }
 
-function SignatureToolbar({ onChange }) {
+function SignatureToolbar({ editorRef, onChange }) {
+  const focusEditor = () => {
+    if (!editorRef.current) return;
+    editorRef.current.focus();
+  };
+
   const exec = command => {
+    focusEditor();
     document.execCommand(command, false, null);
     onChange();
   };
 
   const addLink = () => {
-    const url = prompt("Enter link URL");
+    focusEditor();
+
+    let url = prompt("Enter link URL");
     if (!url?.trim()) return;
 
-    document.execCommand("createLink", false, url.trim());
+    url = url.trim();
+
+    if (!/^https?:\/\//i.test(url)) {
+      url = `https://${url}`;
+    }
+
+    document.execCommand("createLink", false, url);
     onChange();
   };
+
+  const buttonClass =
+    "px-2 py-1 text-xs border rounded bg-white hover:bg-gray-50";
 
   return (
     <div className="flex flex-wrap items-center gap-2 border border-gray-200 rounded-t-lg bg-gray-50 px-3 py-2">
       <button
         type="button"
+        onMouseDown={e => e.preventDefault()}
         onClick={() => exec("bold")}
-        className="px-2 py-1 text-xs border rounded bg-white hover:bg-gray-50"
+        className={buttonClass}
       >
         Bold
       </button>
 
       <button
         type="button"
+        onMouseDown={e => e.preventDefault()}
         onClick={() => exec("italic")}
-        className="px-2 py-1 text-xs border rounded bg-white hover:bg-gray-50"
+        className={buttonClass}
       >
         Italic
       </button>
 
       <button
         type="button"
+        onMouseDown={e => e.preventDefault()}
         onClick={() => exec("underline")}
-        className="px-2 py-1 text-xs border rounded bg-white hover:bg-gray-50"
+        className={buttonClass}
       >
         Underline
       </button>
 
       <button
         type="button"
+        onMouseDown={e => e.preventDefault()}
         onClick={() => exec("insertUnorderedList")}
-        className="px-2 py-1 text-xs border rounded bg-white hover:bg-gray-50"
+        className={buttonClass}
       >
         Bullets
       </button>
 
       <button
         type="button"
+        onMouseDown={e => e.preventDefault()}
         onClick={addLink}
-        className="px-2 py-1 text-xs border rounded bg-white hover:bg-gray-50"
+        className={buttonClass}
       >
         Link
       </button>
@@ -140,6 +164,7 @@ export default function MyProfilePage() {
   const [saving, setSaving] = useState(false);
 
   const [branding, setBranding] = useState(null);
+  const [profileDocId, setProfileDocId] = useState("");
 
   const [form, setForm] = useState({
     name: "",
@@ -156,14 +181,18 @@ export default function MyProfilePage() {
     let mounted = true;
 
     async function loadProfile() {
-      if (!uid || !user) return;
+      if (authLoading) return;
+
+      if (!uid || !user) {
+        if (mounted) setLoading(false);
+        return;
+      }
 
       setLoading(true);
 
       try {
-        const ref = doc(db, "users", uid);
-        const snap = await getDoc(ref);
-        const data = snap.exists() ? snap.data() : {};
+        const profile = await getUserProfileByUid(uid);
+        const data = profile.data || {};
         const brandingData = await getBrandingSettings();
 
         if (!mounted) return;
@@ -195,6 +224,7 @@ export default function MyProfilePage() {
           signatureEnabled: data.signatureEnabled !== false
         };
 
+        setProfileDocId(profile.id);
         setBranding(brandingData);
         setForm(loadedForm);
 
@@ -217,7 +247,7 @@ export default function MyProfilePage() {
     return () => {
       mounted = false;
     };
-  }, [uid, user]);
+  }, [uid, user, authLoading]);
 
   const previewUser = useMemo(() => {
     return {
@@ -267,7 +297,8 @@ export default function MyProfilePage() {
       "whatsappSignature",
       buildWhatsAppSignatureText({
         ...previewUser,
-        whatsappSignature: ""
+        whatsappSignature: "",
+        signatureText: ""
       })
     );
   };
@@ -295,8 +326,10 @@ export default function MyProfilePage() {
     setSaving(true);
 
     try {
+      const userDocRef = await getUserProfileDocRefByUid(uid);
+
       await setDoc(
-        doc(db, "users", uid),
+        userDocRef,
         {
           uid,
           name: form.name.trim(),
@@ -317,6 +350,8 @@ export default function MyProfilePage() {
         },
         { merge: true }
       );
+
+      setProfileDocId(userDocRef.id);
 
       setForm(prev => ({
         ...prev,
@@ -352,7 +387,7 @@ export default function MyProfilePage() {
     <main className="p-6 max-w-6xl mx-auto space-y-6">
       <div className="bg-gradient-to-r from-blue-600 to-cyan-500 rounded-2xl p-6 text-white">
         <p className="text-xs uppercase tracking-wide opacity-80">
-          DreamTrawell Team Profile
+          DreamTrawell Destination Team Profile
         </p>
 
         <h1 className="text-2xl font-semibold mt-1">
@@ -361,8 +396,14 @@ export default function MyProfilePage() {
 
         <p className="text-sm opacity-90 mt-2 max-w-2xl">
           Manage your travel consultant details and personal signature. Company
-          logo, website and social links are controlled by admin branding.
+          logo, website and social icons are controlled by admin branding.
         </p>
+
+        {profileDocId && (
+          <p className="text-[11px] opacity-80 mt-3">
+            Profile record: {profileDocId}
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -406,7 +447,7 @@ export default function MyProfilePage() {
                   className={`${inputClass} mt-1`}
                   value={form.email}
                   onChange={e => updateField("email", e.target.value)}
-                  placeholder="name@dreamtrawell.com"
+                  placeholder="name@dreamtrawelldestination.com"
                 />
               </div>
 
@@ -451,7 +492,7 @@ export default function MyProfilePage() {
                 </h2>
                 <p className="text-xs text-gray-500 mt-1">
                   Edit your personal signature text. Admin branding will add
-                  logo, website and social accounts automatically.
+                  logo, website and social icons automatically.
                 </p>
               </div>
 
@@ -476,7 +517,10 @@ export default function MyProfilePage() {
             </label>
 
             <div>
-              <SignatureToolbar onChange={syncSignatureEditor} />
+              <SignatureToolbar
+                editorRef={signatureEditorRef}
+                onChange={syncSignatureEditor}
+              />
 
               <div
                 ref={signatureEditorRef}
@@ -487,8 +531,8 @@ export default function MyProfilePage() {
               />
 
               <p className="text-[11px] text-gray-500 mt-1">
-                This is your personal signature body. Company branding is
-                applied from admin branding settings.
+                This is your personal signature body. Final email signature
+                will also include company logo and social icons from branding.
               </p>
             </div>
           </section>
@@ -520,7 +564,7 @@ export default function MyProfilePage() {
               onChange={e =>
                 updateField("whatsappSignature", e.target.value)
               }
-              placeholder={`Regards,\nYour Name\nDreamTrawell\nMobile: 9876543210`}
+              placeholder={`Regards,\nYour Name\nDreamTrawell Destination\nMobile: 9876543210`}
             />
           </section>
 
@@ -556,7 +600,7 @@ export default function MyProfilePage() {
 
             <div>
               <p className="font-semibold text-gray-900">
-                {previewUser.companyName || "DreamTrawell"}
+                {previewUser.companyName || "DreamTrawell Destination"}
               </p>
               <p className="text-xs text-gray-500 break-all">
                 {previewUser.websiteUrl || "Website not set"}
