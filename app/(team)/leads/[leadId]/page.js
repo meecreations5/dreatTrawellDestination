@@ -2,7 +2,16 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { doc, onSnapshot } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  limit,
+  onSnapshot,
+  query,
+  where
+} from "firebase/firestore";
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
@@ -50,17 +59,6 @@ function formatDateTime(value) {
   });
 }
 
-function formatDate(value) {
-  const date = toDate(value);
-  if (!date) return "—";
-
-  return date.toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric"
-  });
-}
-
 function getFirstValue(...values) {
   return (
     values.find(
@@ -69,24 +67,116 @@ function getFirstValue(...values) {
   );
 }
 
-function DetailRow({ label, value }) {
-  return (
-    <div className="flex items-start justify-between gap-4 py-2 border-b border-gray-100 last:border-b-0">
-      <span className="text-xs text-gray-500">{label}</span>
-      <span className="text-sm font-medium text-gray-800 text-right">
-        {value || "—"}
-      </span>
-    </div>
+function isEmail(value = "") {
+  return String(value).includes("@");
+}
+
+function titleFromEmail(email = "") {
+  const prefix = String(email).split("@")[0] || "";
+
+  return prefix
+    .replace(/[._-]+/g, " ")
+    .replace(/\b\w/g, char => char.toUpperCase())
+    .trim();
+}
+
+function getUserName(user) {
+  return getFirstValue(
+    user?.displayName,
+    user?.name,
+    user?.fullName,
+    user?.employeeName,
+    user?.profile?.name
   );
+}
+
+function getUserEmail(user) {
+  return getFirstValue(
+    user?.email,
+    user?.workEmail,
+    user?.officialEmail,
+    user?.profile?.email
+  );
+}
+
+function getUserRole(user) {
+  return getFirstValue(
+    user?.designation,
+    user?.jobTitle,
+    user?.role,
+    user?.profile?.designation
+  );
+}
+
+async function findUserByUidOrEmail(value) {
+  const cleanValue = String(value || "").trim();
+
+  if (!cleanValue) return null;
+
+  try {
+    const directSnap = await getDoc(doc(db, "users", cleanValue));
+
+    if (directSnap.exists()) {
+      return {
+        id: directSnap.id,
+        ...directSnap.data()
+      };
+    }
+  } catch (error) {
+    console.warn("Direct assigned user lookup skipped:", error);
+  }
+
+  try {
+    const uidQuery = query(
+      collection(db, "users"),
+      where("uid", "==", cleanValue),
+      limit(1)
+    );
+
+    const uidSnap = await getDocs(uidQuery);
+
+    if (!uidSnap.empty) {
+      const userDoc = uidSnap.docs[0];
+
+      return {
+        id: userDoc.id,
+        ...userDoc.data()
+      };
+    }
+  } catch (error) {
+    console.warn("UID assigned user lookup skipped:", error);
+  }
+
+  try {
+    const emailQuery = query(
+      collection(db, "users"),
+      where("email", "==", cleanValue),
+      limit(1)
+    );
+
+    const emailSnap = await getDocs(emailQuery);
+
+    if (!emailSnap.empty) {
+      const userDoc = emailSnap.docs[0];
+
+      return {
+        id: userDoc.id,
+        ...userDoc.data()
+      };
+    }
+  } catch (error) {
+    console.warn("Email assigned user lookup skipped:", error);
+  }
+
+  return null;
 }
 
 const timelineFilters = [
   { value: "all", label: "All" },
   { value: "follow_up", label: "Follow-ups" },
   { value: "quotation", label: "Quotations" },
-  { value: "stage", label: "Stage" },
-  { value: "assignment", label: "Assignment" },
-  { value: "note", label: "Notes" }
+  { value: "assigned", label: "Assignment" },
+  { value: "remark", label: "Notes" }
 ];
 
 /* =========================
@@ -94,6 +184,7 @@ const timelineFilters = [
 ========================= */
 export default function LeadDetailPage() {
   const params = useParams();
+
   const leadId = Array.isArray(params?.leadId)
     ? params.leadId[0]
     : params?.leadId;
@@ -110,6 +201,21 @@ export default function LeadDetailPage() {
   const [quoteOpen, setQuoteOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [selectedActivity, setSelectedActivity] = useState(null);
+  const [quotationToEdit, setQuotationToEdit] = useState(null);
+  const [assignedUser, setAssignedUser] = useState(null);
+
+  const assignedLookupValue = useMemo(() => {
+    return getFirstValue(
+      lead?.assignedToUid,
+      lead?.assignedTo,
+      lead?.assignedUserUid,
+      lead?.ownerUid,
+      lead?.teamLeadUid,
+      lead?.assignedToEmail,
+      lead?.assignedUserEmail,
+      lead?.ownerEmail
+    );
+  }, [lead]);
 
   /* =========================
      REALTIME LEAD SUBSCRIPTION
@@ -144,6 +250,40 @@ export default function LeadDetailPage() {
   }, [leadId]);
 
   /* =========================
+     ASSIGNED USER RESOLVER
+  ========================== */
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadAssignedUser() {
+      if (!assignedLookupValue) {
+        setAssignedUser(null);
+        return;
+      }
+
+      try {
+        const foundUser = await findUserByUidOrEmail(assignedLookupValue);
+
+        if (mounted) {
+          setAssignedUser(foundUser);
+        }
+      } catch (error) {
+        console.warn("Assigned user lookup failed:", error);
+
+        if (mounted) {
+          setAssignedUser(null);
+        }
+      }
+    }
+
+    loadAssignedUser();
+
+    return () => {
+      mounted = false;
+    };
+  }, [assignedLookupValue]);
+
+  /* =========================
      DERIVED STATE
   ========================== */
   const stage = lead?.stage || "new";
@@ -166,6 +306,19 @@ export default function LeadDetailPage() {
 
   const filteredTimeline = useMemo(() => {
     if (filter === "all") return timeline;
+
+    if (filter === "assigned") {
+      return timeline.filter(
+        event => event?.type === "assigned" || event?.type === "assignment"
+      );
+    }
+
+    if (filter === "remark") {
+      return timeline.filter(
+        event => event?.type === "remark" || event?.type === "note" || !event?.type
+      );
+    }
+
     return timeline.filter(event => event?.type === filter);
   }, [filter, timeline]);
 
@@ -201,20 +354,6 @@ export default function LeadDetailPage() {
     lead?.travelAgent?.agencyName
   );
 
-  const assignedName = getFirstValue(
-    lead?.assignedToName,
-    lead?.teamLeadName,
-    lead?.ownerName,
-    lead?.assignedUserName
-  );
-
-  const assignedUid = getFirstValue(
-    lead?.assignedTo,
-    lead?.teamLeadUid,
-    lead?.ownerUid,
-    lead?.assignedToUid
-  );
-
   const source = getFirstValue(
     lead?.source,
     lead?.leadSource,
@@ -225,6 +364,39 @@ export default function LeadDetailPage() {
     lead?.destinationName,
     lead?.destination,
     lead?.destinationTitle
+  );
+
+  const assignedName = getFirstValue(
+    lead?.assignedToName,
+    lead?.assignedUserName,
+    lead?.assignedName,
+    lead?.teamLeadName,
+    lead?.ownerName,
+    getUserName(assignedUser),
+    isEmail(assignedLookupValue) ? titleFromEmail(assignedLookupValue) : ""
+  );
+
+  const assignedEmail = getFirstValue(
+    lead?.assignedToEmail,
+    lead?.assignedUserEmail,
+    lead?.ownerEmail,
+    getUserEmail(assignedUser),
+    isEmail(assignedLookupValue) ? assignedLookupValue : ""
+  );
+
+  const assignedRole = getFirstValue(
+    lead?.assignedToRole,
+    lead?.assignedUserRole,
+    lead?.ownerRole,
+    getUserRole(assignedUser)
+  );
+
+  const assignedUid = getFirstValue(
+    lead?.assignedToUid,
+    lead?.assignedUserUid,
+    lead?.ownerUid,
+    lead?.teamLeadUid,
+    !isEmail(assignedLookupValue) ? assignedLookupValue : ""
   );
 
   const actionButtonClass =
@@ -254,6 +426,7 @@ export default function LeadDetailPage() {
           <h2 className="text-lg font-semibold text-gray-800">
             Lead not found
           </h2>
+
           <p className="text-sm text-gray-500 mt-1">
             This lead may have been deleted or you may not have access.
           </p>
@@ -299,59 +472,176 @@ export default function LeadDetailPage() {
             </div>
           </Card>
 
-          {/* STATUS + HEALTH */}
-          <Card className="space-y-3">
-            <div className="flex justify-between items-center">
-              <span className="text-xs text-gray-500">Status</span>
-              <LeadStatusChip stage={stage} />
-            </div>
+          {/* QUICK ACTIONS */}
+          <Card className="space-y-2">
+            <p className="text-xs font-medium text-gray-500">
+              Quick Actions
+            </p>
 
-            <div className="flex justify-between items-center">
-              <span className="text-xs text-gray-500">Health</span>
-              <LeadHealthChip health={leadHealth} />
-            </div>
-
-            <select
+            <button
               disabled={isClosed}
-              value={stage}
-              onChange={async e => {
-                const newStage = e.target.value;
-                let remark = "";
-
-                if (["closed_won", "closed_lost"].includes(newStage)) {
-                  remark = prompt("Closing remark is required");
-
-                  if (!remark?.trim()) return;
-                }
-
-                await updateLeadStage({
-                  leadId: lead.id,
-                  newStage,
-                  remark,
-                  user
-                });
-              }}
-              className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-500"
+              onClick={() => setFollowUpOpen(true)}
+              className={`${actionButtonClass} bg-blue-600 text-white hover:bg-blue-700`}
             >
-              <option value="new">New</option>
-              <option value="follow_up">Follow Up</option>
-              <option value="quoted">Quoted</option>
-              <option value="closed_won">Closed Won</option>
-              <option value="closed_lost">Closed Lost</option>
-            </select>
+              + Log Follow-Up
+            </button>
 
-            {isClosed && (
-              <p className="text-xs text-gray-500">
-                This lead is closed. Reopen it to make changes.
+            <button
+              disabled={isClosed}
+              onClick={() => {
+                setQuotationToEdit(null);
+                setQuoteOpen(true);
+              }}
+              className={`${actionButtonClass} bg-purple-600 text-white hover:bg-purple-700`}
+            >
+              + Create Quotation
+            </button>
+
+            <button
+              disabled={isClosed}
+              onClick={() => setAssignOpen(true)}
+              className={`${actionButtonClass} bg-orange-600 text-white hover:bg-orange-700`}
+            >
+              Assign / Change Team
+            </button>
+          </Card>
+
+          {/* CUSTOMER CONTACT */}
+          <Card className="space-y-3">
+            <p className="text-xs font-medium text-gray-500">
+              Customer Contact
+            </p>
+
+            <div className="flex items-start gap-3">
+              <InitialAvatar name={customerName || customerEmail || "Customer"} />
+
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-gray-900 truncate">
+                  {customerName || "—"}
+                </p>
+
+                {customerEmail && (
+                  <p className="text-xs text-gray-500 truncate mt-1">
+                    📧 {customerEmail}
+                  </p>
+                )}
+
+                {customerMobile && (
+                  <p className="text-xs text-gray-500 truncate mt-1">
+                    📱 {customerMobile}
+                  </p>
+                )}
+              </div>
+            </div>
+          </Card>
+
+          {/* TRAVEL AGENT / SPOC */}
+          <Card className="space-y-3">
+            <p className="text-xs font-medium text-gray-500">
+              Travel Agent / SPOC
+            </p>
+
+            <div>
+              <p className="text-sm font-semibold text-gray-900">
+                {travelAgentName || lead.spoc?.name || "—"}
               </p>
+
+              {lead.spoc?.name && travelAgentName && (
+                <p className="text-xs text-gray-500 mt-1">
+                  SPOC: {lead.spoc.name}
+                </p>
+              )}
+
+              {lead.spoc?.email && (
+                <p className="text-xs text-gray-500 truncate mt-1">
+                  📧 {lead.spoc.email}
+                </p>
+              )}
+
+              {lead.spoc?.mobile && (
+                <p className="text-xs text-gray-500 mt-1">
+                  📱 {lead.spoc.mobile}
+                </p>
+              )}
+            </div>
+          </Card>
+
+          {/* ASSIGNED TO */}
+          <Card className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-medium text-gray-500">
+                Assigned To
+              </p>
+
+              {!isClosed && (
+                <button
+                  type="button"
+                  onClick={() => setAssignOpen(true)}
+                  className="text-xs text-blue-600 hover:underline"
+                >
+                  Change
+                </button>
+              )}
+            </div>
+
+            {assignedName || assignedEmail || assignedUid ? (
+              <div className="flex items-center gap-3">
+                <InitialAvatar
+                  name={assignedName || assignedEmail || assignedUid || "User"}
+                />
+
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-gray-900 truncate">
+                    {assignedName || "Unassigned"}
+                  </p>
+
+                  {assignedRole && (
+                    <p className="text-xs text-gray-500 truncate">
+                      {assignedRole}
+                    </p>
+                  )}
+
+                  {assignedEmail && (
+                    <p className="text-xs text-gray-500 truncate mt-0.5">
+                      📧 {assignedEmail}
+                    </p>
+                  )}
+
+                  {!assignedEmail && assignedUid && (
+                    <p className="text-xs text-gray-500 truncate mt-0.5">
+                      ID: {assignedUid}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg bg-gray-50 border border-dashed border-gray-200 p-3">
+                <p className="text-sm font-medium text-gray-700">
+                  Not assigned yet
+                </p>
+
+                <p className="text-xs text-gray-500 mt-1">
+                  Assign this lead to a team member for ownership and follow-up.
+                </p>
+
+                {!isClosed && (
+                  <button
+                    type="button"
+                    onClick={() => setAssignOpen(true)}
+                    className="mt-3 bg-blue-600 text-white px-3 py-1.5 rounded-md text-xs"
+                  >
+                    Assign Now
+                  </button>
+                )}
+              </div>
             )}
           </Card>
 
           {/* NEXT ACTION */}
           <div
             className={`rounded-xl p-4 border ${nextActionStatus === "overdue"
-                ? "bg-red-50 border-red-200"
-                : "bg-blue-50 border-blue-200"
+              ? "bg-red-50 border-red-200"
+              : "bg-blue-50 border-blue-200"
               }`}
           >
             <p className="text-xs text-gray-500 mb-1">
@@ -381,105 +671,57 @@ export default function LeadDetailPage() {
             )}
           </div>
 
-          {/* CUSTOMER / CONTACT */}
-          <Card className="space-y-2">
-            <p className="text-xs text-gray-500">Customer Contact</p>
+          {/* STAGE / HEALTH */}
+          <Card className="space-y-3">
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-gray-500">Health</span>
+              <LeadHealthChip health={leadHealth} />
+            </div>
 
             <div>
-              <p className="text-sm font-medium text-gray-900">
-                {customerName || "—"}
+              <p className="text-xs text-gray-500 mb-1">
+                Lead Stage
               </p>
 
-              {customerEmail && (
-                <p className="text-xs text-gray-600 mt-1">
-                  📧 {customerEmail}
-                </p>
-              )}
+              <select
+                disabled={isClosed}
+                value={stage}
+                onChange={async e => {
+                  const newStage = e.target.value;
+                  let remark = "";
 
-              {customerMobile && (
-                <p className="text-xs text-gray-600 mt-1">
-                  📱 {customerMobile}
-                </p>
-              )}
+                  if (["closed_won", "closed_lost"].includes(newStage)) {
+                    remark = prompt("Closing remark is required");
+
+                    if (!remark?.trim()) return;
+                  }
+
+                  await updateLeadStage({
+                    leadId: lead.id,
+                    newStage,
+                    remark,
+                    user
+                  });
+                }}
+                className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-500"
+              >
+                <option value="new">New</option>
+                <option value="assigned">Assigned</option>
+                <option value="follow_up">Follow Up</option>
+                <option value="quoted">Quoted</option>
+                <option value="closed_won">Closed Won</option>
+                <option value="closed_lost">Closed Lost</option>
+              </select>
             </div>
-          </Card>
 
-          {/* TRAVEL AGENT / SPOC */}
-          <Card className="space-y-2">
-            <p className="text-xs text-gray-500">Travel Agent / SPOC</p>
-
-            <div>
-              <p className="text-sm font-medium text-gray-900">
-                {travelAgentName || lead.spoc?.name || "—"}
+            {isClosed && (
+              <p className="text-xs text-gray-500">
+                This lead is closed. Reopen it to make changes.
               </p>
-
-              {lead.spoc?.name && travelAgentName && (
-                <p className="text-xs text-gray-600 mt-1">
-                  SPOC: {lead.spoc.name}
-                </p>
-              )}
-
-              {lead.spoc?.email && (
-                <p className="text-xs text-gray-600 mt-1">
-                  📧 {lead.spoc.email}
-                </p>
-              )}
-
-              {lead.spoc?.mobile && (
-                <p className="text-xs text-gray-600 mt-1">
-                  📱 {lead.spoc.mobile}
-                </p>
-              )}
-            </div>
+            )}
           </Card>
 
-          {/* ACTIONS */}
-          <Card className="space-y-2">
-            <button
-              disabled={isClosed}
-              onClick={() => setFollowUpOpen(true)}
-              className={`${actionButtonClass} bg-blue-600 text-white hover:bg-blue-700`}
-            >
-              + Log Follow-Up
-            </button>
 
-            <button
-              disabled={isClosed}
-              onClick={() => setQuoteOpen(true)}
-              className={`${actionButtonClass} bg-purple-600 text-white hover:bg-purple-700`}
-            >
-              + Create Quotation
-            </button>
-
-            <button
-              disabled={isClosed}
-              onClick={() => setAssignOpen(true)}
-              className={`${actionButtonClass} bg-orange-600 text-white hover:bg-orange-700`}
-            >
-              Assign / Change Team
-            </button>
-          </Card>
-
-          {/* ASSIGNED TO */}
-          <Card className="space-y-2">
-            <p className="text-xs text-gray-500">Assigned To</p>
-
-            <div className="flex items-center gap-3">
-              <InitialAvatar name={assignedName || assignedUid || "User"} />
-
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-gray-900 truncate">
-                  {assignedName || "—"}
-                </p>
-
-                {assignedUid && (
-                  <p className="text-xs text-gray-500 truncate">
-                    {assignedUid}
-                  </p>
-                )}
-              </div>
-            </div>
-          </Card>
 
           {/* ADMIN REOPEN */}
           {canReopen && (
@@ -505,7 +747,6 @@ export default function LeadDetailPage() {
         </div>
 
         {/* ================= RIGHT PANEL ================= */}
-        {/* ================= RIGHT PANEL ================= */}
         <div className="lg:col-span-2 space-y-4">
 
           {/* TIMELINE FILTERS */}
@@ -515,8 +756,9 @@ export default function LeadDetailPage() {
                 <h3 className="font-semibold text-gray-900">
                   Lead Timeline
                 </h3>
+
                 <p className="text-xs text-gray-500">
-                  Follow-ups, quotations, stage changes and assignments
+                  Follow-ups, quotations, notes and assignments
                 </p>
               </div>
 
@@ -533,8 +775,8 @@ export default function LeadDetailPage() {
                   type="button"
                   onClick={() => setFilter(item.value)}
                   className={`px-3 py-1.5 rounded-full text-xs border transition ${filter === item.value
-                      ? "bg-blue-600 text-white border-blue-600"
-                      : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+                    ? "bg-blue-600 text-white border-blue-600"
+                    : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
                     }`}
                 >
                   {item.label}
@@ -565,7 +807,11 @@ export default function LeadDetailPage() {
       {quoteOpen && (
         <QuotationEditor
           lead={lead}
-          onClose={() => setQuoteOpen(false)}
+          initialQuotation={quotationToEdit}
+          onClose={() => {
+            setQuoteOpen(false);
+            setQuotationToEdit(null);
+          }}
         />
       )}
 
@@ -576,10 +822,17 @@ export default function LeadDetailPage() {
         />
       )}
 
-      <ActivityViewerModal
-        activity={selectedActivity}
-        onClose={() => setSelectedActivity(null)}
-      />
+      {selectedActivity && (
+        <ActivityViewerModal
+          activity={selectedActivity}
+          onClose={() => setSelectedActivity(null)}
+          onEditDraft={quotation => {
+            setSelectedActivity(null);
+            setQuotationToEdit(quotation);
+            setQuoteOpen(true);
+          }}
+        />
+      )}
     </main>
   );
 }

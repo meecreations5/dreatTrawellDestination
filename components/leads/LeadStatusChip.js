@@ -6,23 +6,27 @@ export default function LeadStatusChip({ stage }) {
   const map = {
     new: {
       label: "New",
-      className: "bg-blue-50 text-blue-700"
+      className: "bg-gray-50 text-gray-700 border-gray-200"
+    },
+    assigned: {
+      label: "Assigned",
+      className: "bg-indigo-50 text-indigo-700 border-indigo-100"
     },
     follow_up: {
       label: "Follow Up",
-      className: "bg-yellow-50 text-yellow-700"
+      className: "bg-blue-50 text-blue-700 border-blue-100"
     },
     quoted: {
       label: "Quoted",
-      className: "bg-purple-50 text-purple-700"
+      className: "bg-purple-50 text-purple-700 border-purple-100"
     },
     closed_won: {
       label: "Closed Won",
-      className: "bg-green-50 text-green-700"
+      className: "bg-green-50 text-green-700 border-green-100"
     },
     closed_lost: {
       label: "Closed Lost",
-      className: "bg-red-50 text-red-700"
+      className: "bg-red-50 text-red-700 border-red-100"
     }
   };
 

@@ -1,103 +1,321 @@
-// componenets/leads/AssignLeadModal
+// components/leads/AssignLeadModal.jsx
 
 "use client";
 
-import { useEffect, useState } from "react";
-import { collection, getDocs } from "firebase/firestore";
+import { useEffect, useMemo, useState } from "react";
+import {
+  collection,
+  doc,
+  getDocs,
+  serverTimestamp,
+  updateDoc
+} from "firebase/firestore";
+
 import { db } from "@/lib/firebase";
-import { assignLead } from "@/lib/assignLead";
 import { useAuth } from "@/hooks/useAuth";
 
-/* =========================
-   UI STYLES (LOCAL)
-========================= */
-const inputClass = `
-  w-full
-  border border-gray-200
-  rounded-lg
-  px-3 py-2
-  text-sm
-  bg-white
-  focus:outline-none
-  focus:ring-2
-  focus:ring-blue-100
-  focus:border-blue-400
-`;
+import {
+  logLeadAction,
+  LEAD_TIMELINE_TYPES
+} from "@/lib/logLeadAction";
+
+function getFirstValue(...values) {
+  return (
+    values.find(
+      value => typeof value === "string" && value.trim().length > 0
+    )?.trim() || ""
+  );
+}
+
+function getUserId(user) {
+  return getFirstValue(
+    user?.uid,
+    user?.id,
+    user?.email
+  );
+}
+
+function getUserName(user) {
+  return getFirstValue(
+    user?.displayName,
+    user?.name,
+    user?.fullName,
+    user?.employeeName,
+    user?.email
+  );
+}
+
+function getUserEmail(user) {
+  return getFirstValue(
+    user?.email,
+    user?.workEmail,
+    user?.officialEmail
+  );
+}
+
+function getUserRole(user) {
+  return getFirstValue(
+    user?.designation,
+    user?.jobTitle,
+    user?.role
+  );
+}
+
+function isInternalUser(user) {
+  const role = String(user?.role || "").toLowerCase();
+
+  const inactive =
+    user?.disabled ||
+    user?.isDisabled ||
+    user?.deleted ||
+    user?.isDeleted ||
+    user?.status === "inactive" ||
+    user?.active === false;
+
+  const excludedRoles = [
+    "customer",
+    "client",
+    "vendor",
+    "travel_agent",
+    "travel-agent"
+  ];
+
+  return !inactive && !excludedRoles.includes(role);
+}
 
 export default function AssignLeadModal({ leadId, onClose }) {
   const { user } = useAuth();
-  const [team, setTeam] = useState([]);
-  const [selectedUid, setSelectedUid] = useState("");
+
+  const [members, setMembers] = useState([]);
+  const [selectedUserId, setSelectedUserId] = useState("");
+  const [remark, setRemark] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    // ⛔ Wait until user is available
-    if (!user?.uid) return;
+    let mounted = true;
 
-    getDocs(collection(db, "users")).then(snap => {
-      const users = snap.docs.map(d => ({
-        uid: d.id,
-        ...d.data()
-      }));
+    async function loadUsers() {
+      setLoading(true);
 
-      setTeam(
-        users.filter(u => {
-          // ✅ Only admin or team can be assigned
-          if (!(u.role === "admin" || u.role === "employee"))
-            return false;
+      try {
+        const snap = await getDocs(collection(db, "users"));
 
-          // ❌ Logged-in user should not see themselves
-          if (u.uid === user.uid)
-            return false;
+        const rows = snap.docs
+          .map(docSnap => {
+            const data = docSnap.data();
 
-          return true;
-        })
-      );
-    });
-  }, [user]);
-  const assign = async () => {
-    const newUser = team.find(u => u.uid === selectedUid);
-    if (!newUser) return;
+            return {
+              id: docSnap.id,
+              uid: data?.uid || docSnap.id,
+              ...data
+            };
+          })
+          .filter(isInternalUser)
+          .map(member => {
+            const safeId = getUserId(member);
 
-    await assignLead({
-      leadId,
-      newUser,
-      assignedBy: user
-    });
+            return {
+              ...member,
+              safeId
+            };
+          })
+          .filter(member => member.safeId)
+          .sort((a, b) =>
+            getUserName(a).localeCompare(getUserName(b))
+          );
 
-    onClose();
+        if (mounted) {
+          setMembers(rows);
+        }
+      } catch (error) {
+        console.error("Failed to load users:", error);
+        if (mounted) setMembers([]);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }
+
+    loadUsers();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const selectedMember = useMemo(() => {
+    return members.find(member => member.safeId === selectedUserId) || null;
+  }, [members, selectedUserId]);
+
+  const assignLead = async () => {
+    if (saving) return;
+
+    if (!selectedMember) {
+      alert("Please select team member");
+      return;
+    }
+
+    const assigneeId = getUserId(selectedMember);
+    const assigneeName = getUserName(selectedMember);
+    const assigneeEmail = getUserEmail(selectedMember);
+    const assigneeRole = getUserRole(selectedMember);
+
+    if (!assigneeId) {
+      alert("Selected team member does not have valid UID or email");
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      await updateDoc(doc(db, "leads", leadId), {
+        assignedTo: assigneeId,
+        assignedToUid: assigneeId,
+        assignedToName: assigneeName,
+        assignedToEmail: assigneeEmail,
+        assignedToRole: assigneeRole,
+
+        stage: "assigned",
+
+        assignedAt: serverTimestamp(),
+        assignedByUid: user?.uid || "",
+        assignedByName:
+          user?.displayName || user?.name || user?.email || "",
+
+        updatedAt: serverTimestamp()
+      });
+
+      await logLeadAction({
+        leadId,
+        type: LEAD_TIMELINE_TYPES.ASSIGNED || "assigned",
+        title: "Lead assigned",
+        description: `Lead assigned to ${assigneeName || assigneeEmail || assigneeId}`,
+        metadata: {
+          action: "lead_assigned",
+          assignedTo: assigneeId,
+          assignedToUid: assigneeId,
+          assignedToName: assigneeName,
+          assignedToEmail: assigneeEmail,
+          assignedToRole: assigneeRole,
+          remark: remark || ""
+        },
+        user
+      });
+
+      onClose();
+    } catch (error) {
+      console.error("Assign lead failed:", error);
+      alert(error?.message || "Failed to assign lead");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-white w-full max-w-sm rounded-xl shadow-sm p-6 space-y-4">
-        <h2 className="text-sm font-semibold">Assign Lead</h2>
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+      <div className="bg-white rounded-xl max-w-md w-full shadow-xl">
+        <div className="p-5 border-b">
+          <h2 className="text-base font-semibold text-gray-900">
+            Assign Lead
+          </h2>
+          <p className="text-xs text-gray-500 mt-1">
+            Assign or change the team member responsible for this lead.
+          </p>
+        </div>
 
-        <select
-          className={inputClass}
-          value={selectedUid}
-          onChange={e => setSelectedUid(e.target.value)}
-        >
-          <option value="">Select Team Member</option>
-          {team.map(u => (
-            <option key={u.uid} value={u.uid}>
-              {u.name}
-            </option>
-          ))}
-        </select>
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="text-xs font-medium text-gray-500">
+              Team Member
+            </label>
 
-        <div className="flex gap-2 pt-2">
+            <select
+              value={selectedUserId}
+              onChange={e => setSelectedUserId(e.target.value)}
+              disabled={loading || saving}
+              className="
+                mt-1 w-full border border-gray-200 rounded-lg
+                px-3 py-2 text-sm bg-white
+                focus:outline-none focus:ring-2 focus:ring-blue-100
+                disabled:bg-gray-100 disabled:text-gray-500
+              "
+            >
+              <option value="">
+                {loading ? "Loading team members..." : "Select team member"}
+              </option>
+
+              {members.map((member, index) => {
+                const safeId = member.safeId;
+                const name = getUserName(member);
+                const email = getUserEmail(member);
+                const role = getUserRole(member);
+
+                return (
+                  <option
+                    key={`${safeId}-${index}`}
+                    value={safeId}
+                  >
+                    {name || email || safeId}
+                    {role ? ` — ${role}` : ""}
+                    {email && name !== email ? ` (${email})` : ""}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+
+          {selectedMember && (
+            <div className="bg-gray-50 border border-gray-100 rounded-lg p-3 text-xs text-gray-700">
+              <p className="font-semibold text-gray-900">
+                {getUserName(selectedMember)}
+              </p>
+
+              {getUserRole(selectedMember) && (
+                <p className="mt-1">{getUserRole(selectedMember)}</p>
+              )}
+
+              {getUserEmail(selectedMember) && (
+                <p className="mt-1">{getUserEmail(selectedMember)}</p>
+              )}
+            </div>
+          )}
+
+          <div>
+            <label className="text-xs font-medium text-gray-500">
+              Internal Remark
+            </label>
+
+            <textarea
+              rows={3}
+              value={remark}
+              onChange={e => setRemark(e.target.value)}
+              placeholder="Optional assignment note"
+              className="
+                mt-1 w-full border border-gray-200 rounded-lg
+                px-3 py-2 text-sm bg-white
+                focus:outline-none focus:ring-2 focus:ring-blue-100
+              "
+            />
+          </div>
+        </div>
+
+        <div className="p-5 border-t flex gap-2">
           <button
+            type="button"
             onClick={onClose}
-            className="flex-1 border rounded-md py-2"
+            disabled={saving}
+            className="flex-1 border border-gray-200 rounded-lg py-2 text-sm disabled:opacity-60"
           >
             Cancel
           </button>
 
           <button
-            onClick={assign}
-            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white rounded-md py-2"
+            type="button"
+            onClick={assignLead}
+            disabled={saving || loading || !selectedUserId}
+            className="flex-1 bg-blue-600 text-white rounded-lg py-2 text-sm disabled:opacity-60"
           >
-            Assign Lead
+            {saving ? "Assigning..." : "Assign Lead"}
           </button>
         </div>
       </div>
