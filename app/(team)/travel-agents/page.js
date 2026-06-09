@@ -166,16 +166,6 @@ function getContactName(agent) {
   );
 }
 
-function getTelHref(phone) {
-  const cleanPhone = String(phone || "").replace(/[^\d+]/g, "");
-  return cleanPhone ? `tel:${cleanPhone}` : "";
-}
-
-function getWhatsAppHref(phone) {
-  const digits = String(phone || "").replace(/\D/g, "");
-  return digits ? `https://wa.me/${digits}` : "";
-}
-
 function isStaleEngagement(lastEngagement) {
   const millis = toMillis(lastEngagement?.createdAt);
   if (!millis) return false;
@@ -230,16 +220,33 @@ function getPriority({ lastEngagement, leadCount }) {
   };
 }
 
+function getLatestEngagementText(lastEngagement) {
+  return (
+    lastEngagement?.subject ||
+    lastEngagement?.notes ||
+    lastEngagement?.message ||
+    lastEngagement?.messageText ||
+    ""
+  );
+}
+
 /* =========================
    STAT CARD
 ========================= */
-function StatCard({ label, value }) {
+function StatCard({ label, value, helper }) {
   return (
-    <div className="bg-white border border-gray-100 rounded-xl px-4 py-3 shadow-sm">
-      <p className="text-xs text-gray-500">{label}</p>
-      <p className="mt-1 text-lg font-semibold text-gray-900">
+    <div className="rounded-2xl border border-gray-100 bg-white px-4 py-3 shadow-sm">
+      <p className="text-xs font-medium text-gray-500">{label}</p>
+
+      <p className="mt-1 text-xl font-semibold text-gray-950">
         {value}
       </p>
+
+      {helper && (
+        <p className="mt-1 text-[11px] text-gray-400">
+          {helper}
+        </p>
+      )}
     </div>
   );
 }
@@ -249,8 +256,16 @@ function StatCard({ label, value }) {
 ========================= */
 function AgentTabs({ filters, setFilters, stats }) {
   const tabs = [
-    { label: "All", value: "all", count: stats.totalAgents },
-    { label: "Engaged", value: "engaged", count: stats.engaged },
+    {
+      label: "All",
+      value: "all",
+      count: stats.totalAgents
+    },
+    {
+      label: "Engaged",
+      value: "engaged",
+      count: stats.engaged
+    },
     {
       label: "Needs Follow-up",
       value: "not_engaged",
@@ -278,13 +293,14 @@ function AgentTabs({ filters, setFilters, stats }) {
                 engagement: tab.value
               }))
             }
-            className={`shrink-0 rounded-full px-4 py-2 text-xs font-medium border transition ${
+            className={`shrink-0 rounded-full border px-4 py-2 text-xs font-medium transition ${
               active
-                ? "bg-blue-600 text-white border-blue-600"
-                : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+                ? "border-blue-600 bg-blue-600 text-white"
+                : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
             }`}
           >
             {tab.label}
+
             <span
               className={`ml-2 ${
                 active ? "text-blue-100" : "text-gray-400"
@@ -322,8 +338,7 @@ function AgentCard({ agent, lastEngagement, leadCount, city }) {
   const contactName = getContactName(agent);
   const phone = getAgentPhone(agent);
   const email = getAgentEmail(agent);
-  const telHref = getTelHref(phone);
-  const whatsappHref = getWhatsAppHref(phone);
+  const latestText = getLatestEngagementText(lastEngagement);
 
   const healthColor =
     health === "At Risk" || health === "Stale"
@@ -333,11 +348,11 @@ function AgentCard({ agent, lastEngagement, leadCount, city }) {
       : "neutral";
 
   return (
-    <div className="bg-white border border-gray-100 rounded-xl p-4 space-y-4 shadow-sm hover:shadow-md transition">
+    <div className="group flex h-full flex-col rounded-2xl border border-gray-100 bg-white p-4 shadow-sm transition hover:border-blue-100 hover:shadow-md">
       {/* HEADER */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="font-semibold text-sm text-gray-900 truncate">
+          <p className="truncate text-sm font-semibold text-gray-950">
             {agent.agencyName || "Unnamed Agency"}
           </p>
 
@@ -347,21 +362,21 @@ function AgentCard({ agent, lastEngagement, leadCount, city }) {
           </div>
         </div>
 
-        <div className="flex flex-col items-end gap-1">
+        <div className="flex shrink-0 flex-col items-end gap-1">
           <span
-            className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-medium ${priority.className}`}
+            className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${priority.className}`}
           >
             {priority.label}
           </span>
 
-          <span className="shrink-0 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] font-medium text-gray-600">
+          <span className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] font-medium text-gray-600">
             {agent.kycStatus || agent.status || "Active"}
           </span>
         </div>
       </div>
 
       {/* CHIPS */}
-      <div className="flex flex-wrap gap-2">
+      <div className="mt-4 flex flex-wrap gap-2">
         <TravelChip
           label={`${leadCount || 0} Lead${leadCount === 1 ? "" : "s"}`}
           icon="leads"
@@ -392,128 +407,105 @@ function AgentCard({ agent, lastEngagement, leadCount, city }) {
       </div>
 
       {/* CONTACT DETAILS */}
-      <div className="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2 space-y-2">
-        {phone ? (
-          <a
-            href={telHref}
-            className="flex items-center justify-between gap-3 rounded-md hover:bg-white px-1 py-1 transition"
-          >
-            <span className="min-w-0 text-xs text-gray-600">
-              <span className="font-medium text-gray-800">Phone:</span>{" "}
-              <span className="break-all">{phone}</span>
+      <div className="mt-4 rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+          Contact Details
+        </p>
+
+        <div className="space-y-1.5">
+          <div className="flex items-start justify-between gap-3">
+            <span className="shrink-0 text-xs font-medium text-gray-500">
+              SPOC
             </span>
 
-            <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
-              Call
+            <span className="min-w-0 truncate text-right text-xs text-gray-800">
+              {contactName || "Not added"}
             </span>
-          </a>
-        ) : (
-          <p className="text-xs text-gray-400">No phone added</p>
-        )}
+          </div>
 
-        {email ? (
-          <a
-            href={`mailto:${email}`}
-            className="flex items-center justify-between gap-3 rounded-md hover:bg-white px-1 py-1 transition"
-          >
-            <span className="min-w-0 text-xs text-gray-600 truncate">
-              <span className="font-medium text-gray-800">Email:</span>{" "}
-              {email}
+          <div className="flex items-start justify-between gap-3">
+            <span className="shrink-0 text-xs font-medium text-gray-500">
+              Phone
             </span>
 
-            <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-700">
+            <span className="min-w-0 truncate text-right text-xs text-gray-800">
+              {phone || "Not added"}
+            </span>
+          </div>
+
+          <div className="flex items-start justify-between gap-3">
+            <span className="shrink-0 text-xs font-medium text-gray-500">
               Email
             </span>
-          </a>
-        ) : (
-          <p className="text-xs text-gray-400">No email added</p>
-        )}
+
+            <span className="min-w-0 truncate text-right text-xs text-gray-800">
+              {email || "Not added"}
+            </span>
+          </div>
+        </div>
       </div>
 
       {/* LATEST ENGAGEMENT */}
-      {lastEngagement ? (
-        <div
-          className={`rounded-lg px-3 py-2 border ${
-            isStaleEngagement(lastEngagement)
-              ? "bg-orange-50 border-orange-100"
-              : "bg-blue-50 border-blue-100"
-          }`}
-        >
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">
-              Latest engagement
+      <div className="mt-4 flex-1">
+        {lastEngagement ? (
+          <div
+            className={`rounded-xl border px-3 py-3 ${
+              isStaleEngagement(lastEngagement)
+                ? "border-orange-100 bg-orange-50"
+                : "border-blue-100 bg-blue-50"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                Latest Engagement
+              </p>
+
+              {latestAgo && (
+                <p className="text-[11px] font-medium text-blue-700">
+                  {latestAgo}
+                </p>
+              )}
+            </div>
+
+            <p className="mt-1 text-xs font-medium text-gray-800">
+              {formatChannel(lastEngagement.channel) || "Engagement logged"}
+              {latestDate ? ` • ${latestDate}` : ""}
             </p>
 
-            {latestAgo && (
-              <p className="text-[11px] font-medium text-blue-700">
-                {latestAgo}
+            {latestText && (
+              <p className="mt-1 line-clamp-2 text-xs leading-5 text-gray-500">
+                {latestText}
               </p>
             )}
           </div>
-
-          <p className="mt-1 text-xs text-gray-700">
-            {formatChannel(lastEngagement.channel) || "Engagement logged"}
-            {latestDate ? ` • ${latestDate}` : ""}
-          </p>
-
-          {lastEngagement.notes && (
-            <p className="mt-1 text-xs text-gray-500 line-clamp-2">
-              {lastEngagement.notes}
+        ) : (
+          <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-3">
+            <p className="text-xs font-medium text-amber-700">
+              No engagement recorded yet
             </p>
-          )}
-        </div>
-      ) : (
-        <div className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2">
-          <p className="text-xs text-amber-700">
-            No engagement logged yet. Add a follow-up to keep this agent active.
-          </p>
-        </div>
-      )}
 
-      {/* ACTIONS */}
-      <div className="grid grid-cols-2 gap-2 pt-1">
+            <p className="mt-1 text-xs leading-5 text-amber-600">
+              This agent has no activity history available.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* ACTIONS - LIMITED CTA */}
+      <div className="mt-4 grid grid-cols-2 gap-2 border-t border-gray-100 pt-3">
         <Link
           href={`/travel-agents/${agent.id}`}
-          className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 text-center"
+          className="flex items-center justify-center rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
         >
           View Details
         </Link>
 
         <Link
-          href={`/engagements/new?agentId=${agent.id}&channel=call`}
-          className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700 text-center"
+          href={`/engagements/travel-agent/${agent.id}`}
+          className="flex items-center justify-center rounded-xl bg-blue-600 px-3 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700"
         >
-          Log Call
+          View Engagements
         </Link>
-
-        {phone && (
-          <a
-            href={telHref}
-            className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 hover:bg-blue-100 text-center"
-          >
-            Call Now
-          </a>
-        )}
-
-        {whatsappHref && (
-          <a
-            href={whatsappHref}
-            target="_blank"
-            rel="noreferrer"
-            className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 text-center"
-          >
-            WhatsApp
-          </a>
-        )}
-
-        {email && (
-          <a
-            href={`mailto:${email}`}
-            className="col-span-2 rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 text-center"
-          >
-            Send Email
-          </a>
-        )}
       </div>
     </div>
   );
@@ -530,32 +522,39 @@ function AgentTable({
   agentRefs
 }) {
   return (
-    <div className="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+    <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
       <div className="overflow-x-auto">
-        <table className="min-w-[1100px] w-full text-sm">
-          <thead className="bg-gray-50 border-b border-gray-100">
+        <table className="min-w-[1050px] w-full text-sm">
+          <thead className="border-b border-gray-100 bg-gray-50">
             <tr>
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
                 Agency
               </th>
+
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
                 SPOC
               </th>
+
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
                 City
               </th>
+
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
                 Leads
               </th>
+
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
                 Contact
               </th>
+
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
                 Latest Engagement
               </th>
+
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
                 Status
               </th>
+
               <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500">
                 Actions
               </th>
@@ -573,9 +572,6 @@ function AgentTable({
               const email = getAgentEmail(agent);
               const contactName = getContactName(agent);
 
-              const telHref = getTelHref(phone);
-              const whatsappHref = getWhatsAppHref(phone);
-
               const health = getAgentHealth({
                 lastEngagement,
                 leadCount
@@ -585,6 +581,8 @@ function AgentTable({
                 lastEngagement,
                 leadCount
               });
+
+              const latestText = getLatestEngagementText(lastEngagement);
 
               const isLatestEngagement =
                 latestEngagedAgent?.id === agent.id;
@@ -604,7 +602,7 @@ function AgentTable({
                   <td className="px-4 py-3 align-top">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="font-medium text-gray-900 truncate">
+                        <p className="truncate font-medium text-gray-900">
                           {agent.agencyName || "Unnamed Agency"}
                         </p>
 
@@ -643,31 +641,13 @@ function AgentTable({
 
                   <td className="px-4 py-3 align-top">
                     <div className="space-y-1">
-                      {phone ? (
-                        <a
-                          href={telHref}
-                          className="block text-xs font-medium text-blue-700 hover:underline"
-                        >
-                          {phone}
-                        </a>
-                      ) : (
-                        <p className="text-xs text-gray-400">
-                          No phone
-                        </p>
-                      )}
+                      <p className="text-xs text-gray-700">
+                        {phone || "No phone"}
+                      </p>
 
-                      {email ? (
-                        <a
-                          href={`mailto:${email}`}
-                          className="block max-w-[190px] truncate text-xs text-gray-600 hover:text-blue-700 hover:underline"
-                        >
-                          {email}
-                        </a>
-                      ) : (
-                        <p className="text-xs text-gray-400">
-                          No email
-                        </p>
-                      )}
+                      <p className="max-w-[190px] truncate text-xs text-gray-500">
+                        {email || "No email"}
+                      </p>
                     </div>
                   </td>
 
@@ -686,9 +666,9 @@ function AgentTable({
                             : ""}
                         </p>
 
-                        {lastEngagement.notes && (
-                          <p className="mt-1 max-w-[220px] truncate text-xs text-gray-400">
-                            {lastEngagement.notes}
+                        {latestText && (
+                          <p className="mt-1 max-w-[240px] truncate text-xs text-gray-400">
+                            {latestText}
                           </p>
                         )}
                       </div>
@@ -721,39 +701,17 @@ function AgentTable({
                     <div className="flex justify-end gap-2">
                       <Link
                         href={`/travel-agents/${agent.id}`}
-                        className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                        className="inline-flex rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
                       >
-                        View
+                        View Details
                       </Link>
 
-                      {phone && (
-                        <a
-                          href={telHref}
-                          className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
-                        >
-                          Call
-                        </a>
-                      )}
-
-                      {email && (
-                        <a
-                          href={`mailto:${email}`}
-                          className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                        >
-                          Email
-                        </a>
-                      )}
-
-                      {whatsappHref && (
-                        <a
-                          href={whatsappHref}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                        >
-                          WA
-                        </a>
-                      )}
+                      <Link
+                        href={`/travel-agents/${agent.id}/engagements`}
+                        className="inline-flex rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700"
+                      >
+                        View Engagements
+                      </Link>
                     </div>
                   </td>
                 </tr>
@@ -815,6 +773,7 @@ export default function UserTravelAgentsPage() {
             ...doc.data()
           }))
         );
+
         setLoadingAgents(false);
       },
       err => {
@@ -851,6 +810,7 @@ export default function UserTravelAgentsPage() {
             ...doc.data()
           }))
         );
+
         setLoadingEngagements(false);
       },
       err => {
@@ -882,6 +842,7 @@ export default function UserTravelAgentsPage() {
             ...doc.data()
           }))
         );
+
         setLoadingLeads(false);
       },
       err => {
@@ -1221,92 +1182,130 @@ export default function UserTravelAgentsPage() {
 
   if (isPageLoading) {
     return (
-      <main className="max-w-6xl mx-auto px-4 py-6 space-y-4 bg-gray-50 min-h-screen">
-        {Array.from({ length: 5 }).map((_, index) => (
-          <CardSkeleton key={index} />
-        ))}
+      <main className="min-h-screen bg-gray-50">
+        <div className="mx-auto max-w-7xl space-y-4 px-4 py-6">
+          {Array.from({ length: 5 }).map((_, index) => (
+            <CardSkeleton key={index} />
+          ))}
+        </div>
       </main>
     );
   }
 
   return (
-    <main className="bg-gray-50 min-h-screen">
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-5">
+    <main className="min-h-screen bg-gray-50">
+      <div className="mx-auto max-w-7xl space-y-5 px-4 py-6">
         {/* HEADER */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h1 className="text-lg font-semibold text-gray-900">
-              Travel Agents
-            </h1>
+        <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h1 className="text-xl font-semibold text-gray-950">
+                Travel Agents
+              </h1>
 
-            <p className="text-sm text-gray-500">
-              Showing {paginationStart}-{paginationEnd} of{" "}
-              {sortedAgents.length} travel agents
-            </p>
-          </div>
+              <p className="mt-1 text-sm text-gray-500">
+                Detailed agent engagement overview with leads, contact,
+                activity health, and latest follow-up status.
+              </p>
 
-          <div className="flex flex-wrap gap-2">
-            {latestEngagedAgent && (
-              <button
-                type="button"
-                onClick={jumpToLatestEngagement}
-                className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 hover:bg-blue-100"
+              <p className="mt-2 text-xs text-gray-400">
+                Showing {paginationStart}-{paginationEnd} of{" "}
+                {sortedAgents.length} travel agents
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {latestEngagedAgent && (
+                <button
+                  type="button"
+                  onClick={jumpToLatestEngagement}
+                  className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                >
+                  Jump to Latest Engagement
+                </button>
+              )}
+
+              <select
+                value={String(pageSize)}
+                onChange={e => setPageSize(Number(e.target.value))}
+                className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 outline-none"
               >
-                Jump to Latest Engagement
-              </button>
-            )}
+                <option value="6">6 / page</option>
+                <option value="12">12 / page</option>
+                <option value="24">24 / page</option>
+                <option value="48">48 / page</option>
+              </select>
 
-            <select
-              value={String(pageSize)}
-              onChange={e => setPageSize(Number(e.target.value))}
-              className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 outline-none"
-            >
-              <option value="6">6 / page</option>
-              <option value="12">12 / page</option>
-              <option value="24">24 / page</option>
-              <option value="48">48 / page</option>
-            </select>
+              <div className="flex rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setView("grid")}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium ${
+                    view === "grid"
+                      ? "bg-blue-600 text-white"
+                      : "text-gray-600 hover:bg-gray-50"
+                  }`}
+                >
+                  Grid
+                </button>
 
-            <div className="flex rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
-              <button
-                type="button"
-                onClick={() => setView("grid")}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md ${
-                  view === "grid"
-                    ? "bg-blue-600 text-white"
-                    : "text-gray-600 hover:bg-gray-50"
-                }`}
-              >
-                Grid
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setView("list")}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md ${
-                  view === "list"
-                    ? "bg-blue-600 text-white"
-                    : "text-gray-600 hover:bg-gray-50"
-                }`}
-              >
-                List
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setView("list")}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium ${
+                    view === "list"
+                      ? "bg-blue-600 text-white"
+                      : "text-gray-600 hover:bg-gray-50"
+                  }`}
+                >
+                  List
+                </button>
+              </div>
             </div>
           </div>
         </div>
 
         {/* STATS */}
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-          <StatCard label="Total Agents" value={stats.totalAgents} />
-          <StatCard label="Total Leads" value={stats.totalLeads} />
-          <StatCard label="Engaged" value={stats.engaged} />
-          <StatCard label="No Activity" value={stats.noActivity} />
-          <StatCard label="Stale" value={stats.staleFollowUps} />
-          <StatCard label="High Leads" value={stats.highLeadAgents} />
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <StatCard
+            label="Total Agents"
+            value={stats.totalAgents}
+            helper="All agents"
+          />
+
+          <StatCard
+            label="Total Leads"
+            value={stats.totalLeads}
+            helper="Linked leads"
+          />
+
+          <StatCard
+            label="Engaged"
+            value={stats.engaged}
+            helper="Has activity"
+          />
+
+          <StatCard
+            label="No Activity"
+            value={stats.noActivity}
+            helper="No engagement"
+          />
+
+          <StatCard
+            label="Stale"
+            value={stats.staleFollowUps}
+            helper="15+ days old"
+          />
+
+          <StatCard
+            label="High Leads"
+            value={stats.highLeadAgents}
+            helper="5+ leads"
+          />
         </div>
 
         {/* FILTER AREA */}
-        <div className="sticky top-0 z-20 bg-gray-50/95 backdrop-blur py-3 space-y-3">
+        <div className="sticky top-0 z-20 space-y-3 bg-gray-50/95 py-3 backdrop-blur">
           <AgentTabs
             filters={filters}
             setFilters={setFilters}
@@ -1330,7 +1329,7 @@ export default function UserTravelAgentsPage() {
 
         {/* CONTENT */}
         {sortedAgents.length === 0 ? (
-          <div className="bg-white border border-gray-100 rounded-xl p-8">
+          <div className="rounded-2xl border border-gray-100 bg-white p-8 shadow-sm">
             <EmptyState
               icon="🧳"
               title="No travel agents found"
@@ -1350,10 +1349,11 @@ export default function UserTravelAgentsPage() {
         ) : (
           <>
             {view === "grid" ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {paginatedAgents.map(agent => {
                   const meta = leadMetaMap[agent.id] || {};
                   const city = getAgentCity(agent, meta);
+
                   const isLatestEngagement =
                     latestEngagedAgent?.id === agent.id;
 
@@ -1365,7 +1365,7 @@ export default function UserTravelAgentsPage() {
                       }}
                       className={
                         isLatestEngagement
-                          ? "rounded-xl ring-2 ring-blue-500 ring-offset-2 ring-offset-gray-50"
+                          ? "rounded-2xl ring-2 ring-blue-500 ring-offset-2 ring-offset-gray-50"
                           : ""
                       }
                     >
@@ -1396,7 +1396,7 @@ export default function UserTravelAgentsPage() {
             )}
 
             {/* PAGINATION */}
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-t border-gray-100 pt-4">
+            <div className="flex flex-col gap-3 border-t border-gray-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs text-gray-500">
                 Showing {paginationStart}-{paginationEnd} of{" "}
                 {sortedAgents.length}
@@ -1409,7 +1409,7 @@ export default function UserTravelAgentsPage() {
                     setPage(prev => Math.max(1, prev - 1))
                   }
                   disabled={page === 1}
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-gray-50"
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Previous
                 </button>
@@ -1424,7 +1424,7 @@ export default function UserTravelAgentsPage() {
                     setPage(prev => Math.min(totalPages, prev + 1))
                   }
                   disabled={page === totalPages}
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-gray-50"
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Next
                 </button>

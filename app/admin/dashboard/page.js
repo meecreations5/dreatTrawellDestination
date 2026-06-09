@@ -1,12 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  collection,
-  onSnapshot,
-  getDocs
-} from "firebase/firestore";
+import { collection, onSnapshot } from "firebase/firestore";
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
@@ -22,29 +18,51 @@ import EngagementKpiCard from "@/components/admin/dashboard/engagements/Engageme
 import EngagementByChannelChart from "@/components/admin/dashboard/engagements/EngagementByChannelChart";
 
 /* =========================
-   CONFIG
+   FIRESTORE COLLECTIONS
 ========================== */
 
+const LEADS_COLLECTION = "leads";
+const ENGAGEMENT_COLLECTION = "engagements";
+const USERS_COLLECTION = "users";
 const ATTENDANCE_COLLECTION = "attendance_sessions";
-// If your Firestore attendance collection is attendance_logs,
-// change only this line:
-// const ATTENDANCE_COLLECTION = "attendance_logs";
 
 /* =========================
-   HELPERS
+   COMMON HELPERS
 ========================== */
 
 function toDate(value) {
   if (!value) return null;
   if (value instanceof Date) return value;
-  if (value?.toDate) return value.toDate();
+  if (typeof value?.toDate === "function") return value.toDate();
+  if (value?.seconds) return new Date(value.seconds * 1000);
 
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function normalize(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function readableLabel(value) {
+  if (!value) return "—";
+
+  return String(value)
+    .replaceAll("_", " ")
+    .replaceAll("-", " ")
+    .replace(/\b\w/g, char => char.toUpperCase());
+}
+
 function getRangeWindow(range) {
   const now = new Date();
+
+  if (range === "all") {
+    return {
+      start: null,
+      end: now
+    };
+  }
+
   const start = new Date(now);
 
   if (range === "today") {
@@ -69,6 +87,8 @@ function getRangeWindow(range) {
 }
 
 function isInRange(value, rangeWindow) {
+  if (!rangeWindow?.start) return true;
+
   const d = toDate(value);
   if (!d) return false;
 
@@ -91,6 +111,17 @@ function formatDateTime(value) {
   });
 }
 
+function formatDate(value) {
+  const d = toDate(value);
+  if (!d) return "—";
+
+  return d.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric"
+  });
+}
+
 function formatNameFromEmail(email) {
   if (!email) return "Unassigned";
 
@@ -100,42 +131,43 @@ function formatNameFromEmail(email) {
     .replace(/\b\w/g, c => c.toUpperCase());
 }
 
-function isClosedLead(lead) {
-  return (
-    lead?.status === "closed" ||
-    lead?.stage === "closed_won" ||
-    lead?.stage === "closed_lost"
-  );
+function formatDuration(minutes) {
+  const value = Number(minutes || 0);
+
+  if (!value) return "—";
+
+  const h = Math.floor(value / 60);
+  const m = value % 60;
+
+  if (!h) return `${m}m`;
+  if (!m) return `${h}h`;
+
+  return `${h}h ${m}m`;
 }
 
-function isActiveLead(lead) {
-  return !isClosedLead(lead);
+function looksLikeEmail(value) {
+  return String(value || "").includes("@");
 }
 
-function getDueDate(lead) {
-  return (
-    toDate(lead?.nextActionDueAt) ||
-    toDate(lead?.nextActionAt) ||
-    null
-  );
-}
+function countBy(rows, getter) {
+  const map = new Map();
 
-function getLatestQuotationAmount(quotations = []) {
-  if (!quotations.length) return 0;
+  rows.forEach(row => {
+    const key = getter(row);
 
-  const sorted = [...quotations].sort((a, b) => {
-    const ar = Number(a.revisionNumber || 0);
-    const br = Number(b.revisionNumber || 0);
-
-    if (br !== ar) return br - ar;
-
-    const ad = toDate(a.createdAt)?.getTime() || 0;
-    const bd = toDate(b.createdAt)?.getTime() || 0;
-
-    return bd - ad;
+    if (Array.isArray(key)) {
+      key.forEach(item => {
+        if (!item) return;
+        map.set(item, (map.get(item) || 0) + 1);
+      });
+    } else if (key) {
+      map.set(key, (map.get(key) || 0) + 1);
+    }
   });
 
-  return Number(sorted[0]?.totalPrice || 0);
+  return Array.from(map.entries())
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
 }
 
 function getScoreLabel(score) {
@@ -162,86 +194,330 @@ function getScoreClass(score) {
 }
 
 /* =========================
-   ATTENDANCE HELPERS
+   LEAD HELPERS
 ========================== */
 
-function getCheckInDate(record) {
+function getLeadDate(lead) {
   return (
-    toDate(record?.checkInAt) ||
-    toDate(record?.clockInAt) ||
-    toDate(record?.startTime) ||
-    toDate(record?.createdAt) ||
-    toDate(record?.date) ||
-    null
+    toDate(lead?.createdAt) ||
+    toDate(lead?.assignedAt) ||
+    toDate(lead?.updatedAt)
   );
 }
 
-function getCheckOutDate(record) {
-  return (
-    toDate(record?.checkOutAt) ||
-    toDate(record?.clockOutAt) ||
-    toDate(record?.endTime) ||
-    null
+function hasLeadAssignee(lead) {
+  return Boolean(
+    lead?.assignedToUid ||
+      lead?.assignedToName ||
+      lead?.assignedTo ||
+      lead?.assignedToEmail
   );
 }
 
-function getAttendanceUser(record) {
-  const email =
-    record?.userEmail ||
-    record?.employeeEmail ||
-    record?.email ||
-    record?.createdByEmail ||
+function isWonLead(lead) {
+  const status = normalize(lead?.status);
+  const stage = normalize(lead?.stage);
+
+  return (
+    status === "won" ||
+    status === "converted" ||
+    status === "closed_won" ||
+    stage === "won" ||
+    stage === "converted" ||
+    stage === "closed_won"
+  );
+}
+
+function isLostLead(lead) {
+  const status = normalize(lead?.status);
+  const stage = normalize(lead?.stage);
+
+  return (
+    status === "lost" ||
+    status === "cancelled" ||
+    status === "closed_lost" ||
+    stage === "lost" ||
+    stage === "cancelled" ||
+    stage === "closed_lost"
+  );
+}
+
+function isClosedLead(lead) {
+  const status = normalize(lead?.status);
+  const stage = normalize(lead?.stage);
+
+  return (
+    isWonLead(lead) ||
+    isLostLead(lead) ||
+    status === "closed" ||
+    stage === "closed"
+  );
+}
+
+function isActiveLead(lead) {
+  return !isClosedLead(lead);
+}
+
+function getLeadOwner(lead, userMap) {
+  const uid =
+    lead?.assignedToUid ||
+    lead?.assignedTo ||
+    lead?.createdByUid ||
+    lead?.assignedByUid ||
     "";
 
+  const userData = uid ? userMap.get(uid) : null;
+
+  const email =
+    lead?.assignedToEmail ||
+    lead?.assignedBy ||
+    lead?.createdByEmail ||
+    (looksLikeEmail(lead?.assignedTo) ? lead.assignedTo : "") ||
+    userData?.email ||
+    "";
+
+  const name =
+    lead?.assignedToName ||
+    userData?.displayName ||
+    userData?.name ||
+    lead?.createdByName ||
+    formatNameFromEmail(email);
+
   return {
-    uid:
-      record?.userUid ||
-      record?.employeeUid ||
-      record?.uid ||
-      record?.createdByUid ||
-      "",
+    uid,
     email,
-    name:
-      record?.userName ||
-      record?.employeeName ||
-      record?.displayName ||
-      formatNameFromEmail(email)
+    name,
+    department: userData?.department || "",
+    role: userData?.role || userData?.designation || ""
   };
 }
 
-function getAttendanceMinutes(record) {
-  const checkIn = getCheckInDate(record);
-  const checkOut = getCheckOutDate(record);
+/* =========================
+   ENGAGEMENT HELPERS
+========================== */
 
-  if (!checkIn || !checkOut) return 0;
-
-  const diff = checkOut.getTime() - checkIn.getTime();
-
-  if (diff <= 0) return 0;
-
-  return Math.round(diff / 60000);
+function getEngagementDate(item) {
+  return toDate(item?.createdAt) || toDate(item?.updatedAt);
 }
 
-function formatDuration(minutes) {
-  if (!minutes) return "—";
+function getEngagementOwner(item, userMap) {
+  const uid = item?.createdByUid || "";
 
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
+  const userData = uid ? userMap.get(uid) : null;
 
-  if (!h) return `${m}m`;
-  if (!m) return `${h}h`;
+  const email = userData?.email || item?.createdByEmail || "";
 
-  return `${h}h ${m}m`;
+  const name =
+    item?.createdByName ||
+    userData?.displayName ||
+    userData?.name ||
+    formatNameFromEmail(email);
+
+  return {
+    uid,
+    email,
+    name,
+    department: userData?.department || "",
+    role: userData?.role || userData?.designation || ""
+  };
+}
+
+function getEngagementDestinationList(item) {
+  if (Array.isArray(item?.destinationNames) && item.destinationNames.length) {
+    return item.destinationNames.filter(Boolean);
+  }
+
+  if (item?.destinationName) {
+    return [item.destinationName];
+  }
+
+  return [];
+}
+
+/* =========================
+   ATTENDANCE HELPERS
+========================== */
+
+function getAttendanceSessions(record) {
+  if (Array.isArray(record?.sessions)) {
+    return record.sessions;
+  }
+
+  if (record?.checkInAt || record?.checkOutAt) {
+    return [
+      {
+        checkInAt: record.checkInAt,
+        checkOutAt: record.checkOutAt,
+        minutes: record.minutes,
+        status: record.status
+      }
+    ];
+  }
+
+  return [];
+}
+
+function getAttendanceRecordDate(record) {
+  if (record?.date) return record.date;
+
+  const d =
+    toDate(record?.createdAt) ||
+    toDate(record?.updatedAt) ||
+    toDate(getFirstCheckIn(record));
+
+  if (!d) return "";
+
+  return d.toISOString().slice(0, 10);
+}
+
+function getFirstCheckIn(record) {
+  const sessions = getAttendanceSessions(record);
+
+  const dates = sessions
+    .map(session => toDate(session?.checkInAt))
+    .filter(Boolean)
+    .sort((a, b) => a.getTime() - b.getTime());
+
+  return dates[0] || null;
+}
+
+function getLastCheckOut(record) {
+  const sessions = getAttendanceSessions(record);
+
+  const dates = sessions
+    .map(session => toDate(session?.checkOutAt))
+    .filter(Boolean)
+    .sort((a, b) => b.getTime() - a.getTime());
+
+  return dates[0] || null;
+}
+
+function getAttendanceStatus(record) {
+  if (record?.status) return normalize(record.status);
+
+  const sessions = getAttendanceSessions(record);
+  const presentSession = sessions.find(
+    session => normalize(session?.status) === "present"
+  );
+
+  if (presentSession) return "present";
+
+  if (sessions.some(session => session?.checkInAt)) return "present";
+
+  return "unknown";
+}
+
+function getAttendanceMinutes(record) {
+  if (typeof record?.totalMinutes === "number") {
+    return record.totalMinutes;
+  }
+
+  const sessions = getAttendanceSessions(record);
+
+  return sessions.reduce((total, session) => {
+    if (typeof session?.totalMinutes === "number") {
+      return total + session.totalMinutes;
+    }
+
+    if (typeof session?.minutes === "number") {
+      return total + session.minutes;
+    }
+
+    const checkIn = toDate(session?.checkInAt);
+    const checkOut = toDate(session?.checkOutAt);
+
+    if (!checkIn || !checkOut) return total;
+
+    const diff = checkOut.getTime() - checkIn.getTime();
+
+    if (diff <= 0) return total;
+
+    return total + Math.round(diff / 60000);
+  }, 0);
 }
 
 function isAttendanceInRange(record, rangeWindow) {
+  if (!rangeWindow?.start) return true;
+
+  const attendanceDate = getAttendanceRecordDate(record);
+
+  if (attendanceDate) {
+    const date = new Date(`${attendanceDate}T00:00:00`);
+    return date >= rangeWindow.start && date <= rangeWindow.end;
+  }
+
   return (
-    isInRange(record?.date, rangeWindow) ||
     isInRange(record?.createdAt, rangeWindow) ||
-    isInRange(record?.checkInAt, rangeWindow) ||
-    isInRange(record?.clockInAt, rangeWindow) ||
-    isInRange(record?.startTime, rangeWindow)
+    isInRange(record?.updatedAt, rangeWindow) ||
+    isInRange(getFirstCheckIn(record), rangeWindow)
   );
+}
+
+function isAttendancePresent(record) {
+  const status = getAttendanceStatus(record);
+
+  return (
+    status === "present" ||
+    status === "checked_in" ||
+    status === "checked_out" ||
+    getAttendanceSessions(record).some(session => session?.checkInAt)
+  );
+}
+
+function isAttendanceActive(record) {
+  return getAttendanceSessions(record).some(session => {
+    return session?.checkInAt && !session?.checkOutAt;
+  });
+}
+
+function isAttendanceLate(record) {
+  const status = getAttendanceStatus(record);
+
+  return (
+    record?.isLate === true ||
+    status === "late" ||
+    status === "checked_in_late"
+  );
+}
+
+function isAttendanceLeave(record) {
+  const status = getAttendanceStatus(record);
+
+  return status === "leave" || status === "on_leave" || status === "paid_leave";
+}
+
+function getAttendanceUser(record, userMap) {
+  const uid =
+    record?.uid ||
+    record?.userUid ||
+    record?.employeeUid ||
+    record?.createdByUid ||
+    "";
+
+  const userData = uid ? userMap.get(uid) : null;
+
+  const email =
+    userData?.email ||
+    record?.email ||
+    record?.userEmail ||
+    record?.employeeEmail ||
+    "";
+
+  const name =
+    userData?.displayName ||
+    userData?.name ||
+    record?.displayName ||
+    record?.userName ||
+    record?.employeeName ||
+    formatNameFromEmail(email);
+
+  return {
+    uid,
+    email,
+    name,
+    department: userData?.department || "",
+    role: userData?.role || userData?.designation || ""
+  };
 }
 
 /* =========================
@@ -252,15 +528,17 @@ export default function AdminDashboardGraph() {
   const router = useRouter();
   const { user, loading, error } = useAuth("admin");
 
-  const mountTimeRef = useRef(performance.now());
+  const mountTimeRef = useRef(
+    typeof performance !== "undefined" ? performance.now() : Date.now()
+  );
   const authLoggedRef = useRef(false);
 
   const [range, setRange] = useState("today");
-  const [activeTab, setActiveTab] = useState("business");
+  const [activeTab, setActiveTab] = useState("overview");
 
   const [leads, setLeads] = useState([]);
-  const [followUps, setFollowUps] = useState([]);
-  const [quotations, setQuotations] = useState([]);
+  const [engagements, setEngagements] = useState([]);
+  const [users, setUsers] = useState([]);
   const [attendanceRecords, setAttendanceRecords] = useState([]);
 
   const [dataLoading, setDataLoading] = useState(true);
@@ -276,7 +554,10 @@ export default function AdminDashboardGraph() {
 
       console.log(
         "[TimeLog] Auth resolved in",
-        Math.round(performance.now() - mountTimeRef.current),
+        Math.round(
+          (typeof performance !== "undefined" ? performance.now() : Date.now()) -
+            mountTimeRef.current
+        ),
         "ms"
       );
     }
@@ -292,9 +573,6 @@ export default function AdminDashboardGraph() {
 
   /* =========================
      DATA LOAD
-     leads
-     leads/{leadId}/followUps
-     leads/{leadId}/quotations
   ========================== */
 
   useEffect(() => {
@@ -303,136 +581,164 @@ export default function AdminDashboardGraph() {
     setDataLoading(true);
     setDashboardError("");
 
-    const unsubLeads = onSnapshot(
-      collection(db, "leads"),
-      async snap => {
-        try {
-          const leadsData = snap.docs.map(d => ({
-            id: d.id,
-            ...d.data()
-          }));
+    const loaded = {
+      leads: false,
+      engagements: false,
+      users: false,
+      attendance: false
+    };
 
-          const allFollowUps = [];
-          const allQuotations = [];
+    const markLoaded = key => {
+      loaded[key] = true;
 
-          for (const leadDoc of snap.docs) {
-            const leadId = leadDoc.id;
-            const lead = {
-              id: leadId,
-              ...leadDoc.data()
-            };
-
-            const followUpSnap = await getDocs(
-              collection(db, "leads", leadId, "followUps")
-            );
-
-            followUpSnap.forEach(fu => {
-              allFollowUps.push({
-                id: fu.id,
-                leadId,
-                leadCode: lead.leadCode || "",
-                assignedToUid: lead.assignedToUid || "",
-                assignedToEmail: lead.assignedTo || "",
-                agentName: lead.agentName || "",
-                destinationName: lead.destinationName || "",
-                ...fu.data()
-              });
-            });
-
-            const quotationSnap = await getDocs(
-              collection(db, "leads", leadId, "quotations")
-            );
-
-            quotationSnap.forEach(q => {
-              allQuotations.push({
-                id: q.id,
-                leadId,
-                leadCode: lead.leadCode || "",
-                assignedToUid: lead.assignedToUid || "",
-                assignedToEmail: lead.assignedTo || "",
-                agentName: lead.agentName || "",
-                destinationName: lead.destinationName || "",
-                ...q.data()
-              });
-            });
-          }
-
-          setLeads(leadsData);
-          setFollowUps(allFollowUps);
-          setQuotations(allQuotations);
-          setDataLoading(false);
-
-          console.log(
-            "[TimeLog] Management dashboard ready in",
-            Math.round(performance.now() - mountTimeRef.current),
-            "ms"
-          );
-        } catch (err) {
-          console.error("Management dashboard data load failed:", err);
-          setDashboardError("Unable to load management dashboard data.");
-          setDataLoading(false);
-        }
-      },
-      err => {
-        console.error("Lead subscription failed:", err);
-        setDashboardError("Unable to load leads.");
+      if (
+        loaded.leads &&
+        loaded.engagements &&
+        loaded.users &&
+        loaded.attendance
+      ) {
         setDataLoading(false);
+
+        console.log(
+          "[TimeLog] Management dashboard ready in",
+          Math.round(
+            (typeof performance !== "undefined"
+              ? performance.now()
+              : Date.now()) - mountTimeRef.current
+          ),
+          "ms"
+        );
       }
+    };
+
+    const handleError = (label, err) => {
+      console.error(`${label} load failed:`, err);
+      setDashboardError(`Unable to load ${label.toLowerCase()} data.`);
+      setDataLoading(false);
+    };
+
+    const unsubLeads = onSnapshot(
+      collection(db, LEADS_COLLECTION),
+      snap => {
+        const rows = snap.docs
+          .map(docSnap => ({
+            id: docSnap.id,
+            ...docSnap.data()
+          }))
+          .sort((a, b) => {
+            const ad = getLeadDate(a)?.getTime() || 0;
+            const bd = getLeadDate(b)?.getTime() || 0;
+            return bd - ad;
+          });
+
+        setLeads(rows);
+        markLoaded("leads");
+      },
+      err => handleError("Leads", err)
     );
 
-    return () => unsubLeads();
-  }, [user]);
+    const unsubEngagements = onSnapshot(
+      collection(db, ENGAGEMENT_COLLECTION),
+      snap => {
+        const rows = snap.docs
+          .map(docSnap => ({
+            id: docSnap.id,
+            ...docSnap.data()
+          }))
+          .sort((a, b) => {
+            const ad = getEngagementDate(a)?.getTime() || 0;
+            const bd = getEngagementDate(b)?.getTime() || 0;
+            return bd - ad;
+          });
 
-  /* =========================
-     ATTENDANCE LOAD
-  ========================== */
+        setEngagements(rows);
+        markLoaded("engagements");
+      },
+      err => handleError("Engagements", err)
+    );
 
-  useEffect(() => {
-    if (!user) return;
+    const unsubUsers = onSnapshot(
+      collection(db, USERS_COLLECTION),
+      snap => {
+        const rows = snap.docs
+          .map(docSnap => ({
+            id: docSnap.id,
+            ...docSnap.data()
+          }))
+          .sort((a, b) => {
+            const an = a.displayName || a.name || a.email || "";
+            const bn = b.displayName || b.name || b.email || "";
+            return an.localeCompare(bn);
+          });
+
+        setUsers(rows);
+        markLoaded("users");
+      },
+      err => handleError("Users", err)
+    );
 
     const unsubAttendance = onSnapshot(
       collection(db, ATTENDANCE_COLLECTION),
       snap => {
-        setAttendanceRecords(
-          snap.docs.map(d => ({
-            id: d.id,
-            ...d.data()
+        const rows = snap.docs
+          .map(docSnap => ({
+            id: docSnap.id,
+            ...docSnap.data()
           }))
-        );
+          .sort((a, b) => {
+            const ad = getAttendanceRecordDate(a);
+            const bd = getAttendanceRecordDate(b);
+            return bd.localeCompare(ad);
+          });
+
+        setAttendanceRecords(rows);
+        markLoaded("attendance");
       },
-      err => {
-        console.error("Attendance load failed:", err);
-      }
+      err => handleError("Attendance", err)
     );
 
-    return () => unsubAttendance();
+    return () => {
+      unsubLeads();
+      unsubEngagements();
+      unsubUsers();
+      unsubAttendance();
+    };
   }, [user]);
 
   /* =========================
-     RANGE DATA
+     BASE MEMOS
   ========================== */
 
   const rangeWindow = useMemo(() => {
     return getRangeWindow(range);
   }, [range]);
 
+  const activeUsers = useMemo(() => {
+    return users.filter(item => item.active !== false);
+  }, [users]);
+
+  const userMap = useMemo(() => {
+    const map = new Map();
+
+    users.forEach(item => {
+      const uid = item.uid || item.id;
+      if (!uid) return;
+
+      map.set(uid, item);
+    });
+
+    return map;
+  }, [users]);
+
   const periodLeads = useMemo(() => {
-    return leads.filter(lead =>
-      isInRange(lead.createdAt, rangeWindow)
-    );
+    return leads.filter(lead => isInRange(lead.createdAt, rangeWindow));
   }, [leads, rangeWindow]);
 
-  const periodFollowUps = useMemo(() => {
-    return followUps.filter(item =>
-      isInRange(item.createdAt, rangeWindow)
+  const periodEngagements = useMemo(() => {
+    return engagements.filter(item =>
+      isInRange(item.createdAt || item.updatedAt, rangeWindow)
     );
-  }, [followUps, rangeWindow]);
-
-  const periodQuotations = useMemo(() => {
-    return quotations.filter(item =>
-      isInRange(item.createdAt, rangeWindow)
-    );
-  }, [quotations, rangeWindow]);
+  }, [engagements, rangeWindow]);
 
   const periodAttendance = useMemo(() => {
     return attendanceRecords.filter(record =>
@@ -441,51 +747,239 @@ export default function AdminDashboardGraph() {
   }, [attendanceRecords, rangeWindow]);
 
   /* =========================
-     MANAGEMENT ROWS
+     TOTALS
+  ========================== */
+
+  const leadTotals = useMemo(() => {
+    const assignedLeads = periodLeads.filter(hasLeadAssignee).length;
+    const openLeads = periodLeads.filter(
+      lead => normalize(lead.status) === "open"
+    ).length;
+
+    const activeLeads = periodLeads.filter(isActiveLead).length;
+    const wonLeads = periodLeads.filter(isWonLead).length;
+    const lostLeads = periodLeads.filter(isLostLead).length;
+
+    const uniqueAgents = new Set(
+      periodLeads.map(item => item.agentId || item.agentName).filter(Boolean)
+    ).size;
+
+    const uniqueDestinations = new Set(
+      periodLeads.map(item => item.destinationName).filter(Boolean)
+    ).size;
+
+    return {
+      total: periodLeads.length,
+      openLeads,
+      activeLeads,
+      assignedLeads,
+      unassignedLeads: Math.max(periodLeads.length - assignedLeads, 0),
+      wonLeads,
+      lostLeads,
+      uniqueAgents,
+      uniqueDestinations,
+      byStage: countBy(periodLeads, item => item.stage || "Unknown"),
+      byStatus: countBy(periodLeads, item => item.status || "Unknown"),
+      byDestination: countBy(
+        periodLeads,
+        item => item.destinationName || "Unknown Destination"
+      ),
+      byAssignee: countBy(periodLeads, item => {
+        const owner = getLeadOwner(item, userMap);
+        return owner.name || "Unassigned";
+      }),
+      bySource: countBy(periodLeads, item => item.source || "Unknown Source")
+    };
+  }, [periodLeads, userMap]);
+
+  const engagementTotals = useMemo(() => {
+    const completed = periodEngagements.filter(
+      item => normalize(item.status) === "completed"
+    ).length;
+
+    const calls = periodEngagements.filter(
+      item => normalize(item.channel) === "call"
+    ).length;
+
+    const whatsapp = periodEngagements.filter(
+      item => normalize(item.channel) === "whatsapp"
+    ).length;
+
+    const emails = periodEngagements.filter(
+      item => normalize(item.channel) === "email"
+    ).length;
+
+    const meetings = periodEngagements.filter(
+      item => normalize(item.channel) === "meeting"
+    ).length;
+
+    const lastActivity = periodEngagements.reduce((latest, item) => {
+      const d = getEngagementDate(item);
+      if (!d) return latest;
+      if (!latest || d > latest) return d;
+      return latest;
+    }, null);
+
+    return {
+      total: periodEngagements.length,
+      completed,
+      calls,
+      whatsapp,
+      emails,
+      meetings,
+      completionRate: periodEngagements.length
+        ? Math.round((completed / periodEngagements.length) * 100)
+        : 0,
+      lastActivity,
+      byChannel: countBy(
+        periodEngagements,
+        item => item.channel || "Unknown Channel"
+      ),
+      byCreator: countBy(periodEngagements, item => {
+        const owner = getEngagementOwner(item, userMap);
+        return owner.name || "Unknown User";
+      }),
+      byDestination: countBy(periodEngagements, getEngagementDestinationList)
+    };
+  }, [periodEngagements, userMap]);
+
+  const attendanceTotals = useMemo(() => {
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    const todayAttendanceRows = attendanceRecords.filter(
+      record => getAttendanceRecordDate(record) === todayIso
+    );
+
+    const presentTodayUids = new Set(
+      todayAttendanceRows
+        .filter(isAttendancePresent)
+        .map(record => record.uid || record.userUid || record.employeeUid)
+        .filter(Boolean)
+    );
+
+    const checkIns = periodAttendance.reduce((total, record) => {
+      const sessions = getAttendanceSessions(record);
+      const count = sessions.filter(session => session?.checkInAt).length;
+
+      return total + (count || (getFirstCheckIn(record) ? 1 : 0));
+    }, 0);
+
+    const checkedOut = periodAttendance.reduce((total, record) => {
+      const sessions = getAttendanceSessions(record);
+      const count = sessions.filter(session => session?.checkOutAt).length;
+
+      return total + (count || (getLastCheckOut(record) ? 1 : 0));
+    }, 0);
+
+    const totalMinutes = periodAttendance.reduce((total, record) => {
+      return total + getAttendanceMinutes(record);
+    }, 0);
+
+    const activeNow = todayAttendanceRows.filter(isAttendanceActive).length;
+    const late = periodAttendance.filter(isAttendanceLate).length;
+    const leave = periodAttendance.filter(isAttendanceLeave).length;
+
+    return {
+      checkIns,
+      checkedOut,
+      activeNow,
+      late,
+      leave,
+      presentToday: presentTodayUids.size,
+      absentToday: Math.max(activeUsers.length - presentTodayUids.size, 0),
+      totalMinutes,
+      averageMinutes: periodAttendance.length
+        ? Math.round(totalMinutes / periodAttendance.length)
+        : 0,
+      byStatus: countBy(periodAttendance, getAttendanceStatus)
+    };
+  }, [attendanceRecords, periodAttendance, activeUsers]);
+
+  const userTotals = useMemo(() => {
+    const adminUsers = activeUsers.filter(item => {
+      const role = normalize(item.role);
+
+      return item.isAdmin === true || role === "admin" || role === "super_admin";
+    }).length;
+
+    const employeeUsers = activeUsers.filter(item => {
+      const role = normalize(item.role);
+
+      return role === "employee";
+    }).length;
+
+    return {
+      activeUsers: activeUsers.length,
+      adminUsers,
+      employeeUsers,
+      departments: new Set(
+        activeUsers.map(item => item.department).filter(Boolean)
+      ).size,
+      byDepartment: countBy(activeUsers, item => item.department || "No Department"),
+      byRole: countBy(
+        activeUsers,
+        item => item.role || item.designation || "Unknown Role"
+      )
+    };
+  }, [activeUsers]);
+
+  /* =========================
+     TEAM ROWS
   ========================== */
 
   const teamRows = useMemo(() => {
-    const now = new Date();
     const map = new Map();
 
-    const ensureMember = ({ uid, email, name }) => {
-      const key = uid || email || "unassigned";
+    const ensureMember = member => {
+      const key =
+        member.uid ||
+        member.email ||
+        member.name ||
+        `unknown-${map.size + 1}`;
 
       if (!map.has(key)) {
         map.set(key, {
-          uid: uid || "",
-          email: email || "",
-          name: name || formatNameFromEmail(email),
+          uid: member.uid || "",
+          email: member.email || "",
+          name: member.name || formatNameFromEmail(member.email),
+          department: member.department || "",
+          role: member.role || "",
 
           newLeads: 0,
           activeLeads: 0,
           wonLeads: 0,
           lostLeads: 0,
+          assignedLeads: 0,
 
-          followUpMovement: 0,
-          quotedMovement: 0,
-
-          quotationsSent: 0,
-          quoteValue: 0,
-          wonValue: 0,
-
-          pendingFollowUps: 0,
-          overdueFollowUps: 0,
-          untouchedLeads: 0,
-
+          engagements: 0,
+          completedEngagements: 0,
           calls: 0,
           whatsapp: 0,
           emails: 0,
+          meetings: 0,
           otherEngagements: 0,
-          connected: 0,
-          notConnected: 0,
+
+          attendanceDays: 0,
+          checkIns: 0,
+          activeSessions: 0,
+          late: 0,
+          leave: 0,
+          totalMinutes: 0,
+          firstCheckIn: null,
+          lastCheckOut: null,
 
           lastActivityAt: null,
           score: 0
         });
       }
 
-      return map.get(key);
+      const row = map.get(key);
+
+      if (!row.email && member.email) row.email = member.email;
+      if (!row.department && member.department) row.department = member.department;
+      if (!row.role && member.role) row.role = member.role;
+
+      return row;
     };
 
     const updateLastActivity = (row, value) => {
@@ -495,186 +989,6 @@ export default function AdminDashboardGraph() {
       if (!row.lastActivityAt || d > row.lastActivityAt) {
         row.lastActivityAt = d;
       }
-    };
-
-    leads.forEach(lead => {
-      const row = ensureMember({
-        uid: lead.assignedToUid || lead.createdByUid,
-        email: lead.assignedTo || lead.assignedBy || "",
-        name:
-          lead.assignedToName ||
-          lead.createdByName ||
-          formatNameFromEmail(lead.assignedTo)
-      });
-
-      const leadCreatedInRange = isInRange(
-        lead.createdAt,
-        rangeWindow
-      );
-
-      const leadQuotations = quotations.filter(
-        q => q.leadId === lead.id
-      );
-
-      const leadFollowUps = followUps.filter(
-        f => f.leadId === lead.id
-      );
-
-      if (leadCreatedInRange) {
-        row.newLeads += 1;
-      }
-
-      if (isActiveLead(lead)) {
-        row.activeLeads += 1;
-      }
-
-      const dueDate = getDueDate(lead);
-
-      if (dueDate && !isClosedLead(lead)) {
-        row.pendingFollowUps += 1;
-
-        if (dueDate < now) {
-          row.overdueFollowUps += 1;
-        }
-      }
-
-      if (
-        leadCreatedInRange &&
-        !leadFollowUps.length &&
-        !lead?.stageHistory?.length
-      ) {
-        row.untouchedLeads += 1;
-      }
-
-      if (Array.isArray(lead.stageHistory)) {
-        lead.stageHistory.forEach(history => {
-          if (!isInRange(history.changedAt, rangeWindow)) return;
-
-          if (history.stage === "follow_up") {
-            row.followUpMovement += 1;
-          }
-
-          if (history.stage === "quoted") {
-            row.quotedMovement += 1;
-          }
-
-          if (history.stage === "closed_won") {
-            row.wonLeads += 1;
-            row.wonValue += getLatestQuotationAmount(leadQuotations);
-          }
-
-          if (history.stage === "closed_lost") {
-            row.lostLeads += 1;
-          }
-
-          updateLastActivity(row, history.changedAt);
-        });
-      }
-
-      updateLastActivity(row, lead.updatedAt || lead.createdAt);
-    });
-
-    periodFollowUps.forEach(item => {
-      const row = ensureMember({
-        uid: item.createdByUid || item.assignedToUid,
-        email: item.createdByEmail || item.assignedToEmail || "",
-        name: formatNameFromEmail(
-          item.createdByEmail || item.assignedToEmail
-        )
-      });
-
-      const channel = String(item.channel || "").toLowerCase();
-
-      if (channel === "call") row.calls += 1;
-      else if (channel === "whatsapp") row.whatsapp += 1;
-      else if (channel === "email") row.emails += 1;
-      else row.otherEngagements += 1;
-
-      if (item.outcome === "connected") {
-        row.connected += 1;
-      } else {
-        row.notConnected += 1;
-      }
-
-      updateLastActivity(row, item.createdAt);
-    });
-
-    periodQuotations.forEach(item => {
-      const row = ensureMember({
-        uid: item.createdByUid || item.assignedToUid,
-        email: item.createdByEmail || item.assignedToEmail || "",
-        name: formatNameFromEmail(
-          item.createdByEmail || item.assignedToEmail
-        )
-      });
-
-      row.quotationsSent += 1;
-      row.quoteValue += Number(item.totalPrice || 0);
-
-      updateLastActivity(row, item.createdAt);
-    });
-
-    return Array.from(map.values())
-      .map(row => {
-        const score =
-          row.calls * 3 +
-          row.whatsapp * 2 +
-          row.emails * 2 +
-          row.connected * 4 +
-          row.quotationsSent * 5 +
-          row.wonLeads * 10 -
-          row.overdueFollowUps * 5;
-
-        return {
-          ...row,
-          score
-        };
-      })
-      .sort((a, b) => {
-        if (activeTab === "engagement") return b.score - a.score;
-        if (activeTab === "leads") return b.newLeads - a.newLeads;
-        return b.quoteValue - a.quoteValue;
-      });
-  }, [
-    leads,
-    followUps,
-    quotations,
-    periodFollowUps,
-    periodQuotations,
-    rangeWindow,
-    activeTab
-  ]);
-
-  /* =========================
-     ATTENDANCE ROWS
-  ========================== */
-
-  const attendanceRows = useMemo(() => {
-    const map = new Map();
-
-    const ensureMember = ({ uid, email, name }) => {
-      const key = uid || email || name || "unassigned";
-
-      if (!map.has(key)) {
-        map.set(key, {
-          uid: uid || "",
-          email: email || "",
-          name: name || formatNameFromEmail(email),
-
-          checkIns: 0,
-          checkedOut: 0,
-          active: 0,
-          late: 0,
-          absent: 0,
-          leave: 0,
-
-          firstCheckIn: null,
-          lastCheckOut: null,
-          totalMinutes: 0
-        });
-      }
-
-      return map.get(key);
     };
 
     const updateFirstCheckIn = (row, value) => {
@@ -695,175 +1009,143 @@ export default function AdminDashboardGraph() {
       }
     };
 
-    teamRows.forEach(member => {
+    activeUsers.forEach(item => {
       ensureMember({
-        uid: member.uid,
-        email: member.email,
-        name: member.name
+        uid: item.uid || item.id,
+        email: item.email || "",
+        name: item.displayName || item.name || formatNameFromEmail(item.email),
+        department: item.department || "",
+        role: item.role || item.designation || ""
       });
     });
 
+    periodLeads.forEach(lead => {
+      const owner = getLeadOwner(lead, userMap);
+      const row = ensureMember(owner);
+
+      row.newLeads += 1;
+
+      if (hasLeadAssignee(lead)) {
+        row.assignedLeads += 1;
+      }
+
+      if (isActiveLead(lead)) {
+        row.activeLeads += 1;
+      }
+
+      if (isWonLead(lead)) {
+        row.wonLeads += 1;
+      }
+
+      if (isLostLead(lead)) {
+        row.lostLeads += 1;
+      }
+
+      updateLastActivity(row, lead.updatedAt || lead.assignedAt || lead.createdAt);
+    });
+
+    periodEngagements.forEach(item => {
+      const owner = getEngagementOwner(item, userMap);
+      const row = ensureMember(owner);
+
+      row.engagements += 1;
+
+      if (normalize(item.status) === "completed") {
+        row.completedEngagements += 1;
+      }
+
+      const channel = normalize(item.channel);
+
+      if (channel === "call") row.calls += 1;
+      else if (channel === "whatsapp") row.whatsapp += 1;
+      else if (channel === "email") row.emails += 1;
+      else if (channel === "meeting") row.meetings += 1;
+      else row.otherEngagements += 1;
+
+      updateLastActivity(row, item.updatedAt || item.createdAt);
+    });
+
     periodAttendance.forEach(record => {
-      const member = getAttendanceUser(record);
-      const row = ensureMember(member);
+      const owner = getAttendanceUser(record, userMap);
+      const row = ensureMember(owner);
 
-      const checkIn = getCheckInDate(record);
-      const checkOut = getCheckOutDate(record);
-      const status = String(record?.status || "").toLowerCase();
+      const sessions = getAttendanceSessions(record);
+      const checkInCount = sessions.filter(session => session?.checkInAt).length;
 
-      if (checkIn) {
-        row.checkIns += 1;
-        updateFirstCheckIn(row, checkIn);
+      row.attendanceDays += 1;
+      row.checkIns += checkInCount || (getFirstCheckIn(record) ? 1 : 0);
+      row.totalMinutes += getAttendanceMinutes(record);
+
+      if (isAttendanceActive(record)) {
+        row.activeSessions += 1;
       }
 
-      if (checkOut) {
-        row.checkedOut += 1;
-        updateLastCheckOut(row, checkOut);
-      }
-
-      if (checkIn && !checkOut) {
-        row.active += 1;
-      }
-
-      if (
-        record?.isLate === true ||
-        status === "late" ||
-        status === "checked_in_late"
-      ) {
+      if (isAttendanceLate(record)) {
         row.late += 1;
       }
 
-      if (status === "absent") {
-        row.absent += 1;
-      }
-
-      if (
-        status === "leave" ||
-        status === "on_leave" ||
-        status === "paid_leave"
-      ) {
+      if (isAttendanceLeave(record)) {
         row.leave += 1;
       }
 
-      row.totalMinutes += getAttendanceMinutes(record);
+      updateFirstCheckIn(row, getFirstCheckIn(record));
+      updateLastCheckOut(row, getLastCheckOut(record));
     });
 
-    return Array.from(map.values()).sort((a, b) => {
-      if (b.checkIns !== a.checkIns) return b.checkIns - a.checkIns;
-      return a.name.localeCompare(b.name);
-    });
-  }, [periodAttendance, teamRows]);
+    return Array.from(map.values())
+      .map(row => {
+        const score =
+          row.newLeads * 3 +
+          row.activeLeads +
+          row.completedEngagements * 3 +
+          row.calls * 2 +
+          row.whatsapp * 2 +
+          row.emails * 2 +
+          row.meetings * 3 +
+          row.wonLeads * 10 +
+          row.attendanceDays;
 
-  /* =========================
-     TOTALS
-  ========================== */
+        return {
+          ...row,
+          score
+        };
+      })
+      .sort((a, b) => {
+        if (activeTab === "engagement") {
+          return b.engagements - a.engagements || b.score - a.score;
+        }
 
-  const totals = useMemo(() => {
-    return teamRows.reduce(
-      (acc, row) => {
-        acc.newLeads += row.newLeads;
-        acc.activeLeads += row.activeLeads;
-        acc.wonLeads += row.wonLeads;
-        acc.lostLeads += row.lostLeads;
+        if (activeTab === "leads") {
+          return b.newLeads - a.newLeads || b.activeLeads - a.activeLeads;
+        }
 
-        acc.followUpMovement += row.followUpMovement;
-        acc.quotedMovement += row.quotedMovement;
+        if (activeTab === "attendance") {
+          return b.totalMinutes - a.totalMinutes || b.checkIns - a.checkIns;
+        }
 
-        acc.quotationsSent += row.quotationsSent;
-        acc.quoteValue += row.quoteValue;
-        acc.wonValue += row.wonValue;
-
-        acc.pendingFollowUps += row.pendingFollowUps;
-        acc.overdueFollowUps += row.overdueFollowUps;
-        acc.untouchedLeads += row.untouchedLeads;
-
-        acc.calls += row.calls;
-        acc.whatsapp += row.whatsapp;
-        acc.emails += row.emails;
-        acc.connected += row.connected;
-        acc.score += row.score;
-
-        return acc;
-      },
-      {
-        newLeads: 0,
-        activeLeads: 0,
-        wonLeads: 0,
-        lostLeads: 0,
-
-        followUpMovement: 0,
-        quotedMovement: 0,
-
-        quotationsSent: 0,
-        quoteValue: 0,
-        wonValue: 0,
-
-        pendingFollowUps: 0,
-        overdueFollowUps: 0,
-        untouchedLeads: 0,
-
-        calls: 0,
-        whatsapp: 0,
-        emails: 0,
-        connected: 0,
-        score: 0
-      }
-    );
-  }, [teamRows]);
-
-  const attendanceTotals = useMemo(() => {
-    return attendanceRows.reduce(
-      (acc, row) => {
-        acc.checkIns += row.checkIns;
-        acc.checkedOut += row.checkedOut;
-        acc.active += row.active;
-        acc.late += row.late;
-        acc.absent += row.absent;
-        acc.leave += row.leave;
-        acc.totalMinutes += row.totalMinutes;
-
-        return acc;
-      },
-      {
-        checkIns: 0,
-        checkedOut: 0,
-        active: 0,
-        late: 0,
-        absent: 0,
-        leave: 0,
-        totalMinutes: 0
-      }
-    );
-  }, [attendanceRows]);
+        return b.score - a.score;
+      });
+  }, [
+    activeUsers,
+    periodLeads,
+    periodEngagements,
+    periodAttendance,
+    userMap,
+    activeTab
+  ]);
 
   const managementSummary = useMemo(() => {
-    const totalLeads = periodLeads.length;
-    const winRate = totalLeads
-      ? Math.round((totals.wonLeads / totalLeads) * 100)
-      : 0;
-
-    const avgDeal = totals.wonLeads
-      ? Math.round(totals.wonValue / totals.wonLeads)
-      : 0;
-
-    let lastActivity = null;
-
-    teamRows.forEach(row => {
-      if (
-        row.lastActivityAt &&
-        (!lastActivity || row.lastActivityAt > lastActivity)
-      ) {
-        lastActivity = row.lastActivityAt;
-      }
-    });
+    const totalWorkloadScore = teamRows.reduce((sum, row) => sum + row.score, 0);
 
     return {
-      totalLeads,
-      winRate,
-      avgDeal,
-      lastActivity
+      workloadScore: totalWorkloadScore,
+      lastActivity: teamRows.reduce((latest, row) => {
+        if (!row.lastActivityAt) return latest;
+        if (!latest || row.lastActivityAt > latest) return row.lastActivityAt;
+        return latest;
+      }, null)
     };
-  }, [periodLeads, totals, teamRows]);
+  }, [teamRows]);
 
   /* =========================
      RENDER GUARDS
@@ -883,10 +1165,7 @@ export default function AdminDashboardGraph() {
 
   return (
     <main className="p-4 md:p-6 space-y-6 w-full">
-
-      {/* =========================
-        MANAGEMENT HEADER
-      ========================== */}
+      {/* HEADER */}
       <section className="space-y-4">
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
           <div>
@@ -894,7 +1173,7 @@ export default function AdminDashboardGraph() {
               Management Dashboard
             </h1>
             <p className="text-sm text-gray-500">
-              Business performance, team engagement, lead movement and attendance overview.
+              Business performance, lead pipeline, engagement activity, employee workload and attendance overview.
             </p>
           </div>
 
@@ -902,7 +1181,8 @@ export default function AdminDashboardGraph() {
             {[
               { key: "today", label: "Today" },
               { key: "week", label: "This Week" },
-              { key: "month", label: "This Month" }
+              { key: "month", label: "This Month" },
+              { key: "all", label: "All" }
             ].map(item => (
               <button
                 key={item.key}
@@ -923,51 +1203,78 @@ export default function AdminDashboardGraph() {
           </div>
         </div>
 
-        {dashboardError && (
+        {dashboardError ? (
           <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
             {dashboardError}
           </div>
-        )}
+        ) : null}
 
-        {dataLoading && (
+        {dataLoading ? (
           <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
             Loading management data...
           </div>
-        )}
+        ) : null}
 
         {/* TOP MANAGEMENT PULSE */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <DashboardKpiCard
-            label="New Leads"
-            value={managementSummary.totalLeads}
+            label="Total Leads"
+            value={leadTotals.total}
           />
 
           <DashboardKpiCard
-            label="Quotation Value"
-            value={formatCurrency(totals.quoteValue)}
+            label="Open Leads"
+            value={leadTotals.openLeads}
+            color="blue"
+          />
+
+          <DashboardKpiCard
+            label="Total Engagements"
+            value={engagementTotals.total}
             color="green"
           />
 
           <DashboardKpiCard
-            label="Won Value"
-            value={formatCurrency(totals.wonValue)}
+            label="Present Today"
+            value={attendanceTotals.presentToday}
             color="green"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <DashboardKpiCard
+            label="Assigned Leads"
+            value={leadTotals.assignedLeads}
+            color="blue"
           />
 
           <DashboardKpiCard
-            label="Overdue"
-            value={totals.overdueFollowUps}
-            color={totals.overdueFollowUps ? "red" : "gray"}
+            label="Unassigned Leads"
+            value={leadTotals.unassignedLeads}
+            color={leadTotals.unassignedLeads ? "red" : "gray"}
+          />
+
+          <DashboardKpiCard
+            label="Active Employees"
+            value={userTotals.activeUsers}
+            color="purple"
+          />
+
+          <DashboardKpiCard
+            label="Attendance Hours"
+            value={formatDuration(attendanceTotals.totalMinutes)}
+            color="purple"
           />
         </div>
 
         {/* TABS */}
         <div className="bg-white border border-gray-200 rounded-xl p-1 shadow-sm flex gap-1 overflow-x-auto">
           {[
-            { key: "business", label: "Overall Business" },
-            { key: "engagement", label: "Engagement" },
+            { key: "overview", label: "Overview" },
             { key: "leads", label: "Leads" },
-            { key: "attendance", label: "Attendance" }
+            { key: "engagement", label: "Engagement" },
+            { key: "attendance", label: "Attendance" },
+            { key: "team", label: "Team" }
           ].map(tab => (
             <button
               key={tab.key}
@@ -988,137 +1295,176 @@ export default function AdminDashboardGraph() {
         </div>
       </section>
 
-      {/* =========================
-        OVERALL BUSINESS
-      ========================== */}
-      {activeTab === "business" && (
+      {/* OVERVIEW */}
+      {activeTab === "overview" && (
         <section className="space-y-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <DashboardKpiCard
-              label="Total Leads"
-              value={managementSummary.totalLeads}
+              label="Active Leads"
+              value={leadTotals.activeLeads}
+              color="blue"
             />
 
             <DashboardKpiCard
-              label="Avg Deal"
-              value={formatCurrency(managementSummary.avgDeal)}
-              color="purple"
-            />
-
-            <DashboardKpiCard
-              label="Win Rate"
-              value={`${managementSummary.winRate}%`}
+              label="Won Leads"
+              value={leadTotals.wonLeads}
               color="green"
             />
 
             <DashboardKpiCard
-              label="Quotations Sent"
-              value={totals.quotationsSent}
-              color="blue"
+              label="Engagement Completion"
+              value={`${engagementTotals.completionRate}%`}
+              color="green"
+            />
+
+            <DashboardKpiCard
+              label="Absent / Not Checked In"
+              value={attendanceTotals.absentToday}
+              color={attendanceTotals.absentToday ? "red" : "gray"}
             />
           </div>
 
           <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             <LeadsTrendChart leads={periodLeads} />
-            <LeadsByStageChart leads={leads} />
+            <LeadsByStageChart leads={periodLeads} />
           </section>
 
-          <ManagementBusinessTable rows={teamRows} />
+          <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            <MiniBarList
+              title="Leads by Destination"
+              rows={leadTotals.byDestination}
+            />
+
+            <MiniBarList
+              title="Engagement by Channel"
+              rows={engagementTotals.byChannel}
+            />
+
+            <MiniBarList
+              title="Users by Department"
+              rows={userTotals.byDepartment}
+            />
+          </section>
+
+          <ManagementOverviewTable rows={teamRows} />
         </section>
       )}
 
-      {/* =========================
-        ENGAGEMENT
-      ========================== */}
-      {activeTab === "engagement" && (
-        <section className="space-y-6">
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <EngagementKpiCard
-              label="Calls"
-              value={totals.calls}
-            />
-
-            <EngagementKpiCard
-              label="WhatsApp"
-              value={totals.whatsapp}
-            />
-
-            <EngagementKpiCard
-              label="Emails"
-              value={totals.emails}
-            />
-
-            <EngagementKpiCard
-              label="Connected"
-              value={totals.connected}
-            />
-
-            <EngagementKpiCard
-              label="Last Activity"
-              value={formatDateTime(managementSummary.lastActivity)}
-            />
-          </div>
-
-          <EngagementByChannelChart engagements={periodFollowUps} />
-
-          <ManagementEngagementTable rows={teamRows} />
-        </section>
-      )}
-
-      {/* =========================
-        LEADS
-      ========================== */}
+      {/* LEADS */}
       {activeTab === "leads" && (
         <section className="space-y-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <DashboardKpiCard
               label="New Leads"
-              value={totals.newLeads}
+              value={leadTotals.total}
             />
 
             <DashboardKpiCard
               label="Active Leads"
-              value={totals.activeLeads}
+              value={leadTotals.activeLeads}
               color="blue"
             />
 
             <DashboardKpiCard
-              label="Untouched"
-              value={totals.untouchedLeads}
-              color={totals.untouchedLeads ? "red" : "gray"}
+              label="Assigned"
+              value={leadTotals.assignedLeads}
+              color="blue"
             />
 
             <DashboardKpiCard
-              label="Closed Won"
-              value={totals.wonLeads}
-              color="green"
+              label="Unassigned"
+              value={leadTotals.unassignedLeads}
+              color={leadTotals.unassignedLeads ? "red" : "gray"}
             />
           </div>
 
           <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <LeadsByStageChart leads={leads} />
+            <LeadsByStageChart leads={periodLeads} />
             <LeadsByDestinationChart leads={periodLeads} />
+          </section>
+
+          <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            <MiniBarList
+              title="Leads by Stage"
+              rows={leadTotals.byStage}
+            />
+
+            <MiniBarList
+              title="Leads by Status"
+              rows={leadTotals.byStatus}
+            />
+
+            <MiniBarList
+              title="Leads by Source"
+              rows={leadTotals.bySource}
+            />
           </section>
 
           <ManagementLeadsTable rows={teamRows} />
         </section>
       )}
 
-      {/* =========================
-        ATTENDANCE
-      ========================== */}
+      {/* ENGAGEMENT */}
+      {activeTab === "engagement" && (
+        <section className="space-y-6">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <EngagementKpiCard
+              label="Calls"
+              value={engagementTotals.calls}
+            />
+
+            <EngagementKpiCard
+              label="WhatsApp"
+              value={engagementTotals.whatsapp}
+            />
+
+            <EngagementKpiCard
+              label="Emails"
+              value={engagementTotals.emails}
+            />
+
+            <EngagementKpiCard
+              label="Meetings"
+              value={engagementTotals.meetings}
+            />
+
+            <EngagementKpiCard
+              label="Last Activity"
+              value={formatDateTime(engagementTotals.lastActivity)}
+            />
+          </div>
+
+          <EngagementByChannelChart engagements={periodEngagements} />
+
+          <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <MiniBarList
+              title="Engagement by Employee"
+              rows={engagementTotals.byCreator}
+            />
+
+            <MiniBarList
+              title="Engagement by Destination"
+              rows={engagementTotals.byDestination}
+            />
+          </section>
+
+          <ManagementEngagementTable rows={teamRows} />
+        </section>
+      )}
+
+      {/* ATTENDANCE */}
       {activeTab === "attendance" && (
         <section className="space-y-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <DashboardKpiCard
-              label="Check-ins"
-              value={attendanceTotals.checkIns}
-              color="blue"
+              label="Present Today"
+              value={attendanceTotals.presentToday}
+              color="green"
             />
 
             <DashboardKpiCard
               label="Active Now"
-              value={attendanceTotals.active}
+              value={attendanceTotals.activeNow}
               color="green"
             />
 
@@ -1135,7 +1481,71 @@ export default function AdminDashboardGraph() {
             />
           </div>
 
-          <ManagementAttendanceTable rows={attendanceRows} />
+          <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <MiniBarList
+              title="Attendance by Status"
+              rows={attendanceTotals.byStatus}
+            />
+
+            <MiniBarList
+              title="Working Hours by Employee"
+              rows={teamRows
+                .filter(row => row.totalMinutes > 0)
+                .map(row => ({
+                  name: row.name,
+                  count: row.totalMinutes,
+                  displayCount: formatDuration(row.totalMinutes)
+                }))
+                .sort((a, b) => b.count - a.count)}
+            />
+          </section>
+
+          <ManagementAttendanceTable rows={teamRows} />
+        </section>
+      )}
+
+      {/* TEAM */}
+      {activeTab === "team" && (
+        <section className="space-y-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <DashboardKpiCard
+              label="Active Users"
+              value={userTotals.activeUsers}
+              color="blue"
+            />
+
+            <DashboardKpiCard
+              label="Employee Users"
+              value={userTotals.employeeUsers}
+              color="green"
+            />
+
+            <DashboardKpiCard
+              label="Admin Users"
+              value={userTotals.adminUsers}
+              color="purple"
+            />
+
+            <DashboardKpiCard
+              label="Departments"
+              value={userTotals.departments}
+              color="blue"
+            />
+          </div>
+
+          <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <MiniBarList
+              title="Users by Department"
+              rows={userTotals.byDepartment}
+            />
+
+            <MiniBarList
+              title="Users by Role"
+              rows={userTotals.byRole}
+            />
+          </section>
+
+          <ManagementTeamTable rows={teamRows} />
         </section>
       )}
     </main>
@@ -1143,18 +1553,68 @@ export default function AdminDashboardGraph() {
 }
 
 /* =========================
-   BUSINESS TABLE
+   MINI BAR LIST
 ========================== */
 
-function ManagementBusinessTable({ rows }) {
+function MiniBarList({ title, rows }) {
+  const max = rows?.length ? Math.max(...rows.map(row => row.count)) : 0;
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4">
+      <h2 className="text-sm font-semibold text-gray-900">
+        {title}
+      </h2>
+
+      {!rows?.length ? (
+        <p className="text-sm text-gray-500 mt-4">
+          No data found.
+        </p>
+      ) : (
+        <div className="mt-4 space-y-4">
+          {rows.slice(0, 8).map(row => {
+            const width = max
+              ? `${Math.max((row.count / max) * 100, 8)}%`
+              : "0%";
+
+            return (
+              <div key={row.name}>
+                <div className="flex items-center justify-between gap-3 mb-1">
+                  <p className="text-sm font-medium text-gray-700 truncate">
+                    {readableLabel(row.name)}
+                  </p>
+                  <p className="text-sm font-semibold text-gray-900">
+                    {row.displayCount || row.count}
+                  </p>
+                </div>
+
+                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gray-900 rounded-full"
+                    style={{ width }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =========================
+   OVERVIEW TABLE
+========================== */
+
+function ManagementOverviewTable({ rows }) {
   return (
     <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100">
         <h2 className="text-sm font-semibold text-gray-900">
-          Team Member Business Overview
+          Team Member Management Overview
         </h2>
         <p className="text-xs text-gray-500 mt-0.5">
-          Sorted by quotation value for management review.
+          Combined lead, engagement and attendance performance.
         </p>
       </div>
 
@@ -1163,13 +1623,13 @@ function ManagementBusinessTable({ rows }) {
           <thead className="bg-gray-50 text-xs text-gray-500">
             <tr>
               <th className="text-left px-4 py-3 font-medium">Team Member</th>
-              <th className="text-right px-4 py-3 font-medium">New Leads</th>
+              <th className="text-right px-4 py-3 font-medium">Leads</th>
               <th className="text-right px-4 py-3 font-medium">Active</th>
-              <th className="text-right px-4 py-3 font-medium">Quotations</th>
-              <th className="text-right px-4 py-3 font-medium">Quote Value</th>
               <th className="text-right px-4 py-3 font-medium">Won</th>
-              <th className="text-right px-4 py-3 font-medium">Won Value</th>
-              <th className="text-right px-4 py-3 font-medium">Overdue</th>
+              <th className="text-right px-4 py-3 font-medium">Engagements</th>
+              <th className="text-right px-4 py-3 font-medium">Attendance</th>
+              <th className="text-right px-4 py-3 font-medium">Hours</th>
+              <th className="text-left px-4 py-3 font-medium">Last Activity</th>
               <th className="text-left px-4 py-3 font-medium">Status</th>
             </tr>
           </thead>
@@ -1182,33 +1642,23 @@ function ManagementBusinessTable({ rows }) {
                     {row.name}
                   </div>
                   <div className="text-xs text-gray-500">
-                    {row.email || "—"}
+                    {row.department || row.email || "—"}
                   </div>
                 </td>
 
                 <td className="px-4 py-3 text-right">{row.newLeads}</td>
                 <td className="px-4 py-3 text-right">{row.activeLeads}</td>
-                <td className="px-4 py-3 text-right">{row.quotationsSent}</td>
-
+                <td className="px-4 py-3 text-right text-green-700 font-medium">
+                  {row.wonLeads}
+                </td>
+                <td className="px-4 py-3 text-right">{row.engagements}</td>
+                <td className="px-4 py-3 text-right">{row.attendanceDays}</td>
                 <td className="px-4 py-3 text-right font-medium">
-                  {formatCurrency(row.quoteValue)}
+                  {formatDuration(row.totalMinutes)}
                 </td>
-
-                <td className="px-4 py-3 text-right">{row.wonLeads}</td>
-
-                <td className="px-4 py-3 text-right font-medium">
-                  {formatCurrency(row.wonValue)}
+                <td className="px-4 py-3 text-gray-600">
+                  {formatDateTime(row.lastActivityAt)}
                 </td>
-
-                <td
-                  className={`
-                    px-4 py-3 text-right font-medium
-                    ${row.overdueFollowUps ? "text-red-600" : "text-gray-700"}
-                  `}
-                >
-                  {row.overdueFollowUps}
-                </td>
-
                 <td className="px-4 py-3">
                   <span
                     className={`
@@ -1228,91 +1678,7 @@ function ManagementBusinessTable({ rows }) {
                   colSpan={9}
                   className="px-4 py-8 text-center text-sm text-gray-500"
                 >
-                  No business data found.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-/* =========================
-   ENGAGEMENT TABLE
-========================== */
-
-function ManagementEngagementTable({ rows }) {
-  return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-100">
-        <h2 className="text-sm font-semibold text-gray-900">
-          Team Member Engagement Overview
-        </h2>
-        <p className="text-xs text-gray-500 mt-0.5">
-          Sorted by engagement score.
-        </p>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-xs text-gray-500">
-            <tr>
-              <th className="text-left px-4 py-3 font-medium">Team Member</th>
-              <th className="text-right px-4 py-3 font-medium">Calls</th>
-              <th className="text-right px-4 py-3 font-medium">WhatsApp</th>
-              <th className="text-right px-4 py-3 font-medium">Emails</th>
-              <th className="text-right px-4 py-3 font-medium">Connected</th>
-              <th className="text-right px-4 py-3 font-medium">Quotations</th>
-              <th className="text-left px-4 py-3 font-medium">Last Activity</th>
-              <th className="text-right px-4 py-3 font-medium">Score</th>
-            </tr>
-          </thead>
-
-          <tbody className="divide-y divide-gray-100">
-            {rows.map(row => (
-              <tr key={row.uid || row.email || row.name}>
-                <td className="px-4 py-3">
-                  <div className="font-medium text-gray-900">
-                    {row.name}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {row.email || "—"}
-                  </div>
-                </td>
-
-                <td className="px-4 py-3 text-right">{row.calls}</td>
-                <td className="px-4 py-3 text-right">{row.whatsapp}</td>
-                <td className="px-4 py-3 text-right">{row.emails}</td>
-                <td className="px-4 py-3 text-right">{row.connected}</td>
-                <td className="px-4 py-3 text-right">{row.quotationsSent}</td>
-
-                <td className="px-4 py-3 text-gray-600">
-                  {formatDateTime(row.lastActivityAt)}
-                </td>
-
-                <td className="px-4 py-3 text-right">
-                  <span
-                    className={`
-                      inline-flex items-center justify-center min-w-10 px-2 py-1
-                      rounded-full text-xs border font-semibold
-                      ${getScoreClass(row.score)}
-                    `}
-                  >
-                    {row.score}
-                  </span>
-                </td>
-              </tr>
-            ))}
-
-            {!rows.length && (
-              <tr>
-                <td
-                  colSpan={8}
-                  className="px-4 py-8 text-center text-sm text-gray-500"
-                >
-                  No engagement data found.
+                  No management data found.
                 </td>
               </tr>
             )}
@@ -1335,7 +1701,7 @@ function ManagementLeadsTable({ rows }) {
           Team Member Lead Overview
         </h2>
         <p className="text-xs text-gray-500 mt-0.5">
-          Sorted by new leads for the selected period.
+          Lead assignment and pipeline movement for the selected period.
         </p>
       </div>
 
@@ -1345,13 +1711,10 @@ function ManagementLeadsTable({ rows }) {
             <tr>
               <th className="text-left px-4 py-3 font-medium">Team Member</th>
               <th className="text-right px-4 py-3 font-medium">New</th>
+              <th className="text-right px-4 py-3 font-medium">Assigned</th>
               <th className="text-right px-4 py-3 font-medium">Active</th>
-              <th className="text-right px-4 py-3 font-medium">Follow-up</th>
-              <th className="text-right px-4 py-3 font-medium">Quoted</th>
               <th className="text-right px-4 py-3 font-medium">Won</th>
               <th className="text-right px-4 py-3 font-medium">Lost</th>
-              <th className="text-right px-4 py-3 font-medium">Untouched</th>
-              <th className="text-right px-4 py-3 font-medium">Overdue</th>
             </tr>
           </thead>
 
@@ -1368,34 +1731,85 @@ function ManagementLeadsTable({ rows }) {
                 </td>
 
                 <td className="px-4 py-3 text-right">{row.newLeads}</td>
+                <td className="px-4 py-3 text-right">{row.assignedLeads}</td>
                 <td className="px-4 py-3 text-right">{row.activeLeads}</td>
-                <td className="px-4 py-3 text-right">{row.followUpMovement}</td>
-                <td className="px-4 py-3 text-right">{row.quotedMovement}</td>
-
                 <td className="px-4 py-3 text-right text-green-700 font-medium">
                   {row.wonLeads}
                 </td>
+                <td className="px-4 py-3 text-right">{row.lostLeads}</td>
+              </tr>
+            ))}
 
-                <td className="px-4 py-3 text-right">
-                  {row.lostLeads}
+            {!rows.length && (
+              <tr>
+                <td
+                  colSpan={6}
+                  className="px-4 py-8 text-center text-sm text-gray-500"
+                >
+                  No lead data found.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* =========================
+   ENGAGEMENT TABLE
+========================== */
+
+function ManagementEngagementTable({ rows }) {
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-100">
+        <h2 className="text-sm font-semibold text-gray-900">
+          Team Member Engagement Overview
+        </h2>
+        <p className="text-xs text-gray-500 mt-0.5">
+          WhatsApp, call, email and meeting activity for the selected period.
+        </p>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 text-xs text-gray-500">
+            <tr>
+              <th className="text-left px-4 py-3 font-medium">Team Member</th>
+              <th className="text-right px-4 py-3 font-medium">Total</th>
+              <th className="text-right px-4 py-3 font-medium">Calls</th>
+              <th className="text-right px-4 py-3 font-medium">WhatsApp</th>
+              <th className="text-right px-4 py-3 font-medium">Emails</th>
+              <th className="text-right px-4 py-3 font-medium">Meetings</th>
+              <th className="text-right px-4 py-3 font-medium">Completed</th>
+              <th className="text-left px-4 py-3 font-medium">Last Activity</th>
+            </tr>
+          </thead>
+
+          <tbody className="divide-y divide-gray-100">
+            {rows.map(row => (
+              <tr key={row.uid || row.email || row.name}>
+                <td className="px-4 py-3">
+                  <div className="font-medium text-gray-900">
+                    {row.name}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {row.email || "—"}
+                  </div>
                 </td>
 
-                <td
-                  className={`
-                    px-4 py-3 text-right font-medium
-                    ${row.untouchedLeads ? "text-red-600" : "text-gray-700"}
-                  `}
-                >
-                  {row.untouchedLeads}
+                <td className="px-4 py-3 text-right">{row.engagements}</td>
+                <td className="px-4 py-3 text-right">{row.calls}</td>
+                <td className="px-4 py-3 text-right">{row.whatsapp}</td>
+                <td className="px-4 py-3 text-right">{row.emails}</td>
+                <td className="px-4 py-3 text-right">{row.meetings}</td>
+                <td className="px-4 py-3 text-right text-green-700 font-medium">
+                  {row.completedEngagements}
                 </td>
-
-                <td
-                  className={`
-                    px-4 py-3 text-right font-medium
-                    ${row.overdueFollowUps ? "text-red-600" : "text-gray-700"}
-                  `}
-                >
-                  {row.overdueFollowUps}
+                <td className="px-4 py-3 text-gray-600">
+                  {formatDateTime(row.lastActivityAt)}
                 </td>
               </tr>
             ))}
@@ -1403,10 +1817,10 @@ function ManagementLeadsTable({ rows }) {
             {!rows.length && (
               <tr>
                 <td
-                  colSpan={9}
+                  colSpan={8}
                   className="px-4 py-8 text-center text-sm text-gray-500"
                 >
-                  No lead data found.
+                  No engagement data found.
                 </td>
               </tr>
             )}
@@ -1429,7 +1843,7 @@ function ManagementAttendanceTable({ rows }) {
           Team Member Attendance Overview
         </h2>
         <p className="text-xs text-gray-500 mt-0.5">
-          Check-ins, active sessions, late marks and working hours for the selected period.
+          Attendance days, active sessions, late marks and working hours.
         </p>
       </div>
 
@@ -1437,33 +1851,15 @@ function ManagementAttendanceTable({ rows }) {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-xs text-gray-500">
             <tr>
-              <th className="text-left px-4 py-3 font-medium">
-                Team Member
-              </th>
-              <th className="text-right px-4 py-3 font-medium">
-                Check-ins
-              </th>
-              <th className="text-right px-4 py-3 font-medium">
-                Active
-              </th>
-              <th className="text-right px-4 py-3 font-medium">
-                Checked Out
-              </th>
-              <th className="text-right px-4 py-3 font-medium">
-                Late
-              </th>
-              <th className="text-right px-4 py-3 font-medium">
-                Leave
-              </th>
-              <th className="text-left px-4 py-3 font-medium">
-                First Check-in
-              </th>
-              <th className="text-left px-4 py-3 font-medium">
-                Last Check-out
-              </th>
-              <th className="text-right px-4 py-3 font-medium">
-                Hours
-              </th>
+              <th className="text-left px-4 py-3 font-medium">Team Member</th>
+              <th className="text-right px-4 py-3 font-medium">Days</th>
+              <th className="text-right px-4 py-3 font-medium">Check-ins</th>
+              <th className="text-right px-4 py-3 font-medium">Active</th>
+              <th className="text-right px-4 py-3 font-medium">Late</th>
+              <th className="text-right px-4 py-3 font-medium">Leave</th>
+              <th className="text-left px-4 py-3 font-medium">First Check-in</th>
+              <th className="text-left px-4 py-3 font-medium">Last Check-out</th>
+              <th className="text-right px-4 py-3 font-medium">Hours</th>
             </tr>
           </thead>
 
@@ -1475,8 +1871,12 @@ function ManagementAttendanceTable({ rows }) {
                     {row.name}
                   </div>
                   <div className="text-xs text-gray-500">
-                    {row.email || "—"}
+                    {row.department || row.email || "—"}
                   </div>
+                </td>
+
+                <td className="px-4 py-3 text-right">
+                  {row.attendanceDays}
                 </td>
 
                 <td className="px-4 py-3 text-right">
@@ -1486,14 +1886,10 @@ function ManagementAttendanceTable({ rows }) {
                 <td
                   className={`
                     px-4 py-3 text-right font-medium
-                    ${row.active ? "text-green-700" : "text-gray-700"}
+                    ${row.activeSessions ? "text-green-700" : "text-gray-700"}
                   `}
                 >
-                  {row.active}
-                </td>
-
-                <td className="px-4 py-3 text-right">
-                  {row.checkedOut}
+                  {row.activeSessions}
                 </td>
 
                 <td
@@ -1530,6 +1926,108 @@ function ManagementAttendanceTable({ rows }) {
                   className="px-4 py-8 text-center text-sm text-gray-500"
                 >
                   No attendance data found.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* =========================
+   TEAM TABLE
+========================== */
+
+function ManagementTeamTable({ rows }) {
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-100">
+        <h2 className="text-sm font-semibold text-gray-900">
+          Team Workload Overview
+        </h2>
+        <p className="text-xs text-gray-500 mt-0.5">
+          Combined workload score based on leads, engagements, wins and attendance.
+        </p>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 text-xs text-gray-500">
+            <tr>
+              <th className="text-left px-4 py-3 font-medium">Team Member</th>
+              <th className="text-left px-4 py-3 font-medium">Department</th>
+              <th className="text-left px-4 py-3 font-medium">Role</th>
+              <th className="text-right px-4 py-3 font-medium">Leads</th>
+              <th className="text-right px-4 py-3 font-medium">Engagements</th>
+              <th className="text-right px-4 py-3 font-medium">Attendance Days</th>
+              <th className="text-right px-4 py-3 font-medium">Hours</th>
+              <th className="text-right px-4 py-3 font-medium">Score</th>
+              <th className="text-left px-4 py-3 font-medium">Rating</th>
+            </tr>
+          </thead>
+
+          <tbody className="divide-y divide-gray-100">
+            {rows.map(row => (
+              <tr key={row.uid || row.email || row.name}>
+                <td className="px-4 py-3">
+                  <div className="font-medium text-gray-900">
+                    {row.name}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {row.email || "—"}
+                  </div>
+                </td>
+
+                <td className="px-4 py-3 text-gray-600">
+                  {row.department || "—"}
+                </td>
+
+                <td className="px-4 py-3 text-gray-600">
+                  {readableLabel(row.role)}
+                </td>
+
+                <td className="px-4 py-3 text-right">
+                  {row.newLeads}
+                </td>
+
+                <td className="px-4 py-3 text-right">
+                  {row.engagements}
+                </td>
+
+                <td className="px-4 py-3 text-right">
+                  {row.attendanceDays}
+                </td>
+
+                <td className="px-4 py-3 text-right font-medium">
+                  {formatDuration(row.totalMinutes)}
+                </td>
+
+                <td className="px-4 py-3 text-right font-semibold">
+                  {row.score}
+                </td>
+
+                <td className="px-4 py-3">
+                  <span
+                    className={`
+                      inline-flex items-center px-2 py-1 rounded-full text-xs border
+                      ${getScoreClass(row.score)}
+                    `}
+                  >
+                    {getScoreLabel(row.score)}
+                  </span>
+                </td>
+              </tr>
+            ))}
+
+            {!rows.length && (
+              <tr>
+                <td
+                  colSpan={9}
+                  className="px-4 py-8 text-center text-sm text-gray-500"
+                >
+                  No team data found.
                 </td>
               </tr>
             )}
