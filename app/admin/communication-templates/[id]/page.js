@@ -26,7 +26,7 @@ import "react-quill-new/dist/quill.snow.css";
 const ReactQuill = dynamic(() => import("react-quill-new"), {
   ssr: false,
   loading: () => (
-    <div className="border border-gray-200 rounded-lg bg-gray-50 px-4 py-10 text-center text-sm text-gray-500">
+    <div className="border border-gray-200 rounded-lg bg-white px-4 py-10 text-center text-sm text-gray-500">
       Loading editor...
     </div>
   )
@@ -44,11 +44,12 @@ const VARIABLES = [
   { key: "teamMemberName", desc: "Sender name" },
   { key: "companyName", desc: "Company name" },
   { key: "companyEmail", desc: "Company email" },
-  { key: "companyPhone", desc: "Company phone" }
+  { key: "companyPhone", desc: "Company phone" },
+  { key: "companyLogoUrl", desc: "Company logo public URL" }
 ];
 
 /* =========================
-   DEFAULT
+   DEFAULTS
 ========================= */
 
 const EMPTY_TEMPLATE = {
@@ -76,6 +77,15 @@ const EMPTY_TEMPLATE = {
   version: 1
 };
 
+const EMPTY_BRANDING = {
+  companyName: "DreamTrawell",
+  companyEmail: "",
+  companyPhone: "",
+  companyLogoUrl: "",
+  websiteUrl: "",
+  emailAssetBaseUrl: ""
+};
+
 /* =========================
    STYLES
 ========================= */
@@ -101,6 +111,16 @@ const stripHtml = html => {
     .trim();
 };
 
+const hasEmailContent = html => {
+  const value = html || "";
+
+  if (stripHtml(value)) return true;
+
+  return /<(table|tbody|thead|tr|td|th|div|img|a|p|span|body|html|section|article|header|footer|h1|h2|h3)/i.test(
+    value
+  );
+};
+
 const extractVars = text => {
   return [
     ...new Set(
@@ -112,11 +132,10 @@ const extractVars = text => {
   ];
 };
 
-const highlightVars = html => {
-  return (html || "").replace(
-    /{{(.*?)}}/g,
-    match => `<span class="template-var">${match}</span>`
-  );
+const renderTemplate = (content = "", variables = {}) => {
+  return content.replace(/{{\s*(.*?)\s*}}/g, (_, key) => {
+    return variables[key] ?? "";
+  });
 };
 
 const hasAttachment = attachments => {
@@ -171,6 +190,7 @@ export default function TemplateEditorPage() {
   const [form, setForm] = useState(EMPTY_TEMPLATE);
   const [categories, setCategories] = useState([]);
   const [documents, setDocuments] = useState([]);
+  const [branding, setBranding] = useState(EMPTY_BRANDING);
 
   const [errors, setErrors] = useState({});
   const [pageError, setPageError] = useState("");
@@ -181,12 +201,14 @@ export default function TemplateEditorPage() {
 
   const [activeField, setActiveField] = useState(null);
   const [previewMode, setPreviewMode] = useState("email");
+  const [emailEditorMode, setEmailEditorMode] = useState("design");
   const [isDirty, setIsDirty] = useState(false);
 
   const dirtyRef = useRef(false);
   const quillRef = useRef(null);
   const whatsappRef = useRef(null);
   const subjectRef = useRef(null);
+  const emailHtmlRef = useRef(null);
 
   /* =========================
      VIEW MODE
@@ -209,10 +231,16 @@ export default function TemplateEditorPage() {
         setLoading(true);
         setPageError("");
 
-        const [templateSnap, categorySnap, documentSnap] = await Promise.all([
+        const [
+          templateSnap,
+          categorySnap,
+          documentSnap,
+          brandingSnap
+        ] = await Promise.all([
           getDoc(doc(db, "communicationTemplates", templateId)),
           getDocs(collection(db, "templateCategories")),
-          getDocs(collection(db, "documents"))
+          getDocs(collection(db, "documents")),
+          getDoc(doc(db, "settings", "branding"))
         ]);
 
         if (!templateSnap.exists()) {
@@ -240,6 +268,21 @@ export default function TemplateEditorPage() {
         setCategories(categoryRows);
         setDocuments(documentRows);
         setForm(normalizedTemplate);
+
+        if (brandingSnap.exists()) {
+          const data = brandingSnap.data();
+
+          setBranding({
+            companyName: data.companyName || "DreamTrawell",
+            companyEmail: data.companyEmail || data.supportEmail || "",
+            companyPhone: data.companyPhone || data.supportMobile || "",
+            companyLogoUrl: data.companyLogoUrl || "",
+            websiteUrl: data.websiteUrl || "",
+            emailAssetBaseUrl: data.emailAssetBaseUrl || ""
+          });
+        } else {
+          setBranding(EMPTY_BRANDING);
+        }
       } catch (err) {
         setPageError(err.message || "Failed to load template");
       } finally {
@@ -293,7 +336,7 @@ export default function TemplateEditorPage() {
 
   const categoryRequiresAttachment = Boolean(
     selectedCategory?.rules?.requireAttachment ||
-      form.categoryRequireAttachment
+    form.categoryRequireAttachment
   );
 
   const usedVariables = useMemo(() => {
@@ -311,6 +354,36 @@ export default function TemplateEditorPage() {
       v => !VARIABLES.some(item => item.key === v)
     );
   }, [usedVariables]);
+
+  const previewVariables = useMemo(() => {
+    return {
+      spocName: "Sample SPOC",
+      agencyName: "Sample Travel Agency",
+      agentCode: "DT-TA-0001",
+      destination: "Dubai, Singapore",
+      teamMemberName: user?.displayName || user?.email || "Team Member",
+
+      companyName: branding.companyName || "DreamTrawell",
+      companyEmail: branding.companyEmail || "",
+      companyPhone: branding.companyPhone || "",
+      companyLogoUrl: branding.companyLogoUrl || ""
+    };
+  }, [branding, user]);
+
+  const renderedEmailSubject = useMemo(() => {
+    return renderTemplate(form.emailSubject || "", previewVariables);
+  }, [form.emailSubject, previewVariables]);
+
+  const renderedEmailHtml = useMemo(() => {
+    return renderTemplate(form.emailHtml || "", previewVariables);
+  }, [form.emailHtml, previewVariables]);
+
+  const renderedWhatsappText = useMemo(() => {
+    return renderTemplate(form.whatsappText || "", previewVariables);
+  }, [form.whatsappText, previewVariables]);
+
+  const logoVariableUsed = usedVariables.includes("companyLogoUrl");
+  const logoConfigured = Boolean(branding.companyLogoUrl);
 
   const readiness = useMemo(() => {
     const checks = [
@@ -341,7 +414,7 @@ export default function TemplateEditorPage() {
         {
           key: "emailBody",
           label: "Email body added",
-          done: Boolean(stripHtml(form.emailHtml))
+          done: hasEmailContent(form.emailHtml)
         }
       );
     }
@@ -362,6 +435,14 @@ export default function TemplateEditorPage() {
       });
     }
 
+    if (logoVariableUsed) {
+      checks.push({
+        key: "companyLogoUrl",
+        label: "Company logo URL configured",
+        done: logoConfigured
+      });
+    }
+
     checks.push({
       key: "variables",
       label: "Variables are valid",
@@ -378,10 +459,13 @@ export default function TemplateEditorPage() {
     form.whatsappText,
     form.attachments,
     categoryRequiresAttachment,
-    invalidVariables
+    invalidVariables,
+    logoVariableUsed,
+    logoConfigured
   ]);
 
   const activationReady = readiness.every(item => item.done);
+  const displayActive = Boolean(form.active && activationReady);
 
   /* =========================
      UPDATE HELPERS
@@ -489,7 +573,7 @@ export default function TemplateEditorPage() {
             "Email subject is required before activation";
         }
 
-        if (!stripHtml(form.emailHtml)) {
+        if (!hasEmailContent(form.emailHtml)) {
           e.emailHtml = "Email body is required before activation";
         }
       }
@@ -505,6 +589,11 @@ export default function TemplateEditorPage() {
       ) {
         e.attachments =
           "This category requires an attachment before activation";
+      }
+
+      if (logoVariableUsed && !logoConfigured) {
+        e.variables =
+          "Company logo URL is used in this template, but settings/branding.companyLogoUrl is missing.";
       }
     }
 
@@ -526,6 +615,7 @@ export default function TemplateEditorPage() {
       setSuccessMessage("");
 
       const category = selectedCategory;
+      const canSaveAsActive = Boolean(form.active && activationReady);
 
       await updateDoc(doc(db, "communicationTemplates", templateId), {
         ...form,
@@ -544,10 +634,13 @@ export default function TemplateEditorPage() {
           whatsapp: Boolean(form.channels?.whatsapp)
         },
 
-        active: Boolean(form.active),
-        status: form.active ? "active" : "draft",
+        emailSubject: form.emailSubject || "",
+        emailHtml: form.emailHtml || "",
+        whatsappText: form.whatsappText || "",
 
-        // Remove old signature fields from Firestore.
+        active: canSaveAsActive,
+        status: canSaveAsActive ? "active" : "draft",
+
         signatureType: deleteField(),
         signatureText: deleteField(),
 
@@ -555,6 +648,12 @@ export default function TemplateEditorPage() {
         updatedByEmail: user?.email || "",
         updatedAt: serverTimestamp()
       });
+
+      setForm(prev => ({
+        ...prev,
+        active: canSaveAsActive,
+        status: canSaveAsActive ? "active" : "draft"
+      }));
 
       dirtyRef.current = false;
       setIsDirty(false);
@@ -580,6 +679,26 @@ export default function TemplateEditorPage() {
         text.slice(0, start) + variable + text.slice(start);
 
       update("emailSubject", nextValue);
+
+      requestAnimationFrame(() => {
+        el?.focus();
+        el?.setSelectionRange(
+          start + variable.length,
+          start + variable.length
+        );
+      });
+
+      return;
+    }
+
+    if (activeField === "emailHtml" || emailEditorMode === "html") {
+      const el = emailHtmlRef.current;
+      const start = el?.selectionStart ?? form.emailHtml.length;
+      const text = form.emailHtml || "";
+      const nextValue =
+        text.slice(0, start) + variable + text.slice(start);
+
+      update("emailHtml", nextValue);
 
       requestAnimationFrame(() => {
         el?.focus();
@@ -627,7 +746,7 @@ export default function TemplateEditorPage() {
   if (authLoading || loading) {
     return (
       <AdminGuard>
-        <main className="p-6">
+        <main className="p-6 bg-white">
           <p className="text-sm text-gray-500">Loading template...</p>
         </main>
       </AdminGuard>
@@ -640,9 +759,7 @@ export default function TemplateEditorPage() {
     <AdminGuard>
       <main className="min-h-screen">
         <div className="max-w-7xl mx-auto space-y-5">
-          {/* =========================
-             HEADER
-          ========================= */}
+          {/* HEADER */}
           <div className="bg-white border border-gray-100 rounded-xl px-5 py-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div>
               <button
@@ -661,13 +778,12 @@ export default function TemplateEditorPage() {
                 </h1>
 
                 <span
-                  className={`text-xs rounded-full px-3 py-1 border ${
-                    form.active
+                  className={`text-xs rounded-full px-3 py-1 border ${displayActive
                       ? "bg-green-50 text-green-700 border-green-100"
                       : "bg-amber-50 text-amber-700 border-amber-100"
-                  }`}
+                    }`}
                 >
-                  {form.active ? "Active" : "Draft"}
+                  {displayActive ? "Active" : "Draft"}
                 </span>
 
                 {isDirty && !isViewOnly && (
@@ -707,9 +823,6 @@ export default function TemplateEditorPage() {
             )}
           </div>
 
-          {/* =========================
-             MESSAGES
-          ========================= */}
           {pageError && (
             <div className="border border-red-100 bg-red-50 text-red-700 rounded-xl px-4 py-3 text-sm">
               {pageError}
@@ -722,13 +835,9 @@ export default function TemplateEditorPage() {
             </div>
           )}
 
-          {/* =========================
-             BODY
-          ========================= */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             {/* LEFT */}
             <div className="lg:col-span-8 space-y-5">
-              {/* SETUP */}
               <Surface
                 title="Template Setup"
                 subtitle="Choose basic details, category rules, and communication channels."
@@ -748,11 +857,10 @@ export default function TemplateEditorPage() {
                     </label>
 
                     <select
-                      className={`${inputClass} ${
-                        errors.categoryId
+                      className={`${inputClass} ${errors.categoryId
                           ? "border-red-500 focus:border-red-500 focus:ring-red-200"
                           : ""
-                      }`}
+                        }`}
                       disabled={isViewOnly}
                       value={form.categoryId || ""}
                       onChange={e => updateCategory(e.target.value)}
@@ -778,80 +886,42 @@ export default function TemplateEditorPage() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs font-medium text-gray-700">
-                      Channels
-                    </label>
+                <div>
+                  <label className="text-xs font-medium text-gray-700">
+                    Channels
+                  </label>
 
-                    <div className="flex flex-wrap gap-3 mt-2">
-                      <ChannelCard
-                        label="Email"
-                        desc="Subject + rich HTML body"
-                        active={Boolean(form.channels?.email)}
-                        disabled={isViewOnly}
-                        onClick={() =>
-                          updateChannel(
-                            "email",
-                            !Boolean(form.channels?.email)
-                          )
-                        }
-                      />
-
-                      <ChannelCard
-                        label="WhatsApp"
-                        desc="Plain text message"
-                        active={Boolean(form.channels?.whatsapp)}
-                        disabled={isViewOnly}
-                        onClick={() =>
-                          updateChannel(
-                            "whatsapp",
-                            !Boolean(form.channels?.whatsapp)
-                          )
-                        }
-                      />
-                    </div>
-
-                    {errors.channels && (
-                      <p className={errorText}>{errors.channels}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="text-xs font-medium text-gray-700">
-                      Visibility
-                    </label>
-
-                    <button
-                      type="button"
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+                    <ChannelCard
+                      label="Email"
+                      desc="Subject + rich HTML body"
+                      active={Boolean(form.channels?.email)}
                       disabled={isViewOnly}
-                      onClick={() => update("active", !form.active)}
-                      className={`mt-2 w-full text-left border rounded-xl px-4 py-3 transition disabled:opacity-60 ${
-                        form.active
-                          ? "border-green-200 bg-green-50"
-                          : "border-gray-200 bg-gray-50 hover:bg-gray-100"
-                      }`}
-                    >
-                      <p
-                        className={`text-sm font-medium ${
-                          form.active ? "text-green-800" : "text-gray-800"
-                        }`}
-                      >
-                        {form.active ? "Active Template" : "Draft Template"}
-                      </p>
-                      <p className="text-xs text-gray-500 mt-1">
-                        {form.active
-                          ? "Available in send communication flow after save."
-                          : "Hidden from send flow until activated."}
-                      </p>
-                    </button>
+                      onClick={() =>
+                        updateChannel(
+                          "email",
+                          !Boolean(form.channels?.email)
+                        )
+                      }
+                    />
 
-                    {form.active && !activationReady && (
-                      <p className="text-[11px] text-amber-700 mt-1">
-                        Complete readiness checklist before saving as active.
-                      </p>
-                    )}
+                    <ChannelCard
+                      label="WhatsApp"
+                      desc="Plain text message"
+                      active={Boolean(form.channels?.whatsapp)}
+                      disabled={isViewOnly}
+                      onClick={() =>
+                        updateChannel(
+                          "whatsapp",
+                          !Boolean(form.channels?.whatsapp)
+                        )
+                      }
+                    />
                   </div>
+
+                  {errors.channels && (
+                    <p className={errorText}>{errors.channels}</p>
+                  )}
                 </div>
               </Surface>
 
@@ -859,7 +929,7 @@ export default function TemplateEditorPage() {
               {form.channels?.email && (
                 <Surface
                   title="Email Content"
-                  subtitle="Use variables for personalization. Preview is available on the right."
+                  subtitle="Use Design Editor for simple content or HTML Source for full email templates."
                 >
                   <Input
                     label="Email Subject"
@@ -871,30 +941,113 @@ export default function TemplateEditorPage() {
                     onFocus={() => setActiveField("emailSubject")}
                   />
 
-                  <div className="space-y-1">
+                  <div>
                     <label className="text-xs font-medium text-gray-700">
-                      Email Body
+                      Email Body Mode
                     </label>
 
-                    <div
-                      className={`bg-white rounded-lg ${
-                        errors.emailHtml ? "border border-red-500" : ""
-                      }`}
-                      onFocus={() => setActiveField("email")}
-                    >
-                      <ReactQuill
-                        ref={quillRef}
-                        readOnly={isViewOnly}
-                        value={form.emailHtml || ""}
-                        onFocus={() => setActiveField("email")}
-                        onChange={value => update("emailHtml", value)}
-                      />
+                    <div className="mt-2 inline-flex border border-gray-200 rounded-lg overflow-hidden bg-white">
+                      <button
+                        type="button"
+                        disabled={isViewOnly}
+                        onClick={() => setEmailEditorMode("design")}
+                        className={`px-4 py-2 text-xs font-medium ${emailEditorMode === "design"
+                            ? "bg-blue-50 text-blue-700"
+                            : "text-gray-500 hover:bg-gray-50"
+                          }`}
+                      >
+                        Design Editor
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={isViewOnly}
+                        onClick={() => setEmailEditorMode("html")}
+                        className={`px-4 py-2 text-xs font-medium border-l border-gray-200 ${emailEditorMode === "html"
+                            ? "bg-blue-50 text-blue-700"
+                            : "text-gray-500 hover:bg-gray-50"
+                          }`}
+                      >
+                        HTML Source
+                      </button>
                     </div>
 
-                    {errors.emailHtml && (
-                      <p className={errorText}>{errors.emailHtml}</p>
-                    )}
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      Use HTML Source for full email templates with table
+                      layout, inline CSS, buttons, banners, branded designs,
+                      and images.
+                    </p>
                   </div>
+
+                  {emailEditorMode === "design" && (
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-gray-700">
+                        Email Body
+                      </label>
+
+                      <div
+                        className={`bg-white rounded-lg ${errors.emailHtml ? "border border-red-500" : ""
+                          }`}
+                        onFocus={() => setActiveField("email")}
+                      >
+                        <ReactQuill
+                          ref={quillRef}
+                          readOnly={isViewOnly}
+                          value={form.emailHtml || ""}
+                          onFocus={() => setActiveField("email")}
+                          onChange={value => update("emailHtml", value)}
+                        />
+                      </div>
+
+                      {errors.emailHtml && (
+                        <p className={errorText}>{errors.emailHtml}</p>
+                      )}
+                    </div>
+                  )}
+
+                  {emailEditorMode === "html" && (
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-gray-700">
+                        HTML Source
+                      </label>
+
+                      <textarea
+                        ref={emailHtmlRef}
+                        disabled={isViewOnly}
+                        value={form.emailHtml || ""}
+                        onFocus={() => setActiveField("emailHtml")}
+                        onChange={e => update("emailHtml", e.target.value)}
+                        spellCheck={false}
+                        placeholder={`Example:
+<table width="100%" cellpadding="0" cellspacing="0" style="font-family: Arial, sans-serif;">
+  <tr>
+    <td align="center">
+      <img src="{{companyLogoUrl}}" width="160" alt="{{companyName}}" style="display:block;border:0;outline:none;text-decoration:none;" />
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <h2>Hello {{spocName}}</h2>
+      <p>We are happy to connect with {{agencyName}}.</p>
+    </td>
+  </tr>
+</table>`}
+                        className={`${inputClass} min-h-[360px] resize-y font-mono text-xs leading-5 ${errors.emailHtml
+                            ? "border-red-500 focus:border-red-500 focus:ring-red-200"
+                            : ""
+                          }`}
+                      />
+
+                      {errors.emailHtml && (
+                        <p className={errorText}>{errors.emailHtml}</p>
+                      )}
+
+                      <p className="text-[11px] text-gray-500">
+                        For images in email, use a public absolute URL. Firebase
+                        Storage download URLs are supported.
+                      </p>
+                    </div>
+                  )}
                 </Surface>
               )}
 
@@ -927,11 +1080,10 @@ export default function TemplateEditorPage() {
                   </label>
 
                   <select
-                    className={`${inputClass} ${
-                      errors.attachments
+                    className={`${inputClass} ${errors.attachments
                         ? "border-red-500 focus:border-red-500 focus:ring-red-200"
                         : ""
-                    }`}
+                      }`}
                     disabled={isViewOnly}
                     value={form.attachments?.[0]?.documentId || ""}
                     onChange={e => {
@@ -943,22 +1095,22 @@ export default function TemplateEditorPage() {
                         "attachments",
                         selectedDocument
                           ? [
-                              {
-                                documentId: selectedDocument.id,
-                                name:
-                                  selectedDocument.name ||
-                                  selectedDocument.title ||
-                                  "Document",
-                                fileUrl:
-                                  selectedDocument.fileUrl ||
-                                  selectedDocument.url ||
-                                  "",
-                                documentType:
-                                  selectedDocument.type ||
-                                  selectedDocument.documentType ||
-                                  ""
-                              }
-                            ]
+                            {
+                              documentId: selectedDocument.id,
+                              name:
+                                selectedDocument.name ||
+                                selectedDocument.title ||
+                                "Document",
+                              fileUrl:
+                                selectedDocument.fileUrl ||
+                                selectedDocument.url ||
+                                "",
+                              documentType:
+                                selectedDocument.type ||
+                                selectedDocument.documentType ||
+                                ""
+                            }
+                          ]
                           : []
                       );
                     }}
@@ -982,7 +1134,7 @@ export default function TemplateEditorPage() {
             <aside className="lg:col-span-4 space-y-5 lg:sticky lg:top-6 self-start">
               <Surface
                 title="Readiness Checklist"
-                subtitle="Template must pass these checks before activation."
+                subtitle="Complete all checks before activating this template."
               >
                 <div className="space-y-2">
                   {readiness.map(item => (
@@ -995,23 +1147,128 @@ export default function TemplateEditorPage() {
                       </span>
 
                       <span
-                        className={`text-[11px] rounded-full px-2 py-0.5 ${
-                          item.done
+                        className={`text-[11px] rounded-full px-2 py-0.5 ${item.done
                             ? "bg-green-50 text-green-700"
                             : "bg-gray-100 text-gray-500"
-                        }`}
+                          }`}
                       >
                         {item.done ? "Done" : "Pending"}
                       </span>
                     </div>
                   ))}
                 </div>
+
+                {!isViewOnly && (
+                  <div className="pt-3 border-t border-gray-100">
+                    <button
+                      type="button"
+                      disabled={!form.active && !activationReady}
+                      onClick={() => update("active", !form.active)}
+                      className={`w-full rounded-lg px-4 py-2.5 text-sm font-medium transition ${form.active
+                          ? "bg-amber-50 text-amber-700 border border-amber-100 hover:bg-amber-100"
+                          : activationReady
+                            ? "bg-green-600 text-white hover:bg-green-700"
+                            : "bg-gray-100 text-gray-400 cursor-not-allowed"
+                        }`}
+                    >
+                      {form.active
+                        ? "Move to Draft"
+                        : activationReady
+                          ? "Activate Template"
+                          : "Complete Checklist to Activate"}
+                    </button>
+
+                    <p className="text-[11px] text-gray-500 mt-2">
+                      Draft templates are hidden from the send communication
+                      flow.
+                    </p>
+                  </div>
+                )}
+              </Surface>
+
+              <Surface title="Live Preview">
+                <div className="flex border border-gray-200 rounded-lg overflow-hidden mb-3">
+                  {form.channels?.email && (
+                    <button
+                      type="button"
+                      onClick={() => setPreviewMode("email")}
+                      className={`flex-1 px-3 py-2 text-xs ${previewMode === "email"
+                          ? "bg-gray-100 text-gray-900"
+                          : "text-gray-500 hover:bg-gray-50"
+                        }`}
+                    >
+                      Email
+                    </button>
+                  )}
+
+                  {form.channels?.whatsapp && (
+                    <button
+                      type="button"
+                      onClick={() => setPreviewMode("whatsapp")}
+                      className={`flex-1 px-3 py-2 text-xs ${previewMode === "whatsapp"
+                          ? "bg-gray-100 text-gray-900"
+                          : "text-gray-500 hover:bg-gray-50"
+                        }`}
+                    >
+                      WhatsApp
+                    </button>
+                  )}
+                </div>
+
+                {previewMode === "email" && form.channels?.email && (
+                  <div className="border border-gray-200 rounded-xl bg-white overflow-hidden">
+                    <div className="bg-white border-b border-gray-200 px-4 py-3">
+                      <p className="text-[11px] text-gray-400">
+                        Subject
+                      </p>
+                      <p className="text-sm font-medium text-gray-800 break-words">
+                        {renderedEmailSubject ||
+                          "Email subject will appear here"}
+                      </p>
+                    </div>
+
+                    {form.emailHtml ? (
+                      <iframe
+                        title="Email HTML Preview"
+                        sandbox=""
+                        srcDoc={renderedEmailHtml}
+                        className="w-full min-h-[360px] bg-white"
+                      />
+                    ) : (
+                      <div className="p-4 text-sm text-gray-400 italic min-h-[160px]">
+                        Email body preview will appear here
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {previewMode === "whatsapp" &&
+                  form.channels?.whatsapp && (
+                    <div className="rounded-xl bg-[#e7ffdb] border border-green-100 p-3">
+                      <div className="bg-white rounded-xl px-3 py-2 text-sm whitespace-pre-wrap break-words shadow-sm min-h-[120px]">
+                        {(renderedWhatsappText || "").length === 0 ? (
+                          <span className="text-gray-400 italic">
+                            WhatsApp preview will appear here
+                          </span>
+                        ) : (
+                          renderedWhatsappText
+                        )}
+                      </div>
+                    </div>
+                  )}
               </Surface>
 
               <Surface
                 title="Variables"
                 subtitle="Click a variable to insert it into the active field."
               >
+                {logoVariableUsed && !logoConfigured && (
+                  <div className="border border-amber-100 bg-amber-50 text-amber-700 rounded-lg px-3 py-2 text-xs">
+                    companyLogoUrl is used, but company logo URL is not
+                    configured in settings/branding.
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 gap-2">
                   {VARIABLES.map(v => (
                     <button
@@ -1019,7 +1276,7 @@ export default function TemplateEditorPage() {
                       type="button"
                       disabled={isViewOnly}
                       onClick={() => insertVariable(`{{${v.key}}}`)}
-                      className="text-left border border-gray-200 rounded-lg px-3 py-2 bg-gray-50 hover:bg-gray-100 disabled:opacity-60 disabled:cursor-not-allowed"
+                      className="text-left border border-gray-200 rounded-lg px-3 py-2 bg-white hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                       <p className="text-xs font-semibold text-indigo-700">
                         {`{{${v.key}}}`}
@@ -1032,7 +1289,7 @@ export default function TemplateEditorPage() {
                 </div>
 
                 {usedVariables.length > 0 && (
-                  <div className="border border-gray-100 rounded-lg bg-gray-50 px-3 py-2 mt-3">
+                  <div className="border border-gray-100 rounded-lg bg-white px-3 py-2 mt-3">
                     <p className="text-xs text-gray-500 mb-1">
                       Used variables
                     </p>
@@ -1053,105 +1310,12 @@ export default function TemplateEditorPage() {
                   <p className={errorText}>{errors.variables}</p>
                 )}
               </Surface>
-
-              <Surface title="Live Preview">
-                <div className="flex border border-gray-200 rounded-lg overflow-hidden mb-3">
-                  {form.channels?.email && (
-                    <button
-                      type="button"
-                      onClick={() => setPreviewMode("email")}
-                      className={`flex-1 px-3 py-2 text-xs ${
-                        previewMode === "email"
-                          ? "bg-gray-100 text-gray-900"
-                          : "text-gray-500 hover:bg-gray-50"
-                      }`}
-                    >
-                      Email
-                    </button>
-                  )}
-
-                  {form.channels?.whatsapp && (
-                    <button
-                      type="button"
-                      onClick={() => setPreviewMode("whatsapp")}
-                      className={`flex-1 px-3 py-2 text-xs ${
-                        previewMode === "whatsapp"
-                          ? "bg-gray-100 text-gray-900"
-                          : "text-gray-500 hover:bg-gray-50"
-                      }`}
-                    >
-                      WhatsApp
-                    </button>
-                  )}
-                </div>
-
-                {previewMode === "email" && form.channels?.email && (
-                  <div className="border border-gray-200 rounded-xl bg-gray-50 overflow-hidden">
-                    <div className="bg-white border-b border-gray-200 px-4 py-3">
-                      <p className="text-[11px] text-gray-400">
-                        Subject
-                      </p>
-                      <p className="text-sm font-medium text-gray-800 break-words">
-                        {form.emailSubject || "Email subject will appear here"}
-                      </p>
-                    </div>
-
-                    <div
-                      className="p-4 text-sm break-words min-h-[160px]"
-                      dangerouslySetInnerHTML={{
-                        __html:
-                          highlightVars(form.emailHtml) ||
-                          '<span class="text-gray-400 italic">Email body preview will appear here</span>'
-                      }}
-                    />
-                  </div>
-                )}
-
-                {previewMode === "whatsapp" &&
-                  form.channels?.whatsapp && (
-                    <div className="rounded-xl bg-[#e7ffdb] border border-green-100 p-3">
-                      <div className="bg-white rounded-xl px-3 py-2 text-sm whitespace-pre-wrap break-words shadow-sm min-h-[120px]">
-                        {(form.whatsappText || "").length === 0 ? (
-                          <span className="text-gray-400 italic">
-                            WhatsApp preview will appear here
-                          </span>
-                        ) : (
-                          (form.whatsappText || "")
-                            .split(/({{.*?}})/g)
-                            .map((part, index) =>
-                              part.startsWith("{{") &&
-                              part.endsWith("}}") ? (
-                                <span
-                                  key={`${part}-${index}`}
-                                  className="bg-indigo-100 text-indigo-700 px-1 rounded"
-                                >
-                                  {part}
-                                </span>
-                              ) : (
-                                <span key={`${part}-${index}`}>
-                                  {part}
-                                </span>
-                              )
-                            )
-                        )}
-                      </div>
-                    </div>
-                  )}
-              </Surface>
             </aside>
           </div>
         </div>
       </main>
 
       <style jsx global>{`
-        .template-var {
-          background: #eef2ff;
-          color: #3730a3;
-          padding: 0 4px;
-          border-radius: 4px;
-          font-weight: 500;
-        }
-
         .ql-container {
           min-height: 220px;
           font-size: 14px;
@@ -1162,7 +1326,7 @@ export default function TemplateEditorPage() {
         .ql-toolbar {
           border-top-left-radius: 0.5rem;
           border-top-right-radius: 0.5rem;
-          background: #f9fafb;
+          background: #ffffff;
         }
 
         .ql-editor {
@@ -1216,11 +1380,10 @@ function Input({
         disabled={disabled}
         onFocus={onFocus}
         onChange={e => onChange(e.target.value)}
-        className={`${inputClass} ${
-          error
+        className={`${inputClass} ${error
             ? "border-red-500 focus:border-red-500 focus:ring-red-200"
             : ""
-        }`}
+          }`}
       />
 
       {error && <p className={errorText}>{error}</p>}
@@ -1249,11 +1412,10 @@ function Textarea({
         value={value ?? ""}
         onFocus={onFocus}
         onChange={e => onChange(e.target.value)}
-        className={`${inputClass} min-h-[150px] resize-y ${
-          error
+        className={`${inputClass} min-h-[150px] resize-y ${error
             ? "border-red-500 focus:border-red-500 focus:ring-red-200"
             : ""
-        }`}
+          }`}
       />
 
       {error && <p className={errorText}>{error}</p>}
@@ -1267,27 +1429,24 @@ function ChannelCard({ label, desc, active, disabled, onClick }) {
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={`flex-1 min-w-[150px] text-left border rounded-xl px-4 py-3 transition disabled:opacity-60 disabled:cursor-not-allowed ${
-        active
+      className={`text-left border rounded-xl px-4 py-3 transition disabled:opacity-60 disabled:cursor-not-allowed ${active
           ? "border-blue-200 bg-blue-50"
-          : "border-gray-200 bg-gray-50 hover:bg-gray-100"
-      }`}
+          : "border-gray-200 bg-white hover:bg-gray-50"
+        }`}
     >
       <div className="flex items-center justify-between gap-3">
         <p
-          className={`text-sm font-medium ${
-            active ? "text-blue-800" : "text-gray-800"
-          }`}
+          className={`text-sm font-medium ${active ? "text-blue-800" : "text-gray-800"
+            }`}
         >
           {label}
         </p>
 
         <span
-          className={`w-3 h-3 rounded-full border ${
-            active
+          className={`w-3 h-3 rounded-full border ${active
               ? "border-blue-600 bg-blue-600"
               : "border-gray-300 bg-white"
-          }`}
+            }`}
         />
       </div>
 

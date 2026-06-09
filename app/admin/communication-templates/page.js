@@ -5,6 +5,8 @@ import {
   addDoc,
   collection,
   getDocs,
+  doc,
+  updateDoc,
   serverTimestamp
 } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
@@ -44,6 +46,7 @@ const getTemplateStatus = template => {
 const formatStatusLabel = status => {
   if (status === "active") return "Active";
   if (status === "inactive") return "Inactive";
+  if (status === "deleted") return "Deleted";
   return "Draft";
 };
 
@@ -79,7 +82,8 @@ const StatusChip = ({ status }) => {
   const toneMap = {
     active: "bg-green-50 text-green-700 border-green-100",
     draft: "bg-amber-50 text-amber-700 border-amber-100",
-    inactive: "bg-red-50 text-red-700 border-red-100"
+    inactive: "bg-red-50 text-red-700 border-red-100",
+    deleted: "bg-gray-100 text-gray-500 border-gray-200"
   };
 
   return (
@@ -149,6 +153,7 @@ export default function CommunicationTemplates() {
 
   const [errors, setErrors] = useState({});
   const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState("");
 
   /* =========================
      LOAD DATA
@@ -170,6 +175,7 @@ export default function CommunicationTemplates() {
 
       const templateRows = templateSnap.docs
         .map(d => ({ id: d.id, ...d.data() }))
+        .filter(t => t.deleted !== true)
         .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
 
       setCategories(categoryRows);
@@ -288,6 +294,43 @@ export default function CommunicationTemplates() {
   };
 
   /* =========================
+     DELETE TEMPLATE
+  ========================= */
+  const deleteTemplate = async template => {
+    if (!template?.id) return;
+
+    const confirmed = window.confirm(
+      `Delete template "${template.name || "Untitled Template"}"?\n\nThis will hide it from the template list and send communication flow.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setDeletingId(template.id);
+      setPageError("");
+
+      await updateDoc(doc(db, "communicationTemplates", template.id), {
+        deleted: true,
+        active: false,
+        status: "deleted",
+
+        deletedAt: serverTimestamp(),
+        deletedByUid: user?.uid || "",
+        deletedByEmail: user?.email || "",
+        deletedByName: user?.displayName || user?.email || "",
+
+        updatedAt: serverTimestamp()
+      });
+
+      setTemplates(prev => prev.filter(t => t.id !== template.id));
+    } catch (err) {
+      setPageError(err.message || "Failed to delete template");
+    } finally {
+      setDeletingId("");
+    }
+  };
+
+  /* =========================
      CREATE
   ========================= */
   const createTemplate = async () => {
@@ -303,10 +346,8 @@ export default function CommunicationTemplates() {
         name: form.name.trim(),
         nameLower: form.name.trim().toLowerCase(),
 
-        // Backward-compatible category field
         category: category?.code || "",
 
-        // New structured category fields
         categoryId: category?.id || "",
         categoryName: category?.name || "",
         categoryCode: category?.code || "",
@@ -324,9 +365,6 @@ export default function CommunicationTemplates() {
         whatsappText: "",
 
         attachments: [],
-
-        signatureType: "company",
-        signatureText: "",
 
         active: false,
         status: "draft",
@@ -362,7 +400,7 @@ export default function CommunicationTemplates() {
 
   return (
     <AdminGuard>
-      <main className="p-6 w-full space-y-5">
+      <main className="p-6 w-full space-y-5 bg-white">
         {/* =========================
            HEADER
         ========================= */}
@@ -580,6 +618,16 @@ export default function CommunicationTemplates() {
                                   >
                                     Edit
                                   </button>
+
+                                  <button
+                                    disabled={deletingId === t.id}
+                                    onClick={() => deleteTemplate(t)}
+                                    className="text-red-600 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+                                  >
+                                    {deletingId === t.id
+                                      ? "Deleting..."
+                                      : "Delete"}
+                                  </button>
                                 </div>
                               </td>
                             </tr>
@@ -654,6 +702,16 @@ export default function CommunicationTemplates() {
                               className="text-blue-600 hover:underline"
                             >
                               Edit
+                            </button>
+
+                            <button
+                              disabled={deletingId === t.id}
+                              onClick={() => deleteTemplate(t)}
+                              className="text-red-600 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {deletingId === t.id
+                                ? "Deleting..."
+                                : "Delete"}
                             </button>
                           </div>
                         </div>
