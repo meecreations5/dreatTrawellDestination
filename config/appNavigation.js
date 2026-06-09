@@ -61,10 +61,10 @@ export const APP_NAV = [
     id: "engagements",
     label: "Engagement",
     icon: MessageSquare,
-    base: "/engagements",
+    base: "/engagements/my",
     routes: [
       "/engagements",
-      "/engagements/my",
+      "/engagements/",
       "/travel-agents",
       "/engagements/travel-agent/[agentId]"
     ],
@@ -107,7 +107,7 @@ export const APP_NAV = [
     children: [
       {
         label: "All Leads",
-        href: "/leads"
+        href: "/leads/my"
       },
       {
         label: "Create",
@@ -133,10 +133,6 @@ export const APP_NAV = [
       {
         label: "My Profile",
         href: "/profile"
-      },
-      {
-        label: "Settings",
-        href: "/profile/settings"
       }
     ]
   }

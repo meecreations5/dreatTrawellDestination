@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import {
   collection,
   onSnapshot,
@@ -10,16 +9,21 @@ import {
   where
 } from "firebase/firestore";
 import {
+  Activity,
   AlertTriangle,
   BarChart3,
   CalendarDays,
   CheckCircle2,
-  ChevronRight,
   Clock3,
-  Filter,
+  Mail,
+  MapPin,
+  MessageCircle,
+  Phone,
   RefreshCcw,
   Search,
-  Target
+  TrendingUp,
+  Users,
+  Video
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
@@ -33,10 +37,9 @@ import EmptyState from "@/components/ui/EmptyState";
 ========================= */
 const DEFAULT_FILTERS = {
   search: "",
-  stage: "",
-  health: "",
   dateFrom: "",
-  dateTo: ""
+  dateTo: "",
+  channel: "all"
 };
 
 /* =========================
@@ -85,14 +88,17 @@ const isSameDay = (a, b) =>
   a.getMonth() === b.getMonth() &&
   a.getFullYear() === b.getFullYear();
 
-const formatDate = value => {
+const formatDateTime = value => {
   const date = getValidDate(value);
+
   if (!date) return "—";
 
-  return date.toLocaleDateString(undefined, {
+  return date.toLocaleString(undefined, {
     day: "2-digit",
     month: "short",
-    year: "numeric"
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
   });
 };
 
@@ -104,61 +110,68 @@ const formatLabel = value => {
     .replace(/\b\w/g, char => char.toUpperCase());
 };
 
-/* =========================
-   LEAD HEALTH
-========================= */
-function getLeadHealth(lead) {
-  const due = getValidDate(lead?.nextActionDueAt);
+const getAgentName = engagement =>
+  engagement?.travelAgentName ||
+  engagement?.agentName ||
+  engagement?.agent?.agencyName ||
+  engagement?.agent?.name ||
+  engagement?.agencyName ||
+  "Unknown Agent";
 
-  if (!due) return "healthy";
+const getSpocName = engagement =>
+  engagement?.spoc?.name ||
+  engagement?.spocName ||
+  engagement?.contactPerson ||
+  "";
 
-  const now = new Date();
-
-  if (due < now && !isSameDay(due, now)) {
-    return "overdue";
-  }
-
-  if (isSameDay(due, now)) {
-    return "at_risk";
-  }
-
-  return "healthy";
-}
-
-const HEALTH_META = {
-  healthy: {
-    label: "Healthy",
-    icon: CheckCircle2,
-    className: "bg-emerald-50 text-emerald-700 border-emerald-100"
-  },
-  at_risk: {
-    label: "Needs Attention",
-    icon: Clock3,
-    className: "bg-amber-50 text-amber-700 border-amber-100"
-  },
-  overdue: {
-    label: "Overdue",
-    icon: AlertTriangle,
-    className: "bg-red-50 text-red-700 border-red-100"
-  }
-};
-
-const getLeadTitle = lead =>
-  lead.leadCode ||
-  lead.destinationName ||
-  lead.travelAgentName ||
-  lead.agentName ||
-  "Lead";
-
-const getDestinationName = lead =>
-  lead.destinationName ||
-  lead.destination?.name ||
+const getDestinationName = engagement =>
+  engagement?.destinationName ||
+  engagement?.destination?.name ||
   "Not Set";
 
-const getOwnerName = lead =>
-  lead.assignedToName ||
-  lead.ownerName ||
-  "Unassigned";
+const getOutcome = engagement =>
+  engagement?.outcomeLabel ||
+  engagement?.outcomeCode ||
+  engagement?.status ||
+  "Not Set";
+
+const getFollowUpDate = engagement =>
+  getValidDate(
+    engagement?.nextActionDate ||
+      engagement?.nextFollowUpDate ||
+      engagement?.followUpDate ||
+      engagement?.tentativeMeetingDate
+  );
+
+const getChannelIcon = channel => {
+  const icons = {
+    call: Phone,
+    whatsapp: MessageCircle,
+    email: Mail,
+    meeting: Users,
+    online_meeting: Video,
+    offline_meeting: Users,
+    site_visit: MapPin,
+    other: Activity
+  };
+
+  return icons[channel] || Activity;
+};
+
+const getChannelLabel = channel => {
+  const labels = {
+    call: "Call",
+    whatsapp: "WhatsApp",
+    email: "Email",
+    meeting: "Meeting",
+    online_meeting: "Online Meeting",
+    offline_meeting: "Offline Meeting",
+    site_visit: "Site Visit",
+    other: "Other"
+  };
+
+  return labels[channel] || formatLabel(channel);
+};
 
 /* =========================
    UI COMPONENTS
@@ -169,8 +182,7 @@ function KpiCard({ icon: Icon, label, value, helper, tone = "blue" }) {
     emerald: "bg-emerald-50 text-emerald-700",
     amber: "bg-amber-50 text-amber-700",
     red: "bg-red-50 text-red-700",
-    purple: "bg-purple-50 text-purple-700",
-    slate: "bg-slate-100 text-slate-700"
+    purple: "bg-purple-50 text-purple-700"
   };
 
   return (
@@ -211,7 +223,6 @@ function SectionCard({ title, subtitle, children }) {
         <h2 className="text-sm font-semibold text-gray-900">
           {title}
         </h2>
-
         {subtitle && (
           <p className="mt-0.5 text-xs text-gray-500">
             {subtitle}
@@ -233,7 +244,6 @@ function ProgressRow({ label, value, total }) {
         <p className="text-xs font-medium text-gray-700 truncate">
           {label}
         </p>
-
         <p className="text-xs font-semibold text-gray-900">
           {value}
         </p>
@@ -256,119 +266,86 @@ function EmptyMiniState({ title }) {
         {title}
       </p>
       <p className="mt-1 text-xs text-gray-400">
-        Data will appear here once leads are available.
+        Data will appear here once engagements are available.
       </p>
     </div>
   );
 }
 
-function HealthBadge({ health }) {
-  const meta = HEALTH_META[health] || HEALTH_META.healthy;
-  const Icon = meta.icon;
+function RecentEngagementItem({ engagement }) {
+  const Icon = getChannelIcon(engagement.channel);
 
   return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${meta.className}`}
-    >
-      <Icon size={13} />
-      {meta.label}
-    </span>
-  );
-}
+    <div className="rounded-2xl border border-gray-200 bg-white p-4 hover:border-blue-200 hover:shadow-sm transition">
+      <div className="flex items-start gap-3">
+        <div className="h-10 w-10 rounded-2xl bg-blue-50 text-blue-700 flex items-center justify-center shrink-0">
+          <Icon size={18} />
+        </div>
 
-function RecentLeadItem({ lead, user }) {
-  const health = getLeadHealth(lead);
-  const viewOnly = lead.assignedToUid !== user?.uid;
-
-  return (
-    <Link href={`/leads/${lead.id}`} className="block group">
-      <div className="rounded-2xl border border-gray-200 bg-white p-4 hover:border-blue-200 hover:shadow-sm transition">
-        <div className="flex items-start gap-3">
-          <div className="h-10 w-10 rounded-2xl bg-blue-50 text-blue-700 flex items-center justify-center shrink-0">
-            <Target size={18} />
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-sm font-semibold text-gray-950 truncate">
-                    {getLeadTitle(lead)}
-                  </p>
-
-                  {viewOnly && (
-                    <span className="rounded-full bg-amber-50 border border-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700">
-                      View only
-                    </span>
-                  )}
-                </div>
-
-                <p className="mt-0.5 text-xs text-gray-500">
-                  Created on {formatDate(lead.createdAt)}
-                </p>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <HealthBadge health={health} />
-
-                <div className="h-8 w-8 rounded-full border border-gray-200 bg-gray-50 text-gray-400 flex items-center justify-center group-hover:bg-blue-50 group-hover:text-blue-700 group-hover:border-blue-100 transition">
-                  <ChevronRight size={16} />
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-3 flex flex-wrap gap-2">
-              <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
-                {formatLabel(lead.stage)}
-              </span>
-
-              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
-                {getDestinationName(lead)}
-              </span>
-
-              <span className="rounded-full bg-gray-50 border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600">
-                Owner: {getOwnerName(lead)}
-              </span>
-
-              {lead.nextActionType && (
-                <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
-                  Next: {formatLabel(lead.nextActionType)}
-                </span>
-              )}
-            </div>
-
-            {lead.nextActionDueAt && (
-              <p className="mt-3 text-xs text-gray-500">
-                Next action due: {formatDate(lead.nextActionDueAt)}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-gray-950 truncate">
+                {engagement.subject || getAgentName(engagement)}
               </p>
-            )}
+
+              <p className="mt-0.5 text-xs text-gray-500">
+                {getChannelLabel(engagement.channel)} • {formatDateTime(engagement.createdAt)}
+              </p>
+            </div>
+
+            <span className="inline-flex w-fit rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600">
+              {formatLabel(getOutcome(engagement))}
+            </span>
           </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+              {getAgentName(engagement)}
+            </span>
+
+            {getSpocName(engagement) && (
+              <span className="rounded-full bg-gray-50 border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600">
+                SPOC: {getSpocName(engagement)}
+              </span>
+            )}
+
+            <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
+              {getDestinationName(engagement)}
+            </span>
+          </div>
+
+          {engagement.message && (
+            <p className="mt-3 text-sm text-gray-500 line-clamp-2">
+              {engagement.message}
+            </p>
+          )}
         </div>
       </div>
-    </Link>
+    </div>
   );
 }
 
 /* =========================
    MAIN PAGE
 ========================= */
-export default function LeadDashboardPage() {
+export default function EngagementDashboardPage() {
   const { user, loading: authLoading } = useAuth();
 
-  const [leads, setLeads] = useState([]);
+  const [engagements, setEngagements] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
 
   /* =========================
-     LOAD LEADS
+     LOAD ENGAGEMENTS
   ========================== */
   useEffect(() => {
     if (authLoading) return;
 
     if (!user?.uid) {
-      setLeads([]);
+      setEngagements([]);
       setLoading(false);
       return;
     }
@@ -376,109 +353,51 @@ export default function LeadDashboardPage() {
     setLoading(true);
     setError("");
 
-    let assignedRows = new Map();
-    let createdRows = new Map();
-
-    const mergeRows = () => {
-      const merged = new Map();
-
-      createdRows.forEach((value, key) => {
-        merged.set(key, value);
-      });
-
-      assignedRows.forEach((value, key) => {
-        merged.set(key, value);
-      });
-
-      const rows = Array.from(merged.values()).sort((a, b) => {
-        const aTime = getValidDate(a.createdAt)?.getTime?.() || 0;
-        const bTime = getValidDate(b.createdAt)?.getTime?.() || 0;
-        return bTime - aTime;
-      });
-
-      setLeads(rows);
-      setLoading(false);
-    };
-
-    const assignedQuery = query(
-      collection(db, "leads"),
-      where("assignedToUid", "==", user.uid),
-      orderBy("createdAt", "desc")
-    );
-
-    const createdQuery = query(
-      collection(db, "leads"),
+    const q = query(
+      collection(db, "engagements"),
       where("createdByUid", "==", user.uid),
       orderBy("createdAt", "desc")
     );
 
-    const unsubAssigned = onSnapshot(
-      assignedQuery,
+    const unsub = onSnapshot(
+      q,
       snap => {
-        assignedRows = new Map(
-          snap.docs.map(d => [
-            d.id,
-            {
-              id: d.id,
-              ...d.data()
-            }
-          ])
-        );
+        const rows = snap.docs.map(d => ({
+          id: d.id,
+          ...d.data()
+        }));
 
-        mergeRows();
+        setEngagements(rows);
+        setLoading(false);
       },
       err => {
-        console.error("Failed to load assigned leads:", err);
+        console.error("Failed to load engagement dashboard:", err);
         setError(
-          "Unable to load assigned leads. Please check Firestore permissions or required index."
+          "Unable to load engagement dashboard. Please check Firestore permissions or required index."
         );
         setLoading(false);
       }
     );
 
-    const unsubCreated = onSnapshot(
-      createdQuery,
-      snap => {
-        createdRows = new Map(
-          snap.docs.map(d => [
-            d.id,
-            {
-              id: d.id,
-              ...d.data()
-            }
-          ])
-        );
-
-        mergeRows();
-      },
-      err => {
-        console.error("Failed to load created leads:", err);
-        setError(
-          "Unable to load created leads. Please check Firestore permissions or required index."
-        );
-        setLoading(false);
-      }
-    );
-
-    return () => {
-      unsubAssigned();
-      unsubCreated();
-    };
+    return () => unsub();
   }, [user?.uid, authLoading]);
 
   /* =========================
      FILTER OPTIONS
   ========================== */
-  const stageOptions = useMemo(() => {
-    return Array.from(
-      new Set(leads.map(lead => lead.stage).filter(Boolean))
-    ).sort();
-  }, [leads]);
+  const channelOptions = useMemo(() => {
+    const channels = Array.from(
+      new Set(engagements.map(e => e.channel).filter(Boolean))
+    );
+
+    return channels.sort();
+  }, [engagements]);
 
   const activeFilterCount = useMemo(() => {
-    return Object.values(filters).filter(value =>
-      Boolean(String(value || "").trim())
-    ).length;
+    return Object.entries(filters).filter(([key, value]) => {
+      if (key === "channel") return value && value !== "all";
+      return Boolean(String(value || "").trim());
+    }).length;
   }, [filters]);
 
   const dateRangeError = useMemo(() => {
@@ -494,44 +413,39 @@ export default function LeadDashboardPage() {
     return "";
   }, [filters.dateFrom, filters.dateTo]);
 
-  /* =========================
-     FILTERED LEADS
-  ========================== */
-  const filteredLeads = useMemo(() => {
+  const filteredEngagements = useMemo(() => {
     if (dateRangeError) return [];
 
     const searchText = normalize(filters.search);
     const fromDate = getStartOfDay(filters.dateFrom);
     const toDate = getEndOfDay(filters.dateTo);
 
-    return leads.filter(lead => {
-      const createdDate = getValidDate(lead.createdAt);
-      const health = getLeadHealth(lead);
+    return engagements.filter(e => {
+      const createdDate = getValidDate(e.createdAt);
+      const channel = normalize(e.channel);
 
       if ((fromDate || toDate) && !createdDate) return false;
       if (fromDate && createdDate < fromDate) return false;
       if (toDate && createdDate > toDate) return false;
 
-      if (filters.stage && lead.stage !== filters.stage) {
-        return false;
-      }
-
-      if (filters.health && health !== filters.health) {
+      if (
+        filters.channel !== "all" &&
+        channel !== normalize(filters.channel)
+      ) {
         return false;
       }
 
       if (searchText) {
         const searchableText = [
-          lead.leadCode,
-          lead.destinationName,
-          lead.assignedToName,
-          lead.createdByName,
-          lead.stage,
-          lead.nextActionType,
-          lead.travelAgentName,
-          lead.agentName,
-          lead.agencyName,
-          lead.source
+          e.subject,
+          e.message,
+          e.outcomeCode,
+          e.outcomeLabel,
+          e.channel,
+          getAgentName(e),
+          getSpocName(e),
+          getDestinationName(e),
+          e.createdByName
         ]
           .map(normalize)
           .join(" ");
@@ -543,7 +457,7 @@ export default function LeadDashboardPage() {
 
       return true;
     });
-  }, [leads, filters, dateRangeError]);
+  }, [engagements, filters, dateRangeError]);
 
   /* =========================
      SUMMARY
@@ -552,43 +466,50 @@ export default function LeadDashboardPage() {
     const today = new Date();
 
     let todayCount = 0;
-    let healthyCount = 0;
-    let atRiskCount = 0;
-    let overdueCount = 0;
+    let meetingCount = 0;
+    let followUpDue = 0;
+    let overdueFollowUp = 0;
 
-    const stageMap = {};
-    const healthMap = {};
+    const channelMap = {};
     const destinationMap = {};
-    const ownerMap = {};
-    const sourceMap = {};
+    const agentMap = {};
+    const outcomeMap = {};
 
-    filteredLeads.forEach(lead => {
-      const createdDate = getValidDate(lead.createdAt);
+    filteredEngagements.forEach(e => {
+      const createdDate = getValidDate(e.createdAt);
 
       if (createdDate && isSameDay(createdDate, today)) {
         todayCount += 1;
       }
 
-      const health = getLeadHealth(lead);
+      if (
+        ["meeting", "online_meeting", "offline_meeting"].includes(e.channel)
+      ) {
+        meetingCount += 1;
+      }
 
-      if (health === "healthy") healthyCount += 1;
-      if (health === "at_risk") atRiskCount += 1;
-      if (health === "overdue") overdueCount += 1;
+      const followDate = getFollowUpDate(e);
 
-      const stage = lead.stage || "not_set";
-      stageMap[stage] = (stageMap[stage] || 0) + 1;
+      if (followDate) {
+        if (followDate < today && !isSameDay(followDate, today)) {
+          overdueFollowUp += 1;
+        } else if (isSameDay(followDate, today)) {
+          followUpDue += 1;
+        }
+      }
 
-      healthMap[health] = (healthMap[health] || 0) + 1;
+      const channel = e.channel || "other";
+      channelMap[channel] = (channelMap[channel] || 0) + 1;
 
-      const destination = getDestinationName(lead);
+      const destination = getDestinationName(e);
       destinationMap[destination] =
         (destinationMap[destination] || 0) + 1;
 
-      const owner = getOwnerName(lead);
-      ownerMap[owner] = (ownerMap[owner] || 0) + 1;
+      const agent = getAgentName(e);
+      agentMap[agent] = (agentMap[agent] || 0) + 1;
 
-      const source = lead.source || "Not Set";
-      sourceMap[source] = (sourceMap[source] || 0) + 1;
+      const outcome = getOutcome(e);
+      outcomeMap[outcome] = (outcomeMap[outcome] || 0) + 1;
     });
 
     const toSorted = obj =>
@@ -596,23 +517,27 @@ export default function LeadDashboardPage() {
         .map(([label, value]) => ({ label, value }))
         .sort((a, b) => b.value - a.value);
 
-    return {
-      total: filteredLeads.length,
-      today: todayCount,
-      healthy: healthyCount,
-      atRisk: atRiskCount,
-      overdue: overdueCount,
-      stageRows: toSorted(stageMap),
-      healthRows: toSorted(healthMap),
-      destinationRows: toSorted(destinationMap).slice(0, 5),
-      ownerRows: toSorted(ownerMap).slice(0, 5),
-      sourceRows: toSorted(sourceMap).slice(0, 5)
-    };
-  }, [filteredLeads]);
+    const topChannel = toSorted(channelMap)[0];
 
-  const recentLeads = useMemo(() => {
-    return filteredLeads.slice(0, 6);
-  }, [filteredLeads]);
+    return {
+      total: filteredEngagements.length,
+      today: todayCount,
+      meetings: meetingCount,
+      followUpDue,
+      overdueFollowUp,
+      channelRows: toSorted(channelMap),
+      destinationRows: toSorted(destinationMap).slice(0, 5),
+      agentRows: toSorted(agentMap).slice(0, 5),
+      outcomeRows: toSorted(outcomeMap).slice(0, 5),
+      topChannel: topChannel
+        ? `${getChannelLabel(topChannel.label)} (${topChannel.value})`
+        : "—"
+    };
+  }, [filteredEngagements]);
+
+  const recentEngagements = useMemo(() => {
+    return filteredEngagements.slice(0, 6);
+  }, [filteredEngagements]);
 
   /* =========================
      FILTER ACTIONS
@@ -684,15 +609,12 @@ export default function LeadDashboardPage() {
       <main className="min-h-screen bg-gray-50">
         <div className="max-w-7xl mx-auto px-4 py-6 space-y-4">
           <CardSkeleton />
-
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-            <CardSkeleton />
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             <CardSkeleton />
             <CardSkeleton />
             <CardSkeleton />
             <CardSkeleton />
           </div>
-
           <CardSkeleton />
           <CardSkeleton />
         </div>
@@ -714,17 +636,16 @@ export default function LeadDashboardPage() {
 
               <div>
                 <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white/90 mb-3">
-                  <Target size={14} />
-                  Lead Analytics
+                  <Activity size={14} />
+                  Engagement Analytics
                 </div>
 
                 <h1 className="text-2xl font-semibold tracking-tight text-white">
-                  Lead Dashboard
+                  Engagement Dashboard
                 </h1>
 
                 <p className="mt-1 text-sm text-blue-100 max-w-2xl leading-6">
-                  Monitor assigned and created leads, pipeline stages, health,
-                  follow-ups and destination performance from one dashboard.
+                  Monitor your calls, WhatsApp messages, emails, meetings and follow-up performance from one dashboard.
                 </p>
               </div>
             </div>
@@ -733,25 +654,21 @@ export default function LeadDashboardPage() {
 
         {/* ================= FILTER PANEL ================= */}
         <section className="rounded-3xl border border-gray-200 bg-white p-4 shadow-sm">
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-7 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
 
             <div className="xl:col-span-2">
               <label className="block text-xs font-semibold text-gray-600 mb-1.5">
                 Search
               </label>
-
               <div className="relative">
                 <Search
                   size={16}
                   className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
                 />
-
                 <input
                   value={filters.search}
-                  onChange={e =>
-                    updateFilter("search", e.target.value)
-                  }
-                  placeholder="Lead code, destination, owner..."
+                  onChange={e => updateFilter("search", e.target.value)}
+                  placeholder="Agent, destination, SPOC, outcome..."
                   className="w-full rounded-xl border border-gray-200 bg-gray-50 pl-9 pr-3 py-2.5 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                 />
               </div>
@@ -759,21 +676,17 @@ export default function LeadDashboardPage() {
 
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                Stage
+                Channel
               </label>
-
               <select
-                value={filters.stage}
-                onChange={e =>
-                  updateFilter("stage", e.target.value)
-                }
+                value={filters.channel}
+                onChange={e => updateFilter("channel", e.target.value)}
                 className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
               >
-                <option value="">All Stages</option>
-
-                {stageOptions.map(stage => (
-                  <option key={stage} value={stage}>
-                    {formatLabel(stage)}
+                <option value="all">All Channels</option>
+                {channelOptions.map(channel => (
+                  <option key={channel} value={channel}>
+                    {getChannelLabel(channel)}
                   </option>
                 ))}
               </select>
@@ -781,34 +694,12 @@ export default function LeadDashboardPage() {
 
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                Health
-              </label>
-
-              <select
-                value={filters.health}
-                onChange={e =>
-                  updateFilter("health", e.target.value)
-                }
-                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-              >
-                <option value="">All Health</option>
-                <option value="healthy">Healthy</option>
-                <option value="at_risk">Needs Attention</option>
-                <option value="overdue">Overdue</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1.5">
                 From Date
               </label>
-
               <input
                 type="date"
                 value={filters.dateFrom}
-                onChange={e =>
-                  updateFilter("dateFrom", e.target.value)
-                }
+                onChange={e => updateFilter("dateFrom", e.target.value)}
                 className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
               />
             </div>
@@ -817,13 +708,10 @@ export default function LeadDashboardPage() {
               <label className="block text-xs font-semibold text-gray-600 mb-1.5">
                 To Date
               </label>
-
               <input
                 type="date"
                 value={filters.dateTo}
-                onChange={e =>
-                  updateFilter("dateTo", e.target.value)
-                }
+                onChange={e => updateFilter("dateTo", e.target.value)}
                 className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
               />
             </div>
@@ -874,8 +762,7 @@ export default function LeadDashboardPage() {
             </button>
 
             {activeFilterCount > 0 && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 border border-blue-100 px-3 py-1.5 text-xs font-semibold text-blue-700">
-                <Filter size={13} />
+              <span className="rounded-full bg-blue-50 border border-blue-100 px-3 py-1.5 text-xs font-semibold text-blue-700">
                 {activeFilterCount} active filter
                 {activeFilterCount > 1 ? "s" : ""}
               </span>
@@ -898,8 +785,8 @@ export default function LeadDashboardPage() {
         {/* ================= KPI GRID ================= */}
         <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
           <KpiCard
-            icon={Target}
-            label="Total Leads"
+            icon={Activity}
+            label="Total Engagements"
             value={summary.total}
             helper="Matching selected filters"
             tone="blue"
@@ -914,70 +801,46 @@ export default function LeadDashboardPage() {
           />
 
           <KpiCard
-            icon={CheckCircle2}
-            label="Healthy"
-            value={summary.healthy}
-            helper="No immediate risk"
-            tone="emerald"
+            icon={Users}
+            label="Meetings"
+            value={summary.meetings}
+            helper="Meeting-based engagements"
+            tone="purple"
           />
 
           <KpiCard
             icon={Clock3}
-            label="Needs Attention"
-            value={summary.atRisk}
-            helper="Follow-up due today"
+            label="Due Today"
+            value={summary.followUpDue}
+            helper="Follow-ups due today"
             tone="amber"
           />
 
           <KpiCard
             icon={AlertTriangle}
             label="Overdue"
-            value={summary.overdue}
-            helper="Past due follow-ups"
+            value={summary.overdueFollowUp}
+            helper="Pending past due date"
             tone="red"
           />
         </section>
 
-        {/* ================= INSIGHTS GRID ================= */}
+        {/* ================= CHARTS / INSIGHTS ================= */}
         <section className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-          <div className="xl:col-span-4">
-            <SectionCard
-              title="Pipeline by Stage"
-              subtitle="Lead distribution across stages"
-            >
-              {summary.stageRows.length === 0 ? (
-                <EmptyMiniState title="No stage data" />
-              ) : (
-                <div className="space-y-4">
-                  {summary.stageRows.map(row => (
-                    <ProgressRow
-                      key={row.label}
-                      label={formatLabel(row.label)}
-                      value={row.value}
-                      total={summary.total}
-                    />
-                  ))}
-                </div>
-              )}
-            </SectionCard>
-          </div>
 
           <div className="xl:col-span-4">
             <SectionCard
-              title="Lead Health"
-              subtitle="Follow-up and risk status"
+              title="Channel Breakdown"
+              subtitle="Engagements by communication channel"
             >
-              {summary.healthRows.length === 0 ? (
-                <EmptyMiniState title="No health data" />
+              {summary.channelRows.length === 0 ? (
+                <EmptyMiniState title="No channel data" />
               ) : (
                 <div className="space-y-4">
-                  {summary.healthRows.map(row => (
+                  {summary.channelRows.map(row => (
                     <ProgressRow
                       key={row.label}
-                      label={
-                        HEALTH_META[row.label]?.label ||
-                        formatLabel(row.label)
-                      }
+                      label={getChannelLabel(row.label)}
                       value={row.value}
                       total={summary.total}
                     />
@@ -990,7 +853,7 @@ export default function LeadDashboardPage() {
           <div className="xl:col-span-4">
             <SectionCard
               title="Top Destinations"
-              subtitle="Most active destinations"
+              subtitle="Most discussed destinations"
             >
               {summary.destinationRows.length === 0 ? (
                 <EmptyMiniState title="No destination data" />
@@ -1008,20 +871,17 @@ export default function LeadDashboardPage() {
               )}
             </SectionCard>
           </div>
-        </section>
 
-        {/* ================= LOWER GRID ================= */}
-        <section className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-          <div className="xl:col-span-4 space-y-5">
+          <div className="xl:col-span-4">
             <SectionCard
-              title="Lead Owners"
-              subtitle="Assigned lead ownership"
+              title="Top Travel Agents"
+              subtitle="Most engaged agencies"
             >
-              {summary.ownerRows.length === 0 ? (
-                <EmptyMiniState title="No owner data" />
+              {summary.agentRows.length === 0 ? (
+                <EmptyMiniState title="No agent data" />
               ) : (
                 <div className="space-y-4">
-                  {summary.ownerRows.map(row => (
+                  {summary.agentRows.map(row => (
                     <ProgressRow
                       key={row.label}
                       label={row.label}
@@ -1032,16 +892,22 @@ export default function LeadDashboardPage() {
                 </div>
               )}
             </SectionCard>
+          </div>
+        </section>
 
+        {/* ================= LOWER GRID ================= */}
+        <section className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+
+          <div className="xl:col-span-4">
             <SectionCard
-              title="Lead Sources"
-              subtitle="Lead source distribution"
+              title="Outcome Summary"
+              subtitle="Common outcomes from engagements"
             >
-              {summary.sourceRows.length === 0 ? (
-                <EmptyMiniState title="No source data" />
+              {summary.outcomeRows.length === 0 ? (
+                <EmptyMiniState title="No outcome data" />
               ) : (
                 <div className="space-y-4">
-                  {summary.sourceRows.map(row => (
+                  {summary.outcomeRows.map(row => (
                     <ProgressRow
                       key={row.label}
                       label={formatLabel(row.label)}
@@ -1056,22 +922,21 @@ export default function LeadDashboardPage() {
 
           <div className="xl:col-span-8">
             <SectionCard
-              title="Recent Leads"
-              subtitle="Latest leads based on selected filters"
+              title="Recent Engagements"
+              subtitle="Latest engagement activity based on selected filters"
             >
-              {recentLeads.length === 0 ? (
+              {recentEngagements.length === 0 ? (
                 <EmptyState
                   icon="📭"
-                  title="No leads found"
+                  title="No engagements found"
                   description="Try changing your filters or date range."
                 />
               ) : (
                 <div className="space-y-3">
-                  {recentLeads.map(lead => (
-                    <RecentLeadItem
-                      key={lead.id}
-                      lead={lead}
-                      user={user}
+                  {recentEngagements.map(engagement => (
+                    <RecentEngagementItem
+                      key={engagement.id}
+                      engagement={engagement}
                     />
                   ))}
                 </div>
