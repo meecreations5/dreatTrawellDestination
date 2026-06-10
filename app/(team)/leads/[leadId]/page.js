@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import {
   collection,
   doc,
@@ -25,6 +26,8 @@ import AddFollowUpModal from "@/components/leads/AddFollowUpModal";
 import QuotationEditor from "@/components/leads/QuotationEditor";
 import AssignLeadModal from "@/components/leads/AssignLeadModal";
 import ActivityViewerModal from "@/components/leads/ActivityViewerModal";
+import ClientReferenceCard from "@/components/leads/ClientReferenceCard";
+import LeadStageCloseModal from "@/components/leads/LeadStageCloseModal";
 
 import LeadStatusChip from "@/components/leads/LeadStatusChip";
 import LeadHealthChip from "@/components/leads/LeadHealthChip";
@@ -171,6 +174,8 @@ async function findUserByUidOrEmail(value) {
   return null;
 }
 
+const closingStages = ["closed_won", "closed_lost"];
+
 const timelineFilters = [
   { value: "all", label: "All" },
   { value: "follow_up", label: "Follow-ups" },
@@ -203,6 +208,13 @@ export default function LeadDetailPage() {
   const [selectedActivity, setSelectedActivity] = useState(null);
   const [quotationToEdit, setQuotationToEdit] = useState(null);
   const [assignedUser, setAssignedUser] = useState(null);
+
+  const [stageSaving, setStageSaving] = useState(false);
+  const [stageError, setStageError] = useState("");
+  const [stageModal, setStageModal] = useState({
+    open: false,
+    newStage: ""
+  });
 
   const assignedLookupValue = useMemo(() => {
     return getFirstValue(
@@ -309,13 +321,18 @@ export default function LeadDetailPage() {
 
     if (filter === "assigned") {
       return timeline.filter(
-        event => event?.type === "assigned" || event?.type === "assignment"
+        event =>
+          event?.type === "assigned" ||
+          event?.type === "assignment"
       );
     }
 
     if (filter === "remark") {
       return timeline.filter(
-        event => event?.type === "remark" || event?.type === "note" || !event?.type
+        event =>
+          event?.type === "remark" ||
+          event?.type === "note" ||
+          !event?.type
       );
     }
 
@@ -353,6 +370,19 @@ export default function LeadDetailPage() {
     lead?.agencyName,
     lead?.travelAgent?.agencyName
   );
+
+  const travelAgentId = getFirstValue(
+    lead?.travelAgentId,
+    lead?.agentId,
+    lead?.agencyId,
+    lead?.travelAgentRefId,
+    lead?.travelAgent?.id,
+    lead?.travelAgent?.agentId
+  );
+
+  const travelAgentProfileHref = travelAgentId
+    ? `/travel-agents/${travelAgentId}`
+    : "";
 
   const source = getFirstValue(
     lead?.source,
@@ -401,6 +431,61 @@ export default function LeadDetailPage() {
 
   const actionButtonClass =
     "w-full py-2 rounded-md text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed";
+
+  const requestStageChange = async newStage => {
+    setStageError("");
+
+    if (!newStage || newStage === stage) return;
+
+    if (closingStages.includes(newStage)) {
+      setStageModal({
+        open: true,
+        newStage
+      });
+      return;
+    }
+
+    try {
+      setStageSaving(true);
+
+      await updateLeadStage({
+        leadId: lead.id,
+        newStage,
+        remark: "",
+        user
+      });
+    } catch (error) {
+      console.error("Stage update failed:", error);
+      setStageError(error?.message || "Failed to update lead stage.");
+    } finally {
+      setStageSaving(false);
+    }
+  };
+
+  const confirmClosingStage = async remark => {
+    setStageError("");
+
+    try {
+      setStageSaving(true);
+
+      await updateLeadStage({
+        leadId: lead.id,
+        newStage: stageModal.newStage,
+        remark,
+        user
+      });
+
+      setStageModal({
+        open: false,
+        newStage: ""
+      });
+    } catch (error) {
+      console.error("Closing stage update failed:", error);
+      setStageError(error?.message || "Failed to close lead.");
+    } finally {
+      setStageSaving(false);
+    }
+  };
 
   /* =========================
      LOADING
@@ -506,6 +591,8 @@ export default function LeadDetailPage() {
             </button>
           </Card>
 
+          <ClientReferenceCard lead={lead} />
+
           {/* CUSTOMER CONTACT */}
           <Card className="space-y-3">
             <p className="text-xs font-medium text-gray-500">
@@ -513,7 +600,9 @@ export default function LeadDetailPage() {
             </p>
 
             <div className="flex items-start gap-3">
-              <InitialAvatar name={customerName || customerEmail || "Customer"} />
+              <InitialAvatar
+                name={customerName || customerEmail || "Customer"}
+              />
 
               <div className="min-w-0">
                 <p className="text-sm font-semibold text-gray-900 truncate">
@@ -536,15 +625,36 @@ export default function LeadDetailPage() {
           </Card>
 
           {/* TRAVEL AGENT / SPOC */}
+          {/* TRAVEL AGENT / SPOC */}
           <Card className="space-y-3">
-            <p className="text-xs font-medium text-gray-500">
-              Travel Agent / SPOC
-            </p>
-
-            <div>
-              <p className="text-sm font-semibold text-gray-900">
-                {travelAgentName || lead.spoc?.name || "—"}
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-medium text-gray-500">
+                Travel Agent / SPOC
               </p>
+
+              {travelAgentProfileHref && (
+                <Link
+                  href={travelAgentProfileHref}
+                  className="text-xs font-medium text-blue-600 hover:underline whitespace-nowrap"
+                >
+                  View Profile
+                </Link>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+              {travelAgentProfileHref ? (
+                <Link
+                  href={travelAgentProfileHref}
+                  className="text-sm font-semibold text-blue-700 hover:underline"
+                >
+                  {travelAgentName || lead.spoc?.name || "View Travel Agent"}
+                </Link>
+              ) : (
+                <p className="text-sm font-semibold text-gray-900">
+                  {travelAgentName || lead.spoc?.name || "—"}
+                </p>
+              )}
 
               {lead.spoc?.name && travelAgentName && (
                 <p className="text-xs text-gray-500 mt-1">
@@ -561,6 +671,12 @@ export default function LeadDetailPage() {
               {lead.spoc?.mobile && (
                 <p className="text-xs text-gray-500 mt-1">
                   📱 {lead.spoc.mobile}
+                </p>
+              )}
+
+              {!travelAgentProfileHref && (
+                <p className="text-xs text-amber-600 mt-2">
+                  Travel agent profile link is unavailable because this lead does not have a travelAgentId / agentId.
                 </p>
               )}
             </div>
@@ -684,34 +800,41 @@ export default function LeadDetailPage() {
               </p>
 
               <select
-                disabled={isClosed}
+                disabled={isClosed || stageSaving}
                 value={stage}
-                onChange={async e => {
-                  const newStage = e.target.value;
-                  let remark = "";
-
-                  if (["closed_won", "closed_lost"].includes(newStage)) {
-                    remark = prompt("Closing remark is required");
-
-                    if (!remark?.trim()) return;
-                  }
-
-                  await updateLeadStage({
-                    leadId: lead.id,
-                    newStage,
-                    remark,
-                    user
-                  });
-                }}
-                className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-500"
+                onChange={e => requestStageChange(e.target.value)}
+                className="
+    w-full border border-gray-200 rounded-md
+    px-3 py-2 text-sm
+    focus:outline-none focus:ring-2 focus:ring-blue-500
+    disabled:bg-gray-100 disabled:text-gray-500
+  "
               >
                 <option value="new">New</option>
                 <option value="assigned">Assigned</option>
                 <option value="follow_up">Follow Up</option>
+                <option value="vendor_pricing_requested">
+                  Sent to Vendor for Pricing
+                </option>
+                <option value="awaiting_vendor_revert">
+                  Awaiting Vendor Revert
+                </option>
                 <option value="quoted">Quoted</option>
                 <option value="closed_won">Closed Won</option>
                 <option value="closed_lost">Closed Lost</option>
               </select>
+
+              {stageSaving && (
+                <p className="text-xs text-blue-600 mt-2">
+                  Updating stage...
+                </p>
+              )}
+
+              {stageError && !stageModal.open && (
+                <p className="text-xs text-red-600 mt-2">
+                  {stageError}
+                </p>
+              )}
             </div>
 
             {isClosed && (
@@ -720,8 +843,6 @@ export default function LeadDetailPage() {
               </p>
             )}
           </Card>
-
-
 
           {/* ADMIN REOPEN */}
           {canReopen && (
@@ -818,6 +939,7 @@ export default function LeadDetailPage() {
       {assignOpen && (
         <AssignLeadModal
           leadId={lead.id}
+          lead={lead}
           onClose={() => setAssignOpen(false)}
         />
       )}
@@ -833,6 +955,21 @@ export default function LeadDetailPage() {
           }}
         />
       )}
+
+      <LeadStageCloseModal
+        open={stageModal.open}
+        newStage={stageModal.newStage}
+        saving={stageSaving}
+        error={stageError}
+        onClose={() => {
+          setStageModal({
+            open: false,
+            newStage: ""
+          });
+          setStageError("");
+        }}
+        onConfirm={confirmClosingStage}
+      />
     </main>
   );
 }

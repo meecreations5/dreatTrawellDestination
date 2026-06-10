@@ -9,20 +9,36 @@ import {
   where
 } from "firebase/firestore";
 import {
+  getDownloadURL,
+  ref,
+  uploadBytes
+} from "firebase/storage";
+import {
   ArrowLeft,
   AlertCircle,
+  Bold,
   Building2,
   CheckCircle2,
+  FileText,
+  ImageIcon,
+  Italic,
+  Link2,
+  List,
+  ListOrdered,
   Loader2,
   Mail,
   MapPin,
+  Paperclip,
   Phone,
+  Quote,
   Search,
+  Trash2,
+  UploadCloud,
   UserRound,
   X
 } from "lucide-react";
 
-import { db } from "@/lib/firebase";
+import { db, storage } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { createManualLead } from "@/lib/createManualLead";
 
@@ -42,6 +58,30 @@ const inputClass = `
 `;
 
 const labelClass = "text-sm font-medium text-gray-700";
+
+const referenceSources = [
+  { value: "", label: "Select source" },
+  { value: "whatsapp", label: "WhatsApp" },
+  { value: "email", label: "Email" },
+  { value: "call", label: "Call Discussion" },
+  { value: "instagram", label: "Instagram / Social Media" },
+  { value: "website", label: "Website / Online" },
+  { value: "walk_in", label: "Walk-in / Offline" },
+  { value: "other", label: "Other" }
+];
+
+const allowedReferenceTypes = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/jpg",
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+];
+
+const maxReferenceFiles = 5;
+const maxFileSizeMb = 10;
 
 function getDisplayName(user) {
   return (
@@ -129,6 +169,49 @@ function formatAddress(address) {
     .join(", ");
 }
 
+function safeFileName(name = "") {
+  const cleanName = String(name)
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-zA-Z0-9._-]/g, "");
+
+  return cleanName || `reference-${Date.now()}`;
+}
+
+function formatFileSize(size = 0) {
+  if (!size) return "0 KB";
+
+  const kb = size / 1024;
+  const mb = kb / 1024;
+
+  if (mb >= 1) return `${mb.toFixed(1)} MB`;
+
+  return `${kb.toFixed(0)} KB`;
+}
+
+function stripHtml(html = "") {
+  return String(html)
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanRichHtml(html = "") {
+  return String(html || "")
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "")
+    .trim();
+}
+
+function getAttachmentType(file) {
+  if (file?.type?.startsWith("image/")) return "image";
+  if (file?.type === "application/pdf") return "pdf";
+  return "document";
+}
+
 async function loadTeamUsers() {
   try {
     const snap = await getDocs(
@@ -144,7 +227,10 @@ async function loadTeamUsers() {
       uid: doc.id
     }));
   } catch (err) {
-    console.warn("Role based team query failed. Falling back to active users.", err);
+    console.warn(
+      "Role based team query failed. Falling back to active users.",
+      err
+    );
 
     const snap = await getDocs(
       query(
@@ -160,10 +246,50 @@ async function loadTeamUsers() {
   }
 }
 
+async function uploadReferenceFiles({ files, user }) {
+  if (!files.length) return [];
+
+  const userId = user?.uid || "unknown-user";
+  const uploadedAt = new Date();
+
+  const uploads = await Promise.all(
+    files.map(async (item, index) => {
+      const file = item.file;
+      const cleanName = safeFileName(file.name);
+      const path = `uploads/lead-references/${userId}/${Date.now()}-${index}-${cleanName}`;
+
+      const storageRef = ref(storage, path);
+
+      await uploadBytes(storageRef, file, {
+        contentType: file.type || "application/octet-stream"
+      });
+
+      const url = await getDownloadURL(storageRef);
+
+      return {
+        name: file.name,
+        url,
+        path,
+        type: getAttachmentType(file),
+        mimeType: file.type || "",
+        size: file.size || 0,
+        uploadedAt,
+        uploadedByUid: user?.uid || "",
+        uploadedByName: getDisplayName(user),
+        uploadedByEmail: user?.email || ""
+      };
+    })
+  );
+
+  return uploads;
+}
+
 export default function ManualLeadCreatePage() {
   const { user, loading } = useAuth();
   const router = useRouter();
+
   const agentSearchRef = useRef(null);
+  const referenceEditorRef = useRef(null);
 
   const [destinations, setDestinations] = useState([]);
   const [agents, setAgents] = useState([]);
@@ -177,10 +303,15 @@ export default function ManualLeadCreatePage() {
   const [spocIndex, setSpocIndex] = useState(0);
   const [assignedToUid, setAssignedToUid] = useState("");
 
+  const [clientReferenceSource, setClientReferenceSource] = useState("");
+  const [clientReferenceHtml, setClientReferenceHtml] = useState("");
+  const [referenceFiles, setReferenceFiles] = useState([]);
+
   const [pageLoading, setPageLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [referenceUploading, setReferenceUploading] = useState(false);
 
   useEffect(() => {
     if (loading || !user) return;
@@ -227,7 +358,9 @@ export default function ManualLeadCreatePage() {
         console.error("Create lead data load failed:", err);
 
         if (mounted) {
-          setLoadError("Unable to load create lead data. Please refresh and try again.");
+          setLoadError(
+            "Unable to load create lead data. Please refresh and try again."
+          );
         }
       } finally {
         if (mounted) {
@@ -321,11 +454,19 @@ export default function ManualLeadCreatePage() {
     [agent]
   );
 
+  const clientReferenceText = stripHtml(clientReferenceHtml);
+
+  const hasClientReference =
+    Boolean(clientReferenceSource) ||
+    Boolean(clientReferenceText) ||
+    referenceFiles.length > 0;
+
   const canCreate =
     Boolean(destination) &&
     Boolean(agent) &&
     Boolean(spoc) &&
     !saving &&
+    !referenceUploading &&
     !pageLoading;
 
   useEffect(() => {
@@ -354,6 +495,91 @@ export default function ManualLeadCreatePage() {
     setFormError("");
   };
 
+  const syncReferenceEditorHtml = () => {
+    setClientReferenceHtml(referenceEditorRef.current?.innerHTML || "");
+  };
+
+  const runReferenceCommand = (command, value = null) => {
+    referenceEditorRef.current?.focus();
+    document.execCommand(command, false, value);
+    syncReferenceEditorHtml();
+  };
+
+  const addReferenceLink = () => {
+    const url = prompt("Paste link URL");
+
+    if (!url?.trim()) return;
+
+    runReferenceCommand("createLink", url.trim());
+  };
+
+  const handleReferencePaste = event => {
+    event.preventDefault();
+
+    const html = event.clipboardData.getData("text/html");
+    const text = event.clipboardData.getData("text/plain");
+
+    if (html) {
+      document.execCommand("insertHTML", false, cleanRichHtml(html));
+    } else {
+      document.execCommand("insertText", false, text);
+    }
+
+    syncReferenceEditorHtml();
+  };
+
+  const addReferenceFiles = event => {
+    const selectedFiles = Array.from(event.target.files || []);
+
+    if (!selectedFiles.length) return;
+
+    setFormError("");
+
+    const existingCount = referenceFiles.length;
+
+    if (existingCount + selectedFiles.length > maxReferenceFiles) {
+      setFormError(
+        `You can upload maximum ${maxReferenceFiles} reference files.`
+      );
+      event.target.value = "";
+      return;
+    }
+
+    const validFiles = [];
+
+    for (const file of selectedFiles) {
+      const fileSizeMb = file.size / (1024 * 1024);
+
+      if (!allowedReferenceTypes.includes(file.type)) {
+        setFormError(
+          "Only image, PDF, DOC and DOCX reference files are allowed."
+        );
+        event.target.value = "";
+        return;
+      }
+
+      if (fileSizeMb > maxFileSizeMb) {
+        setFormError(
+          `Each reference file must be less than ${maxFileSizeMb} MB.`
+        );
+        event.target.value = "";
+        return;
+      }
+
+      validFiles.push({
+        id: `${file.name}-${file.lastModified}-${Math.random()}`,
+        file
+      });
+    }
+
+    setReferenceFiles(prev => [...prev, ...validFiles]);
+    event.target.value = "";
+  };
+
+  const removeReferenceFile = fileId => {
+    setReferenceFiles(prev => prev.filter(item => item.id !== fileId));
+  };
+
   if (loading || !user) return null;
 
   const submit = async event => {
@@ -371,7 +597,9 @@ export default function ManualLeadCreatePage() {
     }
 
     if (!spoc) {
-      setFormError("Selected travel agent does not have a valid SPOC/contact person.");
+      setFormError(
+        "Selected travel agent does not have a valid SPOC/contact person."
+      );
       return;
     }
 
@@ -392,20 +620,45 @@ export default function ManualLeadCreatePage() {
     setSaving(true);
 
     try {
+      let uploadedReferences = [];
+
+      if (referenceFiles.length > 0) {
+        setReferenceUploading(true);
+
+        uploadedReferences = await uploadReferenceFiles({
+          files: referenceFiles,
+          user: normalizedCreatedUser
+        });
+      }
+
+      const cleanReferenceHtml = cleanRichHtml(clientReferenceHtml);
+      const cleanReferenceText = stripHtml(cleanReferenceHtml);
+
+      const clientReference = {
+        source: clientReferenceSource || "",
+        notes: cleanReferenceText,
+        notesHtml: cleanReferenceHtml,
+        attachments: uploadedReferences
+      };
+
       const leadId = await createManualLead({
         destination,
         agent,
         spoc,
         assignedUser: normalizedAssignedUser,
-        createdUser: normalizedCreatedUser
+        createdUser: normalizedCreatedUser,
+        clientReference
       });
 
       router.push(`/leads/${leadId}`);
     } catch (err) {
       console.error("Manual lead creation failed:", err);
-      setFormError("Lead could not be created. Please check the details and try again.");
+      setFormError(
+        "Lead could not be created. Please check the details and try again."
+      );
     } finally {
       setSaving(false);
+      setReferenceUploading(false);
     }
   };
 
@@ -429,7 +682,8 @@ export default function ManualLeadCreatePage() {
             </h1>
 
             <p className="text-sm text-gray-500">
-              Manually add a new travel lead and assign it to your team.
+              Manually add a new travel lead, capture client reference and
+              assign it to your team.
             </p>
           </div>
         </div>
@@ -559,7 +813,9 @@ export default function ManualLeadCreatePage() {
                                   {agent.address?.city && (
                                     <span className="text-xs text-gray-400">
                                       {agent.address.city}
-                                      {agent.address?.state ? `, ${agent.address.state}` : ""}
+                                      {agent.address?.state
+                                        ? `, ${agent.address.state}`
+                                        : ""}
                                     </span>
                                   )}
                                 </div>
@@ -587,17 +843,20 @@ export default function ManualLeadCreatePage() {
                     </p>
                   )}
 
-                  {agentSearch && !agentId && filteredAgentSuggestions.length > 0 && (
-                    <p className="text-xs text-gray-500">
-                      Select a travel agent from the suggestions.
-                    </p>
-                  )}
+                  {agentSearch &&
+                    !agentId &&
+                    filteredAgentSuggestions.length > 0 && (
+                      <p className="text-xs text-gray-500">
+                        Select a travel agent from the suggestions.
+                      </p>
+                    )}
                 </div>
 
                 {/* SPOC */}
                 <div className="space-y-1.5">
                   <label className={labelClass}>
-                    SPOC / Contact Person <span className="text-red-500">*</span>
+                    SPOC / Contact Person{" "}
+                    <span className="text-red-500">*</span>
                   </label>
 
                   <select
@@ -619,7 +878,9 @@ export default function ManualLeadCreatePage() {
 
                     {spocs.map((spoc, index) => (
                       <option
-                        key={`${spoc.name || "spoc"}-${spoc.email || spoc.phone || index}`}
+                        key={`${spoc.name || "spoc"}-${
+                          spoc.email || spoc.phone || index
+                        }`}
                         value={index}
                       >
                         {spoc.name || "Unnamed SPOC"}
@@ -630,7 +891,8 @@ export default function ManualLeadCreatePage() {
 
                   {agent && spocs.length === 0 && (
                     <p className="text-xs text-red-600">
-                      This agent does not have contact information. Please update the travel agent profile first.
+                      This agent does not have contact information. Please
+                      update the travel agent profile first.
                     </p>
                   )}
                 </div>
@@ -662,6 +924,275 @@ export default function ManualLeadCreatePage() {
                   </select>
                 </div>
 
+                {/* CLIENT REFERENCE */}
+                <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-4 space-y-4">
+                  <div className="flex items-start gap-2">
+                    <Paperclip size={18} className="text-blue-600 mt-0.5" />
+
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-900">
+                        Client Reference
+                      </h3>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        Add WhatsApp screenshots, requirement notes, email
+                        brief, PDF or reference images shared by client.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className={labelClass}>
+                        Reference Source
+                      </label>
+
+                      <select
+                        className={inputClass}
+                        value={clientReferenceSource}
+                        onChange={e =>
+                          setClientReferenceSource(e.target.value)
+                        }
+                      >
+                        {referenceSources.map(source => (
+                          <option
+                            key={source.value || "empty"}
+                            value={source.value}
+                          >
+                            {source.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className={labelClass}>
+                        Upload Reference
+                      </label>
+
+                      <label
+                        className="
+                          flex items-center justify-center gap-2
+                          border border-dashed border-blue-200
+                          bg-white rounded-lg px-3 py-2
+                          text-sm text-blue-700
+                          cursor-pointer hover:bg-blue-50
+                          transition
+                        "
+                      >
+                        <UploadCloud size={16} />
+                        Add image / PDF / document
+
+                        <input
+                          type="file"
+                          multiple
+                          accept="image/*,.pdf,.doc,.docx"
+                          onChange={addReferenceFiles}
+                          className="hidden"
+                        />
+                      </label>
+
+                      <p className="text-[11px] text-gray-500">
+                        Max {maxReferenceFiles} files, {maxFileSizeMb} MB each.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* RICH TEXT EDITOR */}
+                  <div className="space-y-1.5">
+                    <label className={labelClass}>
+                      Reference Notes / Client Requirement
+                    </label>
+
+                    <div className="border border-gray-200 bg-white rounded-lg overflow-hidden">
+                      {/* TOOLBAR */}
+                      <div className="flex flex-wrap items-center gap-1 border-b border-gray-100 bg-gray-50 px-2 py-2">
+                        <button
+                          type="button"
+                          onMouseDown={e => {
+                            e.preventDefault();
+                            runReferenceCommand("bold");
+                          }}
+                          className="p-1.5 rounded hover:bg-white text-gray-600"
+                          title="Bold"
+                        >
+                          <Bold size={15} />
+                        </button>
+
+                        <button
+                          type="button"
+                          onMouseDown={e => {
+                            e.preventDefault();
+                            runReferenceCommand("italic");
+                          }}
+                          className="p-1.5 rounded hover:bg-white text-gray-600"
+                          title="Italic"
+                        >
+                          <Italic size={15} />
+                        </button>
+
+                        <button
+                          type="button"
+                          onMouseDown={e => {
+                            e.preventDefault();
+                            runReferenceCommand("insertUnorderedList");
+                          }}
+                          className="p-1.5 rounded hover:bg-white text-gray-600"
+                          title="Bullet List"
+                        >
+                          <List size={15} />
+                        </button>
+
+                        <button
+                          type="button"
+                          onMouseDown={e => {
+                            e.preventDefault();
+                            runReferenceCommand("insertOrderedList");
+                          }}
+                          className="p-1.5 rounded hover:bg-white text-gray-600"
+                          title="Numbered List"
+                        >
+                          <ListOrdered size={15} />
+                        </button>
+
+                        <button
+                          type="button"
+                          onMouseDown={e => {
+                            e.preventDefault();
+                            runReferenceCommand("formatBlock", "blockquote");
+                          }}
+                          className="p-1.5 rounded hover:bg-white text-gray-600"
+                          title="Quote"
+                        >
+                          <Quote size={15} />
+                        </button>
+
+                        <button
+                          type="button"
+                          onMouseDown={e => {
+                            e.preventDefault();
+                            addReferenceLink();
+                          }}
+                          className="p-1.5 rounded hover:bg-white text-gray-600"
+                          title="Add Link"
+                        >
+                          <Link2 size={15} />
+                        </button>
+
+                        <div className="w-px h-5 bg-gray-200 mx-1" />
+
+                        <button
+                          type="button"
+                          onMouseDown={e => {
+                            e.preventDefault();
+                            runReferenceCommand("removeFormat");
+                          }}
+                          className="px-2 py-1 rounded hover:bg-white text-xs text-gray-600"
+                        >
+                          Clear
+                        </button>
+                      </div>
+
+                      {/* EDITOR */}
+                      <div className="relative">
+                        {!clientReferenceText && (
+                          <p className="pointer-events-none absolute left-3 top-3 text-sm text-gray-400">
+                            Example: Client shared WhatsApp screenshot for
+                            Maldives honeymoon. Wants similar resort, private
+                            pool, vegetarian meals, 4 nights...
+                          </p>
+                        )}
+
+                        <div
+                          ref={referenceEditorRef}
+                          contentEditable
+                          suppressContentEditableWarning
+                          role="textbox"
+                          aria-multiline="true"
+                          onInput={syncReferenceEditorHtml}
+                          onPaste={handleReferencePaste}
+                          className="
+                            min-h-[150px]
+                            px-3 py-3
+                            text-sm text-gray-800
+                            outline-none
+                            leading-relaxed
+
+                            [&_ul]:list-disc
+                            [&_ul]:pl-5
+                            [&_ol]:list-decimal
+                            [&_ol]:pl-5
+                            [&_blockquote]:border-l-4
+                            [&_blockquote]:border-blue-200
+                            [&_blockquote]:pl-3
+                            [&_blockquote]:text-gray-600
+                            [&_a]:text-blue-600
+                            [&_a]:underline
+                          "
+                        />
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-gray-500">
+                      Use bullets for preferences, hotel names, dates, meal
+                      plan, budget, special requests and copied client brief.
+                    </p>
+                  </div>
+
+                  {referenceFiles.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-gray-600">
+                        Selected Reference Files
+                      </p>
+
+                      <div className="space-y-2">
+                        {referenceFiles.map(item => {
+                          const file = item.file;
+                          const isImage = file.type?.startsWith("image/");
+
+                          return (
+                            <div
+                              key={item.id}
+                              className="flex items-center justify-between gap-3 bg-white border border-gray-100 rounded-lg px-3 py-2"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                {isImage ? (
+                                  <ImageIcon
+                                    size={16}
+                                    className="text-blue-600 shrink-0"
+                                  />
+                                ) : (
+                                  <FileText
+                                    size={16}
+                                    className="text-orange-600 shrink-0"
+                                  />
+                                )}
+
+                                <div className="min-w-0">
+                                  <p className="text-xs font-medium text-gray-800 truncate">
+                                    {file.name}
+                                  </p>
+                                  <p className="text-[11px] text-gray-400">
+                                    {formatFileSize(file.size)}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => removeReferenceFile(item.id)}
+                                className="text-gray-400 hover:text-red-600"
+                                aria-label="Remove file"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {formError && (
                   <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm flex items-start gap-2">
                     <AlertCircle size={16} className="mt-0.5 shrink-0" />
@@ -687,8 +1218,15 @@ export default function ManualLeadCreatePage() {
                     gap-2
                   "
                 >
-                  {saving && <Loader2 size={16} className="animate-spin" />}
-                  {saving ? "Creating Lead..." : "Create Lead"}
+                  {(saving || referenceUploading) && (
+                    <Loader2 size={16} className="animate-spin" />
+                  )}
+
+                  {referenceUploading
+                    ? "Uploading References..."
+                    : saving
+                      ? "Creating Lead..."
+                      : "Create Lead"}
                 </button>
               </>
             )}
@@ -806,6 +1344,51 @@ export default function ManualLeadCreatePage() {
                 {assignedUser?.email && (
                   <p className="text-xs text-gray-400 mt-0.5">
                     {assignedUser.email}
+                  </p>
+                )}
+              </div>
+
+              {/* CLIENT REFERENCE PREVIEW */}
+              <div className="rounded-lg border border-blue-100 bg-blue-50/40 p-3">
+                <div className="flex items-center gap-2 text-sm font-medium text-gray-800">
+                  <Paperclip size={16} className="text-blue-600" />
+                  Client Reference
+                </div>
+
+                {hasClientReference ? (
+                  <div className="mt-2 space-y-2">
+                    {clientReferenceSource && (
+                      <p className="text-xs text-gray-600 capitalize">
+                        Source:{" "}
+                        {clientReferenceSource.replaceAll("_", " ")}
+                      </p>
+                    )}
+
+                    {clientReferenceText && (
+                      <div
+                        className="
+                          text-xs text-gray-600 leading-relaxed
+                          max-h-24 overflow-hidden
+                          [&_ul]:list-disc [&_ul]:pl-4
+                          [&_ol]:list-decimal [&_ol]:pl-4
+                          [&_a]:text-blue-600 [&_a]:underline
+                        "
+                        dangerouslySetInnerHTML={{
+                          __html: clientReferenceHtml
+                        }}
+                      />
+                    )}
+
+                    {referenceFiles.length > 0 && (
+                      <p className="text-xs text-blue-700">
+                        {referenceFiles.length} file
+                        {referenceFiles.length === 1 ? "" : "s"} selected
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500 mt-2">
+                    No reference added
                   </p>
                 )}
               </div>

@@ -1,29 +1,34 @@
-// admin/page.js
-
 "use client";
 
-import { useAuth } from "@/hooks/useAuth";
-import { useRouter } from "next/navigation";
 import { useEffect } from "react";
-import { logout } from "@/lib/logout";
-import AdminDashboardGraph from "./dashboard/page";
+import { useRouter } from "next/navigation";
 
-export default function AdminDashboard() {
-  const { user, loading } = useAuth(true);
+import AdminGuard from "@/components/AdminGuard";
+import { useAuth } from "@/hooks/useAuth";
+
+export default function AdminIndexPage() {
   const router = useRouter();
+  const { user, loading } = useAuth();
 
   useEffect(() => {
-    if (!loading && !user) {
-      router.replace("/admin/login");
-    }
-  }, [loading, user, router]);
+    if (loading || !user) return;
 
-  if (loading) return <p className="p-6">Loading…</p>;
-  if (!user) return null;
+    const isSuperAdmin =
+      user.role === "super_admin" ||
+      user.isSuperAdmin === true;
+
+    if (isSuperAdmin) {
+      router.replace("/admin/dashboard");
+    } else {
+      router.replace("/admin/travel-agents");
+    }
+  }, [user, loading, router]);
 
   return (
-    // <main className="p-6">
-      <AdminDashboardGraph />
-    // </main>
+    <AdminGuard>
+      <main className="min-h-screen bg-gray-50 p-6 text-sm text-gray-500">
+        Redirecting...
+      </main>
+    </AdminGuard>
   );
 }

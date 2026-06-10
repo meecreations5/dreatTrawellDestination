@@ -151,6 +151,45 @@ function formatTime(dateValue) {
   });
 }
 
+function resolveTimelineDate(...values) {
+  for (const value of values) {
+    if (!value) continue;
+
+    // Firestore Timestamp
+    if (value?.toDate) {
+      const date = value.toDate();
+      if (!Number.isNaN(date.getTime())) return date;
+    }
+
+    // JS Date
+    if (value instanceof Date) {
+      if (!Number.isNaN(value.getTime())) return value;
+    }
+
+    // Milliseconds
+    if (typeof value === "number") {
+      const date = new Date(value);
+      if (!Number.isNaN(date.getTime())) return date;
+    }
+
+    // ISO string / datetime string
+    if (typeof value === "string") {
+      const date = new Date(value);
+      if (!Number.isNaN(date.getTime())) return date;
+    }
+
+    // Firestore-like object
+    if (
+      typeof value === "object" &&
+      typeof value.seconds === "number"
+    ) {
+      const date = new Date(value.seconds * 1000);
+      if (!Number.isNaN(date.getTime())) return date;
+    }
+  }
+
+  return null;
+}
 /* =========================
    VALUE HELPERS
 ========================= */
@@ -422,8 +461,109 @@ function enrichEventsWithCommercials(visibleEvents = [], allEvents = []) {
   });
 }
 
+function normalizeFollowUpEventForModal(event) {
+  const metadata = event.metadata || {};
+
+  const nextActionDate = resolveTimelineDate(
+    metadata.nextActionDueAt,
+    metadata.nextFollowUpAt,
+    metadata.nextActionAt,
+    metadata.followUpAt,
+
+    metadata.nextActionDueAtIso,
+    metadata.nextFollowUpAtIso,
+
+    metadata.nextActionDueAtMs,
+    metadata.nextFollowUpAtMs,
+
+    event.nextActionDueAt,
+    event.nextFollowUpAt,
+    event.nextActionDueAtIso,
+    event.nextFollowUpAtIso,
+    event.nextActionDueAtMs,
+    event.nextFollowUpAtMs
+  );
+
+  const nextActionIso = nextActionDate
+    ? nextActionDate.toISOString()
+    : "";
+
+  const nextActionMs = nextActionDate
+    ? nextActionDate.getTime()
+    : null;
+
+  return {
+    ...event,
+
+    nextFollowUpAt: nextActionDate,
+    nextActionDueAt: nextActionDate,
+    nextFollowUpAtIso: nextActionIso,
+    nextActionDueAtIso: nextActionIso,
+    nextFollowUpAtMs: nextActionMs,
+    nextActionDueAtMs: nextActionMs,
+
+    metadata: {
+      ...metadata,
+
+      action: metadata.action || "follow_up_logged",
+
+      channel:
+        metadata.channel ||
+        metadata.followUpChannel ||
+        event.channel ||
+        "",
+
+      followUpChannel:
+        metadata.followUpChannel ||
+        metadata.channel ||
+        event.channel ||
+        "",
+
+      outcome:
+        metadata.outcome ||
+        metadata.outcomeCode ||
+        event.outcome ||
+        "",
+
+      summary:
+        metadata.summary ||
+        metadata.followUpSummary ||
+        event.summary ||
+        event.description ||
+        "",
+
+      followUpSummary:
+        metadata.followUpSummary ||
+        metadata.summary ||
+        event.summary ||
+        event.description ||
+        "",
+
+      nextActionType:
+        metadata.nextActionType ||
+        event.nextActionType ||
+        "follow_up",
+
+      nextFollowUpAt: nextActionDate,
+      nextActionDueAt: nextActionDate,
+
+      nextFollowUpAtIso: nextActionIso,
+      nextActionDueAtIso: nextActionIso,
+      nextFollowUpAtMs: nextActionMs,
+      nextActionDueAtMs: nextActionMs
+    }
+  };
+}
 function normalizeEventForModal(event) {
   if (!event) return event;
+
+  if (
+    event.type === "follow_up" ||
+    event.type === "followup" ||
+    event.metadata?.action === "follow_up_logged"
+  ) {
+    return normalizeFollowUpEventForModal(event);
+  }
 
   if (event.type !== "quotation") return event;
 
@@ -532,10 +672,9 @@ function FilterButton({ active, children, onClick }) {
       onClick={onClick}
       className={`
         text-xs px-3 py-1.5 rounded-full border transition
-        ${
-          active
-            ? "bg-blue-600 text-white border-blue-600"
-            : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+        ${active
+          ? "bg-blue-600 text-white border-blue-600"
+          : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
         }
       `}
     >
@@ -682,16 +821,40 @@ function SignatureUsed({ event }) {
 }
 
 function NextFollowUp({ event }) {
-  const nextFollowUpAt = event.metadata?.nextFollowUpAt;
+  const metadata = event.metadata || {};
+
+  const nextFollowUpAt = resolveTimelineDate(
+    metadata.nextActionDueAt,
+    metadata.nextFollowUpAt,
+    metadata.nextActionAt,
+    metadata.followUpAt,
+
+    metadata.nextActionDueAtIso,
+    metadata.nextFollowUpAtIso,
+
+    metadata.nextActionDueAtMs,
+    metadata.nextFollowUpAtMs,
+
+    event.nextActionDueAt,
+    event.nextFollowUpAt,
+    event.nextActionDueAtIso,
+    event.nextFollowUpAtIso,
+    event.nextActionDueAtMs,
+    event.nextFollowUpAtMs
+  );
 
   if (!nextFollowUpAt) return null;
 
   return (
     <p className="text-xs text-blue-600 mt-2">
       ⏭ Next follow-up:{" "}
-      {nextFollowUpAt.toDate
-        ? nextFollowUpAt.toDate().toLocaleString()
-        : new Date(nextFollowUpAt).toLocaleString()}
+      {nextFollowUpAt.toLocaleString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit"
+      })}
     </p>
   );
 }
@@ -844,8 +1007,8 @@ export default function LeadTimeline({
                     const actionLabel =
                       normalizedEvent.type === "quotation"
                         ? QUOTATION_UI[
-                            getQuotationAction(normalizedEvent)
-                          ]?.label
+                          getQuotationAction(normalizedEvent)
+                        ]?.label
                         : ui.label;
 
                     return (

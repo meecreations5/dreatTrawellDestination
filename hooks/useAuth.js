@@ -7,9 +7,10 @@ import {
   getDocs,
   query,
   updateDoc,
-  where,
+  where
 } from "firebase/firestore";
 import { useEffect, useState } from "react";
+import { getPermissionsByRole } from "@/lib/rolePermissions";
 
 function getFirebaseUserEmail(firebaseUser) {
   const rawEmail =
@@ -20,6 +21,34 @@ function getFirebaseUserEmail(firebaseUser) {
   if (!rawEmail) return null;
 
   return rawEmail.trim().toLowerCase();
+}
+
+function normalizeRole(data = {}) {
+  if (data.role === "super_admin" || data.isSuperAdmin === true) {
+    return "super_admin";
+  }
+
+  if (data.role === "admin") {
+    return "admin";
+  }
+
+  if (data.isAdmin === true) {
+    return "admin";
+  }
+
+  if (data.role === "associate") {
+    return "associate";
+  }
+
+  if (data.role === "partner") {
+    return "partner";
+  }
+
+  return "employee";
+}
+
+function samePermissions(a = {}, b = {}) {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 export function useAuth() {
@@ -39,10 +68,10 @@ export function useAuth() {
         const email = getFirebaseUserEmail(currentUser);
 
         if (!email) {
-          console.error("❌ AUTH EMAIL NOT FOUND", {
+          console.error("AUTH EMAIL NOT FOUND", {
             uid: currentUser?.uid,
             email: currentUser?.email,
-            providerData: currentUser?.providerData,
+            providerData: currentUser?.providerData
           });
 
           setUser(null);
@@ -57,7 +86,7 @@ export function useAuth() {
         );
 
         if (snap.empty) {
-          console.error("❌ USER DOC NOT FOUND FOR EMAIL:", email);
+          console.error("USER DOC NOT FOUND FOR EMAIL:", email);
           setUser(null);
           return;
         }
@@ -65,10 +94,45 @@ export function useAuth() {
         const userDoc = snap.docs[0];
         const data = userDoc.data();
 
+        const role = normalizeRole(data);
+        const permissions = getPermissionsByRole(role);
+
+        const isSuperAdmin = role === "super_admin";
+        const isAdmin = role === "super_admin" || role === "admin";
+
+        const updates = {};
+
         if (data.uid !== currentUser.uid) {
+          updates.uid = currentUser.uid;
+        }
+
+        if (data.role !== role) {
+          updates.role = role;
+        }
+
+        if (data.isAdmin !== isAdmin) {
+          updates.isAdmin = isAdmin;
+        }
+
+        if (data.isSuperAdmin !== isSuperAdmin) {
+          updates.isSuperAdmin = isSuperAdmin;
+        }
+
+        if (
+          !data.permissions ||
+          !samePermissions(data.permissions, permissions)
+        ) {
+          updates.permissions = permissions;
+        }
+
+        if (data.active === undefined) {
+          updates.active = true;
+        }
+
+        if (Object.keys(updates).length > 0) {
           await updateDoc(userDoc.ref, {
-            uid: currentUser.uid,
-            updatedAt: new Date(),
+            ...updates,
+            updatedAt: new Date()
           });
         }
 
@@ -77,9 +141,14 @@ export function useAuth() {
           ...data,
           uid: currentUser.uid,
           email,
+          role,
+          isAdmin,
+          isSuperAdmin,
+          permissions,
+          active: data.active !== false
         });
       } catch (err) {
-        console.error("❌ AUTH LOAD ERROR:", err);
+        console.error("AUTH LOAD ERROR:", err);
         setUser(null);
       }
     });
@@ -89,6 +158,6 @@ export function useAuth() {
 
   return {
     user,
-    loading: user === undefined,
+    loading: user === undefined
   };
 }

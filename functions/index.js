@@ -10,7 +10,84 @@ function pad(num, size = 3) {
   return String(num).padStart(size, "0");
 }
 
-async function assertActiveAdmin(auth) {
+const MODULE_PERMISSIONS = {
+  dashboard: false,
+  destinationManagement: false,
+  travelAgentManagement: false,
+  communicationManagement: false,
+  documentManagement: false,
+  leadManagement: false,
+  attendanceManagement: false,
+  userManagement: false,
+  roleManagement: false,
+  settingsManagement: false
+};
+
+function getPermissionsByRole(role) {
+  if (role === "super_admin") {
+    return {
+      dashboard: true,
+      destinationManagement: true,
+      travelAgentManagement: true,
+      communicationManagement: true,
+      documentManagement: true,
+      leadManagement: true,
+      attendanceManagement: true,
+      userManagement: true,
+      roleManagement: true,
+      settingsManagement: true
+    };
+  }
+
+  if (role === "admin") {
+    return {
+      ...MODULE_PERMISSIONS,
+
+      dashboard: false,
+
+      destinationManagement: true,
+      travelAgentManagement: true,
+      communicationManagement: true,
+      documentManagement: true,
+
+      leadManagement: false,
+      attendanceManagement: false,
+      userManagement: false,
+      roleManagement: false,
+      settingsManagement: false
+    };
+  }
+
+  return {
+    ...MODULE_PERMISSIONS
+  };
+}
+
+function normalizeRole(data = {}) {
+  if (data.role === "super_admin" || data.isSuperAdmin === true) {
+    return "super_admin";
+  }
+
+  if (data.role === "admin") {
+    return "admin";
+  }
+
+  if (data.isAdmin === true) {
+    return "admin";
+  }
+
+  if (data.role === "associate") {
+    return "associate";
+  }
+
+  if (data.role === "partner") {
+    return "partner";
+  }
+
+  return "employee";
+}
+
+async function getLoggedInUser(auth) {
   if (!auth) {
     throw new HttpsError("unauthenticated", "Login required");
   }
@@ -26,14 +103,44 @@ async function assertActiveAdmin(auth) {
     throw new HttpsError("permission-denied", "Admin profile not found");
   }
 
-  const adminUser = snap.docs[0].data();
+  const doc = snap.docs[0];
+  const data = doc.data();
+  const role = normalizeRole(data);
 
-  if (adminUser.isAdmin !== true || adminUser.active !== true) {
+  return {
+    id: doc.id,
+    ref: doc.ref,
+    ...data,
+    role,
+    isSuperAdmin: role === "super_admin",
+    isAdmin: role === "super_admin" || role === "admin",
+    permissions: getPermissionsByRole(role)
+  };
+}
+
+async function assertUserManagementAccess(auth) {
+  const currentUser = await getLoggedInUser(auth);
+
+  if (currentUser.active !== true) {
     throw new HttpsError(
       "permission-denied",
-      "Only active admins can perform this action"
+      "Only active users can perform this action"
     );
   }
+
+  const hasAccess =
+    currentUser.isSuperAdmin === true ||
+    currentUser.permissions?.userManagement === true ||
+    currentUser.permissions?.roleManagement === true;
+
+  if (!hasAccess) {
+    throw new HttpsError(
+      "permission-denied",
+      "Only Super Admin can manage users and roles"
+    );
+  }
+
+  return currentUser;
 }
 
 async function generateEmployeeId(role, associateType) {
@@ -41,6 +148,16 @@ async function generateEmployeeId(role, associateType) {
 
   let counterKey = null;
   let prefix = null;
+
+  if (role === "super_admin") {
+    counterKey = "super_admin";
+    prefix = "DT-SA";
+  }
+
+  if (role === "admin") {
+    counterKey = "admin";
+    prefix = "DT-ADM";
+  }
 
   if (role === "employee") {
     counterKey = "employee";
@@ -51,7 +168,7 @@ async function generateEmployeeId(role, associateType) {
     const map = {
       freelancer: "FRL",
       consultant: "CON",
-      "self-employed": "SEL",
+      "self-employed": "SEL"
     };
 
     if (!map[associateType]) {
@@ -87,17 +204,16 @@ async function generateEmployeeId(role, associateType) {
 exports.createTeamUser = onCall(async (request) => {
   const { auth, data } = request;
 
-  await assertActiveAdmin(auth);
+  await assertUserManagementAccess(auth);
 
   let {
     email,
     name,
-    role,
+    role = "employee",
     mobile = "",
-    associateType,
-    isAdmin = false,
+    associateType = "",
     active = true,
-    authProvider = "google",
+    authProvider = "google"
   } = data;
 
   email = email?.trim().toLowerCase();
@@ -112,14 +228,18 @@ exports.createTeamUser = onCall(async (request) => {
     throw new HttpsError("invalid-argument", "Invalid email address");
   }
 
-  if (role === "team") role = "employee";
-
-  if (role === "admin") {
+  if (role === "team") {
     role = "employee";
-    isAdmin = true;
   }
 
-  const allowedRoles = ["employee", "associate", "partner"];
+  const allowedRoles = [
+    "super_admin",
+    "admin",
+    "employee",
+    "associate",
+    "partner"
+  ];
+
   const allowedProviders = ["google", "microsoft"];
 
   if (!allowedRoles.includes(role)) {
@@ -145,6 +265,10 @@ exports.createTeamUser = onCall(async (request) => {
     throw new HttpsError("already-exists", "User already exists");
   }
 
+  const isSuperAdmin = role === "super_admin";
+  const isAdmin = role === "super_admin" || role === "admin";
+  const permissions = getPermissionsByRole(role);
+
   const userRef = admin.firestore().collection("users").doc();
   const employeeId = await generateEmployeeId(role, associateType);
 
@@ -154,23 +278,37 @@ exports.createTeamUser = onCall(async (request) => {
     name,
     mobile,
     role,
-    isAdmin: role === "employee" ? isAdmin === true : false,
     employeeId,
+
+    isAdmin,
+    isSuperAdmin,
+    permissions,
+
     active: active === true,
     authProvider,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  };
 
-  if (role === "associate") {
-    payload.associateType = associateType;
-  }
+    associateType: role === "associate" ? associateType : "",
+
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  };
 
   await userRef.set(payload);
 
   return {
     id: userRef.id,
-    ...payload,
+    uid: null,
+    email,
+    name,
+    mobile,
+    role,
+    employeeId,
+    isAdmin,
+    isSuperAdmin,
+    permissions,
+    associateType: payload.associateType,
+    active: payload.active,
+    authProvider
   };
 });
 
@@ -178,10 +316,17 @@ exports.deleteUser = onCall(async (request) => {
   const { auth, data } = request;
   const { id } = data;
 
-  await assertActiveAdmin(auth);
+  const currentUser = await assertUserManagementAccess(auth);
 
   if (!id) {
     throw new HttpsError("invalid-argument", "User document ID is required");
+  }
+
+  if (currentUser.id === id) {
+    throw new HttpsError(
+      "failed-precondition",
+      "You cannot delete your own account"
+    );
   }
 
   const userRef = admin.firestore().collection("users").doc(id);
@@ -191,7 +336,19 @@ exports.deleteUser = onCall(async (request) => {
     throw new HttpsError("not-found", "User not found");
   }
 
+  const userData = userSnap.data();
+
+  if (userData.role === "super_admin" || userData.isSuperAdmin === true) {
+    throw new HttpsError(
+      "permission-denied",
+      "Super Admin users cannot be deleted from this action"
+    );
+  }
+
   await userRef.delete();
 
-  return { status: "deleted" };
+  return {
+    status: "deleted",
+    id
+  };
 });

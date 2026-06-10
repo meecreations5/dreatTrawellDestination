@@ -1,5 +1,3 @@
-// config/adminSidebar.js
-
 import {
   LayoutDashboard,
   Users,
@@ -21,177 +19,204 @@ import {
   History,
   ClipboardCheck,
   Calendar,
-  UploadCloud
+  UploadCloud,
+  ShieldCheck
 } from "lucide-react";
 
 export const adminSidebar = [
-  /* ================= DASHBOARD ================= */
   {
     label: "Dashboard",
     icon: LayoutDashboard,
-    href: "/admin/dashboard"
+    href: "/admin/dashboard",
+    permission: "dashboard"
   },
 
-  /* ================= TRAVEL AGENTS ================= */
   {
     label: "Travel Agents",
     icon: PlaneTakeoff,
+    permission: "travelAgentManagement",
     children: [
       {
         label: "Dashboard",
         icon: BarChart3,
-        href: "/admin/travel-agents/dashboard"
+        href: "/admin/travel-agents/dashboard",
+        permission: "travelAgentManagement"
       },
       {
         label: "All Agents",
         icon: Users,
-        href: "/admin/travel-agents"
+        href: "/admin/travel-agents",
+        permission: "travelAgentManagement"
       },
       {
         label: "Add Agent",
         icon: UserPlus,
-        href: "/admin/travel-agents/new"
+        href: "/admin/travel-agents/new",
+        permission: "travelAgentManagement"
       },
       {
         label: "Bulk Upload",
         icon: UploadCloud,
-        href: "/admin/travel-agents/bulk-upload"
+        href: "/admin/travel-agents/bulk-upload",
+        permission: "travelAgentManagement"
       },
       {
         label: "Engagements",
         icon: Handshake,
-        href: "/admin/travel-agents/engagements"
+        href: "/admin/travel-agents/engagements",
+        permission: "travelAgentManagement"
       }
     ]
   },
 
-  /* ================= LEADS ================= */
   {
     label: "Leads",
     icon: Target,
+    permission: "leadManagement",
     children: [
       {
         label: "All Leads",
         icon: Target,
-        href: "/admin/leads"
+        href: "/admin/leads",
+        permission: "leadManagement"
       },
       {
         label: "Manual Lead",
         icon: PlusCircle,
-        href: "/admin/leads/new"
+        href: "/admin/leads/new",
+        permission: "leadManagement"
       },
       {
         label: "Analytics",
         icon: BarChart3,
-        href: "/admin/leads/dashboard"
+        href: "/admin/leads/dashboard",
+        permission: "leadManagement"
       }
     ]
   },
 
-  /* ================= DESTINATIONS ================= */
   {
     label: "Destinations",
     icon: Map,
+    permission: "destinationManagement",
     children: [
       {
         label: "All Destinations",
         icon: MapPin,
-        href: "/admin/destinations"
+        href: "/admin/destinations",
+        permission: "destinationManagement"
       },
       {
         label: "Add Destination",
         icon: PlusCircle,
-        href: "/admin/destinations/new"
+        href: "/admin/destinations/new",
+        permission: "destinationManagement"
       }
     ]
   },
 
-  /* ================= COMMUNICATION ================= */
   {
     label: "Communication",
     icon: MessageSquare,
+    permission: "communicationManagement",
     children: [
       {
         label: "Templates",
         icon: FileText,
-        href: "/admin/communication-templates"
+        href: "/admin/communication-templates",
+        permission: "communicationManagement"
       },
       {
         label: "Categories",
         icon: Folder,
-        href: "/admin/template-categories"
+        href: "/admin/template-categories",
+        permission: "communicationManagement"
       }
     ]
   },
 
-  /* ================= DOCUMENTS ================= */
   {
     label: "Documents",
     icon: Folder,
+    permission: "documentManagement",
     children: [
       {
         label: "Repository",
         icon: FileText,
-        href: "/admin/documents"
+        href: "/admin/documents",
+        permission: "documentManagement"
       },
       {
         label: "Versions",
         icon: GitBranch,
-        href: "/admin/documents/versions"
+        href: "/admin/documents/versions",
+        permission: "documentManagement"
       }
     ]
   },
 
-  /* ================= ATTENDANCE ================= */
   {
     label: "Attendance",
     icon: CalendarDays,
+    permission: "attendanceManagement",
     children: [
       {
         label: "Leave",
         icon: ClipboardCheck,
-        href: "/admin/attendance/leave"
+        href: "/admin/attendance/leave",
+        permission: "attendanceManagement"
       },
       {
         label: "History",
         icon: History,
-        href: "/admin/attendance/history"
+        href: "/admin/attendance/history",
+        permission: "attendanceManagement"
       },
       {
         label: "Monthly",
         icon: Calendar,
-        href: "/admin/attendance/monthly"
+        href: "/admin/attendance/monthly",
+        permission: "attendanceManagement"
       },
       {
         label: "Regularisation",
         icon: ClipboardCheck,
-        href: "/admin/attendance/regularisation"
+        href: "/admin/attendance/regularisation",
+        permission: "attendanceManagement"
       }
     ]
   },
 
-  /* ================= TEAM MANAGEMENT ================= */
   {
     label: "Team Management",
     icon: UserCog,
+    permission: "userManagement",
     children: [
       {
         label: "Users",
         icon: Users,
-        href: "/admin/users"
+        href: "/admin/users",
+        permission: "userManagement"
       },
       {
         label: "Add User",
         icon: UserPlus,
-        href: "/admin/users/new"
+        href: "/admin/users/new",
+        permission: "userManagement"
+      },
+      {
+        label: "Role Management",
+        icon: ShieldCheck,
+        href: "/admin/roles",
+        permission: "roleManagement"
       }
     ]
   },
 
-  /* ================= SETTINGS ================= */
   {
     label: "Settings",
     icon: Settings,
-    href: "/admin/settings/branding"
+    href: "/admin/settings/branding",
+    permission: "settingsManagement"
   }
 ];
