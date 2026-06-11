@@ -1,18 +1,27 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { collection, getDocs } from "firebase/firestore";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  serverTimestamp,
+  updateDoc
+} from "firebase/firestore";
+import { Loader2, ShieldAlert, Trash2 } from "lucide-react";
+import Link from "next/link";
+
 import { db } from "@/lib/firebase";
+import { useAuth } from "@/hooks/useAuth";
 import AdminGuard from "@/components/AdminGuard";
 
 import TravelAgentFilterBar from "@/components/travel-agents/TravelAgentFilters";
-import TravelAgentStatusToggle from "@/components/travel-agents/TravelAgentStatusToggle";
 import TravelAgentExportCSV from "@/components/travel-agents/TravelAgentExportCSV";
 import TravelAgentImportCSV from "@/components/travel-agents/TravelAgentImportCSV";
 import AgentSideDrawer from "@/components/travel-agents/AgentSideDrawer";
 
 import EmptyState from "@/components/ui/EmptyState";
-import Link from "next/link";
 
 const MAUChip = ({ label }) => (
   <span className="px-2 py-[2px] rounded-md text-[11px] bg-slate-100 text-slate-700">
@@ -28,9 +37,24 @@ const EngagementBadge = ({ status }) => (
   </span>
 );
 
+const StatusBadge = ({ status }) => {
+  const active = status === "active";
+
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+        active
+          ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+          : "border-slate-200 bg-slate-100 text-slate-600"
+      }`}
+    >
+      {active ? "Active" : "Inactive"}
+    </span>
+  );
+};
+
 const SortButton = ({ label, sortKey, sort, setSort }) => {
   const active = sort.key === sortKey;
-
   const nextDirection =
     active && sort.direction === "asc" ? "desc" : "asc";
 
@@ -50,6 +74,34 @@ const SortButton = ({ label, sortKey, sort, setSort }) => {
         {active ? (sort.direction === "asc" ? "↑" : "↓") : "↕"}
       </span>
     </button>
+  );
+};
+
+const normalizeRole = value =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+
+const isUserSuperAdmin = user => {
+  if (!user) return false;
+
+  const possibleRoles = [
+    user.role,
+    user.userRole,
+    user.type,
+    user.claims?.role,
+    user.customClaims?.role,
+    user.profile?.role,
+    user.dbUser?.role
+  ];
+
+  return (
+    user.isSuperAdmin === true ||
+    user.superAdmin === true ||
+    user.claims?.super_admin === true ||
+    user.customClaims?.super_admin === true ||
+    possibleRoles.some(role => normalizeRole(role) === "super_admin")
   );
 };
 
@@ -111,6 +163,13 @@ const getAgentLocation = agent => {
   );
 };
 
+const getAgentStatus = agent => {
+  const status = String(agent.status || "").toLowerCase();
+
+  if (status === "active" || agent.active === true) return "active";
+  return "inactive";
+};
+
 const getLatestEngagement = agent => {
   if (Array.isArray(agent.engagements) && agent.engagements.length > 0) {
     const latest = [...agent.engagements]
@@ -118,9 +177,9 @@ const getLatestEngagement = agent => {
         ...item,
         parsedDate: toDate(
           item.engagedAt ||
-          item.createdAt ||
-          item.date ||
-          item.followUpAt
+            item.createdAt ||
+            item.date ||
+            item.followUpAt
         )
       }))
       .filter(item => item.parsedDate)
@@ -137,7 +196,7 @@ const getLatestEngagement = agent => {
 
   const fallbackDate = toDate(
     agent.lastEngagementAt ||
-    agent.lastContactedAt
+      agent.lastContactedAt
   );
 
   return {
@@ -180,12 +239,18 @@ const getEngagementStatus = agent => {
 };
 
 export default function AdminTravelAgentsPage() {
+  const { user } = useAuth();
+
   const [agents, setAgents] = useState([]);
   const [destinations, setDestinations] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const [view, setView] = useState("table");
   const [selectedAgent, setSelectedAgent] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [actionLoading, setActionLoading] = useState({});
+
+  const isSuperAdmin = isUserSuperAdmin(user);
 
   const [sort, setSort] = useState({
     key: "agencyName",
@@ -201,6 +266,16 @@ export default function AdminTravelAgentsPage() {
     city: "",
     engagement: ""
   });
+
+  const setBusy = (agentId, action, value) => {
+    setActionLoading(prev => ({
+      ...prev,
+      [`${agentId}-${action}`]: value
+    }));
+  };
+
+  const isBusy = (agentId, action) =>
+    actionLoading[`${agentId}-${action}`] === true;
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -232,6 +307,76 @@ export default function AdminTravelAgentsPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  const handleStatusChange = async agent => {
+    if (!isSuperAdmin) return;
+
+    const currentStatus = getAgentStatus(agent);
+    const nextStatus = currentStatus === "active" ? "inactive" : "active";
+
+    setBusy(agent.id, "status", true);
+
+    try {
+      await updateDoc(doc(db, "travelAgents", agent.id), {
+        status: nextStatus,
+        active: nextStatus === "active",
+        updatedAt: serverTimestamp(),
+        updatedByUid: user?.uid || "",
+        updatedByName: user?.displayName || user?.email || ""
+      });
+
+      setAgents(prev =>
+        prev.map(item =>
+          item.id === agent.id
+            ? {
+                ...item,
+                status: nextStatus,
+                active: nextStatus === "active"
+              }
+            : item
+        )
+      );
+
+      setSelectedAgent(prev =>
+        prev?.id === agent.id
+          ? {
+              ...prev,
+              status: nextStatus,
+              active: nextStatus === "active"
+            }
+          : prev
+      );
+    } catch (error) {
+      console.error(error);
+      alert(error?.message || "Unable to update travel agent status.");
+    } finally {
+      setBusy(agent.id, "status", false);
+    }
+  };
+
+  const handleDeleteAgent = async () => {
+    if (!isSuperAdmin || !deleteTarget?.id) return;
+
+    const agentId = deleteTarget.id;
+    setBusy(agentId, "delete", true);
+
+    try {
+      await deleteDoc(doc(db, "travelAgents", agentId));
+
+      setAgents(prev => prev.filter(agent => agent.id !== agentId));
+
+      if (selectedAgent?.id === agentId) {
+        setSelectedAgent(null);
+      }
+
+      setDeleteTarget(null);
+    } catch (error) {
+      console.error(error);
+      alert(error?.message || "Unable to delete travel agent.");
+    } finally {
+      setBusy(agentId, "delete", false);
+    }
+  };
 
   const destinationMap = useMemo(() => {
     const map = {};
@@ -308,7 +453,7 @@ export default function AdminTravelAgentsPage() {
         return false;
       }
 
-      if (filters.status && agent.status !== filters.status) {
+      if (filters.status && getAgentStatus(agent) !== filters.status) {
         return false;
       }
 
@@ -381,7 +526,7 @@ export default function AdminTravelAgentsPage() {
           return getAgentDestinations(agent).length;
 
         case "status":
-          return normalize(agent.status);
+          return normalize(getAgentStatus(agent));
 
         case "agencyType":
           return normalize(agent.agencyType);
@@ -415,6 +560,60 @@ export default function AdminTravelAgentsPage() {
     });
   }, [filteredAgents, sort, getAgentDestinations]);
 
+  const renderStatusAction = agent => {
+    const status = getAgentStatus(agent);
+    const nextLabel = status === "active" ? "Disable" : "Enable";
+    const busy = isBusy(agent.id, "status");
+
+    return (
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-2">
+          <StatusBadge status={status} />
+
+          {isSuperAdmin && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => handleStatusChange(agent)}
+              className={`inline-flex h-7 items-center rounded-lg border px-2.5 text-[11px] font-medium transition ${
+                status === "active"
+                  ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                  : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+              } disabled:cursor-not-allowed disabled:opacity-60`}
+            >
+              {busy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                nextLabel
+              )}
+            </button>
+          )}
+        </div>
+
+        {!isSuperAdmin && (
+          <span className="text-[10px] text-gray-400">
+            Super admin only
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  const renderDeleteAction = agent => {
+    if (!isSuperAdmin) return null;
+
+    return (
+      <button
+        type="button"
+        onClick={() => setDeleteTarget(agent)}
+        className="inline-flex items-center gap-1 text-red-600 hover:text-red-700"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+        Delete
+      </button>
+    );
+  };
+
   return (
     <AdminGuard>
       <main className="p-6 w-full mx-auto space-y-4">
@@ -428,9 +627,17 @@ export default function AdminTravelAgentsPage() {
             </p>
           </div>
 
-          <p className="text-xs text-gray-500">
-            {sortedAgents.length} of {agents.length} agents
-          </p>
+          <div className="text-right">
+            <p className="text-xs text-gray-500">
+              {sortedAgents.length} of {agents.length} agents
+            </p>
+
+            {isSuperAdmin && (
+              <p className="mt-1 inline-flex rounded-full bg-violet-50 px-2 py-1 text-[10px] font-medium text-violet-700">
+                Super admin controls enabled
+              </p>
+            )}
+          </div>
         </div>
 
         <TravelAgentFilterBar
@@ -492,7 +699,7 @@ export default function AdminTravelAgentsPage() {
         {!loading && view === "table" && sortedAgents.length > 0 && (
           <div className="border border-gray-100 rounded-xl bg-white overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="min-w-[1080px] w-full text-sm">
+              <table className="min-w-[1180px] w-full text-sm">
                 <thead className="bg-gray-50/60 text-xs text-gray-500">
                   <tr>
                     <th className="px-4 py-3 text-left">
@@ -549,7 +756,9 @@ export default function AdminTravelAgentsPage() {
                       />
                     </th>
 
-                    <th className="px-4 py-3" />
+                    <th className="px-4 py-3 text-right">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
 
@@ -645,10 +854,7 @@ export default function AdminTravelAgentsPage() {
                         </td>
 
                         <td className="px-4 py-3">
-                          <TravelAgentStatusToggle
-                            agentId={agent.id}
-                            currentStatus={agent.status || "inactive"}
-                          />
+                          {renderStatusAction(agent)}
                         </td>
 
                         <td className="px-4 py-3 text-right">
@@ -674,6 +880,8 @@ export default function AdminTravelAgentsPage() {
                             >
                               Edit
                             </Link>
+
+                            {renderDeleteAction(agent)}
                           </div>
                         </td>
                       </tr>
@@ -708,10 +916,7 @@ export default function AdminTravelAgentsPage() {
                       </p>
                     </div>
 
-                    <TravelAgentStatusToggle
-                      agentId={agent.id}
-                      currentStatus={agent.status || "inactive"}
-                    />
+                    {renderStatusAction(agent)}
                   </div>
 
                   <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
@@ -754,7 +959,7 @@ export default function AdminTravelAgentsPage() {
                     )}
                   </div>
 
-                  <div className="mt-4 flex gap-4 text-xs">
+                  <div className="mt-4 flex flex-wrap gap-4 text-xs">
                     <button
                       type="button"
                       onClick={() => setSelectedAgent(agent)}
@@ -771,11 +976,13 @@ export default function AdminTravelAgentsPage() {
                     </Link>
 
                     <Link
-                      href={`/admin/travel-agents/${agent.id}`}
+                      href={`/admin/travel-agents/${agent.id}/edit`}
                       className="text-gray-600 hover:underline"
                     >
                       Edit
                     </Link>
+
+                    {renderDeleteAction(agent)}
                   </div>
                 </div>
               );
@@ -789,6 +996,55 @@ export default function AdminTravelAgentsPage() {
             destinations={getAgentDestinations(selectedAgent)}
             onClose={() => setSelectedAgent(null)}
           />
+        )}
+
+        {deleteTarget && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+            <div className="w-full max-w-md rounded-2xl border border-gray-100 bg-white p-5 shadow-xl">
+              <div className="flex items-start gap-3">
+                <div className="rounded-xl bg-red-50 p-2 text-red-600">
+                  <ShieldAlert className="h-5 w-5" />
+                </div>
+
+                <div className="flex-1">
+                  <h2 className="text-base font-semibold text-gray-900">
+                    Delete travel agent?
+                  </h2>
+
+                  <p className="mt-1 text-sm text-gray-500">
+                    This will permanently delete{" "}
+                    <span className="font-medium text-gray-800">
+                      {deleteTarget.agencyName || "this agency"}
+                    </span>
+                    . This action cannot be undone.
+                  </p>
+
+                  <div className="mt-5 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setDeleteTarget(null)}
+                      disabled={isBusy(deleteTarget.id, "delete")}
+                      className="h-9 rounded-lg border border-gray-200 px-4 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                    >
+                      Cancel
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleDeleteAgent}
+                      disabled={isBusy(deleteTarget.id, "delete")}
+                      className="inline-flex h-9 items-center gap-2 rounded-lg bg-red-600 px-4 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isBusy(deleteTarget.id, "delete") && (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      )}
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
       </main>
     </AdminGuard>
