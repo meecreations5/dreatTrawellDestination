@@ -23,7 +23,10 @@ import {
   Route,
   ShieldCheck,
   UserRound,
-  Users
+  Users,
+  AlertTriangle,
+  CheckCircle2,
+  Link2
 } from "lucide-react";
 
 import TravelChip from "@/components/ui/TravelChip";
@@ -206,6 +209,137 @@ function getKycColor(status) {
   return "neutral";
 }
 
+function getProfileCompletion(agent) {
+  if (!agent) {
+    return {
+      percent: 0,
+      label: "Profile unavailable",
+      tone: "gray",
+      complete: false,
+      missing: []
+    };
+  }
+
+  const directComplete =
+    agent.profileCompleted ??
+    agent.isProfileComplete ??
+    agent.profileComplete ??
+    agent.isComplete;
+
+  const status = normalize(
+    agent.profileStatus ||
+      agent.profileCompletionStatus ||
+      agent.profileCompleteStatus
+  );
+
+  const directPercent = Number(
+    agent.profileCompletionPercentage ??
+      agent.profileCompletionPercent ??
+      agent.completionPercentage ??
+      agent.profileCompletion ??
+      0
+  );
+
+  if (directComplete === true || ["complete", "completed"].includes(status)) {
+    return {
+      percent: 100,
+      label: "Profile Complete",
+      tone: "green",
+      complete: true,
+      missing: []
+    };
+  }
+
+  if (!Number.isNaN(directPercent) && directPercent >= 100) {
+    return {
+      percent: 100,
+      label: "Profile Complete",
+      tone: "green",
+      complete: true,
+      missing: []
+    };
+  }
+
+  if (!Number.isNaN(directPercent) && directPercent > 0) {
+    return {
+      percent: Math.round(directPercent),
+      label: `${Math.round(directPercent)}% Complete`,
+      tone: directPercent >= 80 ? "green" : directPercent >= 60 ? "amber" : "red",
+      complete: directPercent >= 100,
+      missing: []
+    };
+  }
+
+  const primarySpoc = getPrimarySpoc(agent);
+  const destinations = getDestinations(agent);
+  const preferredChannels = getPreferredChannels(agent);
+
+  const checks = [
+    {
+      label: "Agency name",
+      done: Boolean(agent.agencyName || agent.name)
+    },
+    {
+      label: "Agent code",
+      done: Boolean(agent.agentCode)
+    },
+    {
+      label: "Agency type",
+      done: Boolean(agent.agencyType)
+    },
+    {
+      label: "Relationship stage",
+      done: Boolean(agent.relationshipStage)
+    },
+    {
+      label: "KYC status",
+      done: Boolean(agent.kycStatus)
+    },
+    {
+      label: "City",
+      done: Boolean(agent.address?.city || agent.city)
+    },
+    {
+      label: "Country",
+      done: Boolean(agent.address?.country || agent.country)
+    },
+    {
+      label: "Primary SPOC",
+      done: Boolean(primarySpoc?.name)
+    },
+    {
+      label: "SPOC email",
+      done: Boolean(getAgentEmail(agent, primarySpoc))
+    },
+    {
+      label: "SPOC phone",
+      done: Boolean(getAgentPhone(agent, primarySpoc))
+    },
+    {
+      label: "Destinations",
+      done: destinations.length > 0
+    },
+    {
+      label: "Preferred communication",
+      done: preferredChannels.length > 0
+    }
+  ];
+
+  const completedCount = checks.filter(item => item.done).length;
+  const percent = Math.round((completedCount / checks.length) * 100);
+  const missing = checks
+    .filter(item => !item.done)
+    .map(item => item.label);
+
+  return {
+    percent,
+    label: percent >= 100 ? "Profile Complete" : `${percent}% Complete`,
+    tone: percent >= 80 ? "green" : percent >= 60 ? "amber" : "red",
+    complete: percent >= 100,
+    missing
+  };
+}
+
 /* =========================
    SMALL UI COMPONENTS
 ========================= */
@@ -221,7 +355,9 @@ function SummaryCard({
     emerald: "border-emerald-100 bg-emerald-50 text-emerald-700",
     amber: "border-amber-100 bg-amber-50 text-amber-700",
     violet: "border-violet-100 bg-violet-50 text-violet-700",
-    rose: "border-rose-100 bg-rose-50 text-rose-700"
+    rose: "border-rose-100 bg-rose-50 text-rose-700",
+    green: "border-green-100 bg-green-50 text-green-700",
+    red: "border-red-100 bg-red-50 text-red-700"
   };
 
   return (
@@ -267,7 +403,9 @@ function SectionCard({
     amber: "bg-amber-50 text-amber-700",
     violet: "bg-violet-50 text-violet-700",
     rose: "bg-rose-50 text-rose-700",
-    slate: "bg-slate-50 text-slate-700"
+    slate: "bg-slate-50 text-slate-700",
+    green: "bg-green-50 text-green-700",
+    red: "bg-red-50 text-red-700"
   };
 
   const lineMap = {
@@ -276,7 +414,9 @@ function SectionCard({
     amber: "from-amber-500 to-orange-500",
     violet: "from-violet-500 to-purple-500",
     rose: "from-rose-500 to-pink-500",
-    slate: "from-slate-500 to-gray-500"
+    slate: "from-slate-500 to-gray-500",
+    green: "from-green-500 to-emerald-500",
+    red: "from-red-500 to-rose-500"
   };
 
   return (
@@ -327,6 +467,115 @@ function EmptyCardText({ children }) {
     <p className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
       {children}
     </p>
+  );
+}
+
+function ProfileCompletionBadge({ completion }) {
+  const toneClasses = {
+    green: "border-green-200 bg-green-50 text-green-700",
+    amber: "border-amber-200 bg-amber-50 text-amber-700",
+    red: "border-red-200 bg-red-50 text-red-700",
+    gray: "border-gray-200 bg-gray-50 text-gray-600"
+  };
+
+  return (
+    <span
+      className={`
+        inline-flex items-center gap-1.5 rounded-full border px-3 py-1
+        text-xs font-semibold backdrop-blur
+        ${toneClasses[completion.tone] || toneClasses.gray}
+      `}
+    >
+      {completion.complete ? (
+        <CheckCircle2 size={13} />
+      ) : (
+        <AlertTriangle size={13} />
+      )}
+      {completion.label}
+    </span>
+  );
+}
+
+function ProfileCompletionPanel({ completion }) {
+  const toneMap = {
+    green: {
+      bar: "bg-green-500",
+      text: "text-green-700",
+      bg: "bg-green-50",
+      border: "border-green-100"
+    },
+    amber: {
+      bar: "bg-amber-500",
+      text: "text-amber-700",
+      bg: "bg-amber-50",
+      border: "border-amber-100"
+    },
+    red: {
+      bar: "bg-red-500",
+      text: "text-red-700",
+      bg: "bg-red-50",
+      border: "border-red-100"
+    },
+    gray: {
+      bar: "bg-gray-400",
+      text: "text-gray-600",
+      bg: "bg-gray-50",
+      border: "border-gray-100"
+    }
+  };
+
+  const tone = toneMap[completion.tone] || toneMap.gray;
+
+  return (
+    <div className={`rounded-xl border ${tone.border} ${tone.bg} p-4`}>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-medium text-gray-500">
+            Profile Completion
+          </p>
+
+          <p className={`mt-1 text-lg font-bold ${tone.text}`}>
+            {completion.percent}%
+          </p>
+        </div>
+
+        <ProfileCompletionBadge completion={completion} />
+      </div>
+
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
+        <div
+          className={`h-full rounded-full ${tone.bar}`}
+          style={{
+            width: `${Math.min(Math.max(completion.percent, 0), 100)}%`
+          }}
+        />
+      </div>
+
+      {completion.missing?.length > 0 && (
+        <div className="mt-3">
+          <p className="text-xs font-medium text-gray-600">
+            Missing fields
+          </p>
+
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {completion.missing.slice(0, 5).map(item => (
+              <span
+                key={item}
+                className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-gray-600"
+              >
+                {item}
+              </span>
+            ))}
+
+            {completion.missing.length > 5 && (
+              <span className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-gray-600">
+                +{completion.missing.length - 5} more
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -402,6 +651,7 @@ export default function TravelAgentDetailPage() {
 
   const [agent, setAgent] = useState(null);
   const [loadingAgent, setLoadingAgent] = useState(true);
+  const [profileCopied, setProfileCopied] = useState(false);
 
   /* ================= LOAD ================= */
   useEffect(() => {
@@ -475,8 +725,29 @@ export default function TravelAgentDetailPage() {
   const fullAddress = formatAddress(agent.address);
   const mapQuery = getMapQuery(agent.address);
   const websiteHref = getWebsiteHref(agent.website);
+  const completion = getProfileCompletion(agent);
 
   const allSpocs = Array.isArray(agent.spocs) ? agent.spocs : [];
+  const profilePath = `/travel-agents/${agentId}`;
+
+  async function copyProfileLink() {
+    try {
+      const origin =
+        typeof window !== "undefined" ? window.location.origin : "";
+
+      const fullUrl = `${origin}${profilePath}`;
+
+      await navigator.clipboard.writeText(fullUrl);
+
+      setProfileCopied(true);
+
+      window.setTimeout(() => {
+        setProfileCopied(false);
+      }, 1800);
+    } catch (error) {
+      console.error("Unable to copy profile link:", error);
+    }
+  }
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-blue-50 via-gray-50 to-gray-50">
@@ -523,6 +794,8 @@ export default function TravelAgentDetailPage() {
                       KYC: {formatLabel(agent.kycStatus)}
                     </span>
                   )}
+
+                  <ProfileCompletionBadge completion={completion} />
                 </div>
 
                 <h1 className="mt-4 text-2xl font-semibold tracking-tight text-white">
@@ -551,10 +824,18 @@ export default function TravelAgentDetailPage() {
                       Website
                     </a>
                   )}
+
+                  <Link
+                    href={profilePath}
+                    className="inline-flex items-center gap-1.5 text-white hover:underline"
+                  >
+                    <ExternalLink size={15} />
+                    Profile Page
+                  </Link>
                 </div>
               </div>
 
-              <div className="flex flex-col gap-2 sm:flex-row lg:shrink-0">
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap lg:shrink-0 lg:justify-end">
                 <Link
                   href={`/engagements/travel-agent/${agentId}`}
                   className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-blue-700 shadow-sm hover:bg-blue-50"
@@ -570,12 +851,37 @@ export default function TravelAgentDetailPage() {
                   <Users size={16} />
                   View Leads
                 </Link>
+
+                <button
+                  type="button"
+                  onClick={copyProfileLink}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/25 bg-white/10 px-4 py-2.5 text-sm font-medium text-white backdrop-blur hover:bg-white/20"
+                >
+                  {profileCopied ? (
+                    <CheckCircle2 size={16} />
+                  ) : (
+                    <Link2 size={16} />
+                  )}
+                  {profileCopied ? "Link Copied" : "Copy Profile Link"}
+                </button>
               </div>
             </div>
           </div>
 
           {/* SUMMARY CARDS */}
           <div className="grid grid-cols-1 gap-3 bg-gradient-to-b from-blue-50/60 to-white p-4 sm:grid-cols-2 lg:grid-cols-4">
+            <SummaryCard
+              icon={BadgeCheck}
+              label="Profile Completion"
+              value={completion.label}
+              helper={
+                completion.complete
+                  ? "Ready for engagement"
+                  : "Some fields are missing"
+              }
+              tone={completion.tone}
+            />
+
             <SummaryCard
               icon={Landmark}
               label="Agency Type"
@@ -601,13 +907,6 @@ export default function TravelAgentDetailPage() {
                   : "No destinations"
               }
               tone="violet"
-            />
-
-            <SummaryCard
-              icon={ShieldCheck}
-              label="KYC Status"
-              value={formatLabel(agent.kycStatus || "Pending")}
-              tone="amber"
             />
           </div>
         </section>
@@ -829,9 +1128,11 @@ export default function TravelAgentDetailPage() {
             <SectionCard
               title="Profile Status"
               icon={BadgeCheck}
-              tone="blue"
+              tone={completion.tone}
             >
               <div className="space-y-3">
+                <ProfileCompletionPanel completion={completion} />
+
                 <div className="flex items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50/60 px-3 py-2">
                   <span className="text-xs font-medium text-gray-600">
                     Status

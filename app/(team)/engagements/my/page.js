@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
   collection,
@@ -10,10 +11,14 @@ import {
 } from "firebase/firestore";
 import {
   Activity,
+  AlertTriangle,
   BarChart3,
   CalendarDays,
+  CheckCircle2,
+  ExternalLink,
   MessageCircle,
-  TrendingUp
+  TrendingUp,
+  UserRound
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
@@ -106,11 +111,23 @@ const normalize = value =>
 /* =========================
    FIELD HELPERS
 ========================= */
+const getAgentId = engagement =>
+  engagement?.travelAgentId ||
+  engagement?.agentId ||
+  engagement?.travelAgentRefId ||
+  engagement?.travelAgentDocId ||
+  engagement?.agent?.id ||
+  engagement?.agent?.travelAgentId ||
+  engagement?.travelAgent?.id ||
+  "";
+
 const getAgentName = engagement =>
   engagement?.travelAgentName ||
   engagement?.agentName ||
   engagement?.agent?.agencyName ||
   engagement?.agent?.name ||
+  engagement?.travelAgent?.agencyName ||
+  engagement?.travelAgent?.name ||
   engagement?.agencyName ||
   "";
 
@@ -118,11 +135,49 @@ const getSpocName = engagement =>
   engagement?.spoc?.name ||
   engagement?.spocName ||
   engagement?.contactPerson ||
+  engagement?.agent?.spocName ||
+  engagement?.travelAgent?.spocName ||
   "";
 
 const getDestinationName = engagement =>
   engagement?.destinationName ||
   engagement?.destination?.name ||
+  engagement?.destination ||
+  "";
+
+const getAgentEmail = engagement =>
+  engagement?.agentEmail ||
+  engagement?.travelAgentEmail ||
+  engagement?.email ||
+  engagement?.spoc?.email ||
+  engagement?.agent?.email ||
+  engagement?.agent?.primaryEmail ||
+  engagement?.agent?.contact?.email ||
+  engagement?.travelAgent?.email ||
+  "";
+
+const getAgentPhone = engagement =>
+  engagement?.agentPhone ||
+  engagement?.travelAgentPhone ||
+  engagement?.phone ||
+  engagement?.mobile ||
+  engagement?.spoc?.phone ||
+  engagement?.spoc?.mobile ||
+  engagement?.agent?.phone ||
+  engagement?.agent?.mobile ||
+  engagement?.agent?.primaryPhone ||
+  engagement?.agent?.contact?.phone ||
+  engagement?.travelAgent?.phone ||
+  "";
+
+const getAgentCity = engagement =>
+  engagement?.agentCity ||
+  engagement?.travelAgentCity ||
+  engagement?.city ||
+  engagement?.agent?.city ||
+  engagement?.agent?.address?.city ||
+  engagement?.travelAgent?.city ||
+  engagement?.travelAgent?.address?.city ||
   "";
 
 const getChannelLabel = channel => {
@@ -139,6 +194,79 @@ const getChannelLabel = channel => {
 
   return labels[channel] || channel || "Other";
 };
+
+/* =========================
+   ROUTES
+========================= */
+const getTravelAgentProfileHref = engagement => {
+  const agentId = getAgentId(engagement);
+  return agentId ? `/travel-agents/${agentId}` : "";
+};
+
+const getViewEngagementHref = engagement => {
+  const agentId = getAgentId(engagement);
+  return agentId ? `/engagements/travel-agent/${agentId}` : "/engagements";
+};
+
+const getLeadCreateHref = engagement => {
+  const params = new URLSearchParams();
+
+  const agentId = getAgentId(engagement);
+  if (agentId) params.set("travelAgentId", agentId);
+  if (engagement?.id) params.set("sourceEngagementId", engagement.id);
+
+  return `/leads/create?${params.toString()}`;
+};
+
+/* =========================
+   PROFILE COMPLETION
+========================= */
+function getProfileCompletion(engagement) {
+  if (
+    engagement?.profileComplete === true ||
+    engagement?.travelAgentProfileComplete === true ||
+    engagement?.agent?.profileComplete === true ||
+    engagement?.travelAgent?.profileComplete === true
+  ) {
+    return {
+      complete: true,
+      percentage: 100,
+      missing: []
+    };
+  }
+
+  const checks = [
+    {
+      label: "Agency name",
+      ok: Boolean(getAgentName(engagement))
+    },
+    {
+      label: "SPOC",
+      ok: Boolean(getSpocName(engagement))
+    },
+    {
+      label: "Phone",
+      ok: Boolean(getAgentPhone(engagement))
+    },
+    {
+      label: "Email",
+      ok: Boolean(getAgentEmail(engagement))
+    },
+    {
+      label: "City",
+      ok: Boolean(getAgentCity(engagement))
+    }
+  ];
+
+  const completed = checks.filter(item => item.ok).length;
+  const missing = checks.filter(item => !item.ok).map(item => item.label);
+
+  return {
+    complete: completed === checks.length,
+    percentage: Math.round((completed / checks.length) * 100),
+    missing
+  };
+}
 
 /* =========================
    MINI KPI CARD
@@ -164,6 +292,85 @@ function MiniStatCard({ icon: Icon, label, value, hint }) {
         <div className="h-9 w-9 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center">
           <Icon size={17} />
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================
+   AGENT PROFILE STATUS BAR
+   Only profile link + status.
+   No duplicate CTA buttons here.
+========================= */
+function AgentProfileStatusBar({ engagement }) {
+  const agentName = getAgentName(engagement) || "Travel Agent";
+  const spocName = getSpocName(engagement);
+  const profile = getProfileCompletion(engagement);
+  const profileHref = getTravelAgentProfileHref(engagement);
+
+  return (
+    <div className="border-b border-gray-100 bg-gradient-to-r from-gray-50 to-white px-4 py-3 md:px-5">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
+            <UserRound size={18} />
+          </div>
+
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              {profileHref ? (
+                <Link
+                  href={profileHref}
+                  className="inline-flex max-w-full items-center gap-1.5 text-sm font-semibold text-gray-900 hover:text-blue-700"
+                >
+                  <span className="truncate">{agentName}</span>
+                  <ExternalLink size={13} className="shrink-0" />
+                </Link>
+              ) : (
+                <p className="text-sm font-semibold text-gray-900">
+                  {agentName}
+                </p>
+              )}
+
+              {profile.complete ? (
+                <span className="inline-flex items-center gap-1 rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
+                  <CheckCircle2 size={12} />
+                  Profile Complete
+                </span>
+              ) : (
+                <span
+                  title={
+                    profile.missing.length
+                      ? `Missing: ${profile.missing.join(", ")}`
+                      : "Profile details incomplete"
+                  }
+                  className="inline-flex items-center gap-1 rounded-full border border-amber-100 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700"
+                >
+                  <AlertTriangle size={12} />
+                  Profile {profile.percentage}%
+                </span>
+              )}
+            </div>
+
+            <p className="mt-1 text-xs text-gray-500">
+              {spocName ? `SPOC: ${spocName}` : "SPOC not available"}
+            </p>
+          </div>
+        </div>
+
+        {profileHref ? (
+          <Link
+            href={profileHref}
+            className="inline-flex w-fit items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+          >
+            View Agent Profile
+            <ExternalLink size={12} />
+          </Link>
+        ) : (
+          <span className="inline-flex w-fit items-center rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs font-medium text-gray-400">
+            Agent profile link unavailable
+          </span>
+        )}
       </div>
     </div>
   );
@@ -407,18 +614,14 @@ export default function MyEngagementsPage() {
   return (
     <main className="min-h-screen bg-gray-50">
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-
         {/* ================= HERO HEADER ================= */}
         <section className="rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 shadow-sm overflow-hidden">
           <div className="p-5 md:p-6">
             <div className="flex items-start gap-4">
-
-              {/* ICON */}
               <div className="h-12 w-12 rounded-2xl bg-white/15 text-white flex items-center justify-center shrink-0">
                 <Activity size={24} />
               </div>
 
-              {/* CONTENT */}
               <div>
                 <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white/90 mb-3">
                   <Activity size={14} />
@@ -430,8 +633,8 @@ export default function MyEngagementsPage() {
                 </h1>
 
                 <p className="mt-1 text-sm text-blue-100 max-w-2xl leading-6">
-                  View and manage your calls, WhatsApp messages, emails, meetings
-                  and follow-ups with travel agents.
+                  View your engagement history with travel agents and quickly
+                  open agent profiles with profile completion status.
                 </p>
               </div>
             </div>
@@ -471,10 +674,8 @@ export default function MyEngagementsPage() {
 
         {/* ================= MAIN GRID ================= */}
         <section className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-
           {/* LEFT: LIST */}
           <div className="xl:col-span-8 2xl:col-span-9 space-y-5">
-
             {error && (
               <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                 {error}
@@ -505,7 +706,6 @@ export default function MyEngagementsPage() {
               <div className="space-y-8">
                 {groupedEngagements.map(group => (
                   <section key={group.key} className="relative">
-
                     {/* DATE HEADER */}
                     <div className="sticky top-0 z-10 bg-gray-50/90 backdrop-blur py-2">
                       <div className="flex items-center gap-3">
@@ -529,24 +729,39 @@ export default function MyEngagementsPage() {
                       <div className="absolute left-4 top-4 bottom-4 w-px bg-gray-200 hidden sm:block" />
 
                       <div className="space-y-3">
-                        {group.items.map(e => (
-                          <div
-                            key={e.id}
-                            className="relative sm:pl-10"
-                          >
-                            <div className="absolute left-[10px] top-6 h-3 w-3 rounded-full bg-white border-2 border-blue-500 hidden sm:block" />
+                        {group.items.map(e => {
+                          const profile = getProfileCompletion(e);
 
-                            <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden hover:shadow-md transition-shadow">
-                              <EngagementCard
-                                engagement={e}
-                                agent={{
-                                  name: getAgentName(e),
-                                  agencyName: getAgentName(e)
-                                }}
-                              />
+                          return (
+                            <div key={e.id} className="relative sm:pl-10">
+                              <div className="absolute left-[10px] top-6 h-3 w-3 rounded-full bg-white border-2 border-blue-500 hidden sm:block" />
+
+                              <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden hover:shadow-md transition-shadow">
+                                <AgentProfileStatusBar engagement={e} />
+
+                                <EngagementCard
+                                  engagement={e}
+                                  agent={{
+                                    id: getAgentId(e),
+                                    name: getAgentName(e),
+                                    agencyName: getAgentName(e),
+                                    spocName: getSpocName(e),
+                                    email: getAgentEmail(e),
+                                    phone: getAgentPhone(e),
+                                    city: getAgentCity(e),
+                                    profileComplete: profile.complete,
+                                    profileCompletionPercentage: profile.percentage,
+                                    missingProfileFields: profile.missing
+                                  }}
+                                  agentProfileHref={getTravelAgentProfileHref(e)}
+                                  // viewEngagementHref={getViewEngagementHref(e)}
+                                  leadCreateHref={getLeadCreateHref(e)}
+                                  showSendCommunication={false}
+                                />
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   </section>

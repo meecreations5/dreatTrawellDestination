@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { doc, getDoc } from "firebase/firestore";
 import {
@@ -13,10 +14,18 @@ import {
   Phone,
   AtSign,
   Building2,
-  CheckCircle2
+  CheckCircle2,
+  AlertTriangle,
+  ExternalLink
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
+
+const TRAVEL_AGENT_COLLECTIONS = [
+  "travelAgents",
+  "travel_agents",
+  "travel-agents"
+];
 
 function formatDate(value) {
   if (!value) return "—";
@@ -53,11 +62,130 @@ function getChannelLabel(channel) {
   return channel;
 }
 
+function getTravelAgentId(engagement) {
+  return (
+    engagement?.travelAgentId ||
+    engagement?.agentId ||
+    engagement?.travelAgentRefId ||
+    engagement?.travelAgent?.id ||
+    engagement?.agent?.id ||
+    engagement?.agent?.travelAgentId ||
+    ""
+  );
+}
+
+function getProfileCompletion(agent) {
+  if (!agent) {
+    return {
+      label: "Profile status unavailable",
+      tone: "gray",
+      complete: false
+    };
+  }
+
+  const directComplete =
+    agent.profileCompleted ??
+    agent.isProfileComplete ??
+    agent.profileComplete ??
+    agent.isComplete;
+
+  const status = String(
+    agent.profileStatus ||
+      agent.profileCompletionStatus ||
+      agent.profileCompleteStatus ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const directPercent = Number(
+    agent.profileCompletionPercentage ??
+      agent.profileCompletionPercent ??
+      agent.completionPercentage ??
+      agent.profileCompletion ??
+      0
+  );
+
+  if (directComplete === true) {
+    return {
+      label: "Profile Complete",
+      tone: "green",
+      complete: true
+    };
+  }
+
+  if (["complete", "completed", "profile_complete"].includes(status)) {
+    return {
+      label: "Profile Complete",
+      tone: "green",
+      complete: true
+    };
+  }
+
+  if (directPercent >= 100) {
+    return {
+      label: "Profile Complete",
+      tone: "green",
+      complete: true
+    };
+  }
+
+  if (directPercent > 0) {
+    return {
+      label: `${Math.round(directPercent)}% Complete`,
+      tone: directPercent >= 70 ? "amber" : "red",
+      complete: false
+    };
+  }
+
+  const checks = [
+    agent.agencyName || agent.name,
+    agent.agentCode,
+    agent.agencyType,
+    agent.address?.city || agent.city,
+    agent.address?.country || agent.country,
+    agent.spocName ||
+      agent.contactPerson ||
+      agent.primaryContact?.name ||
+      agent.spoc?.name,
+    agent.email ||
+      agent.primaryEmail ||
+      agent.contactEmail ||
+      agent.spoc?.email,
+    agent.mobile ||
+      agent.phone ||
+      agent.primaryPhone ||
+      agent.contactPhone ||
+      agent.spoc?.mobile,
+    Array.isArray(agent.destinationIds) && agent.destinationIds.length > 0
+  ];
+
+  const completedCount = checks.filter(Boolean).length;
+  const percent = Math.round((completedCount / checks.length) * 100);
+
+  if (percent >= 100) {
+    return {
+      label: "Profile Complete",
+      tone: "green",
+      complete: true
+    };
+  }
+
+  return {
+    label: `${percent}% Complete`,
+    tone: percent >= 70 ? "amber" : "red",
+    complete: false
+  };
+}
+
 export default function EngagementDetailPage() {
   const { engagementId } = useParams();
   const router = useRouter();
 
   const [engagement, setEngagement] = useState(null);
+  const [travelAgent, setTravelAgent] = useState(null);
+  const [travelAgentLoading, setTravelAgentLoading] = useState(false);
+
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState("");
@@ -110,6 +238,63 @@ export default function EngagementDetailPage() {
       active = false;
     };
   }, [engagementId]);
+
+  useEffect(() => {
+    if (!engagement) return;
+
+    const travelAgentId = getTravelAgentId(engagement);
+
+    if (!travelAgentId) {
+      setTravelAgent(null);
+      setTravelAgentLoading(false);
+      return;
+    }
+
+    let active = true;
+
+    async function fetchTravelAgent() {
+      try {
+        setTravelAgentLoading(true);
+
+        let foundAgent = null;
+
+        for (const collectionName of TRAVEL_AGENT_COLLECTIONS) {
+          const snap = await getDoc(
+            doc(db, collectionName, travelAgentId)
+          );
+
+          if (snap.exists()) {
+            foundAgent = {
+              id: snap.id,
+              collectionName,
+              ...snap.data()
+            };
+            break;
+          }
+        }
+
+        if (!active) return;
+
+        setTravelAgent(foundAgent);
+      } catch (err) {
+        console.error("Failed to fetch travel agent profile:", err);
+
+        if (active) {
+          setTravelAgent(null);
+        }
+      } finally {
+        if (active) {
+          setTravelAgentLoading(false);
+        }
+      }
+    }
+
+    fetchTravelAgent();
+
+    return () => {
+      active = false;
+    };
+  }, [engagement]);
 
   if (loading) {
     return (
@@ -174,12 +359,32 @@ export default function EngagementDetailPage() {
   }
 
   const channel = String(engagement.channel || "").toLowerCase();
+  const travelAgentId = getTravelAgentId(engagement);
 
-  const agentName =
+  const fallbackAgentName =
     engagement.agentName ||
     engagement.travelAgentName ||
     engagement.agent?.name ||
+    engagement.travelAgent?.agencyName ||
     "—";
+
+  const agentName =
+    travelAgent?.agencyName ||
+    travelAgent?.name ||
+    travelAgent?.agentName ||
+    fallbackAgentName;
+
+  const agentCode =
+    travelAgent?.agentCode ||
+    engagement.agentCode ||
+    engagement.travelAgentCode ||
+    "";
+
+  const agentForBadge =
+    travelAgent ||
+    engagement.travelAgent ||
+    engagement.agent ||
+    null;
 
   const spocName =
     engagement.spoc?.name ||
@@ -233,7 +438,7 @@ export default function EngagementDetailPage() {
           </h1>
 
           <p className="text-sm text-gray-500 mt-1">
-            View communication details and message content.
+            View communication details and linked travel-agent profile.
           </p>
         </div>
 
@@ -276,10 +481,13 @@ export default function EngagementDetailPage() {
 
         {/* INFO GRID */}
         <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
-          <InfoCard
-            icon={<Building2 size={16} />}
-            label="Travel Agent"
-            value={agentName}
+          <TravelAgentCard
+            travelAgentId={travelAgentId}
+            agentName={agentName}
+            agentCode={agentCode}
+            agent={agentForBadge}
+            loading={travelAgentLoading}
+            profileFound={Boolean(travelAgent)}
           />
 
           <InfoCard
@@ -297,7 +505,11 @@ export default function EngagementDetailPage() {
             icon={<User size={16} />}
             label="SPOC"
             value={spocDisplayName}
-            subValue={spocEmail && spocMobile ? `${spocEmail} • ${spocMobile}` : ""}
+            subValue={
+              spocEmail && spocMobile
+                ? `${spocEmail} • ${spocMobile}`
+                : ""
+            }
           />
 
           <InfoCard
@@ -349,6 +561,103 @@ export default function EngagementDetailPage() {
         </div>
       </section>
     </main>
+  );
+}
+
+function TravelAgentCard({
+  travelAgentId,
+  agentName,
+  agentCode,
+  agent,
+  loading,
+  profileFound
+}) {
+  return (
+    <div className="bg-gradient-to-br from-blue-50 via-white to-indigo-50 border border-blue-100 rounded-xl p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-xs font-medium text-blue-600 mb-1">
+            <Building2 size={16} />
+            <span>Travel Agent</span>
+          </div>
+
+          {travelAgentId ? (
+            <Link
+              href={`/travel-agents/${travelAgentId}`}
+              className="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-950 hover:text-blue-700 break-words"
+            >
+              <span>{agentName || "View Travel Agent"}</span>
+              <ExternalLink size={13} />
+            </Link>
+          ) : (
+            <p className="text-sm font-semibold text-gray-900 break-words">
+              {agentName || "—"}
+            </p>
+          )}
+
+          <div className="mt-2 space-y-1">
+            {agentCode && (
+              <p className="text-xs text-gray-500">
+                Agent Code:{" "}
+                <span className="font-medium text-gray-700">
+                  {agentCode}
+                </span>
+              </p>
+            )}
+
+            {travelAgentId && !loading && !profileFound && (
+              <p className="text-xs text-amber-600">
+                Profile link available, but profile document was not found.
+              </p>
+            )}
+
+            {!travelAgentId && (
+              <p className="text-xs text-red-600">
+                Travel agent ID is missing in this engagement.
+              </p>
+            )}
+          </div>
+        </div>
+
+        <ProfileCompletionBadge agent={agent} loading={loading} />
+      </div>
+    </div>
+  );
+}
+
+function ProfileCompletionBadge({ agent, loading }) {
+  if (loading) {
+    return (
+      <span className="shrink-0 inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-[11px] font-semibold text-gray-600">
+        Checking...
+      </span>
+    );
+  }
+
+  const completion = getProfileCompletion(agent);
+
+  const toneClasses = {
+    green: "bg-green-50 text-green-700 border-green-200",
+    amber: "bg-amber-50 text-amber-700 border-amber-200",
+    red: "bg-red-50 text-red-700 border-red-200",
+    gray: "bg-gray-50 text-gray-600 border-gray-200"
+  };
+
+  return (
+    <span
+      className={`
+        shrink-0 inline-flex items-center gap-1 rounded-full border px-3 py-1
+        text-[11px] font-semibold whitespace-nowrap
+        ${toneClasses[completion.tone] || toneClasses.gray}
+      `}
+    >
+      {completion.complete ? (
+        <CheckCircle2 size={12} />
+      ) : (
+        <AlertTriangle size={12} />
+      )}
+      {completion.label}
+    </span>
   );
 }
 

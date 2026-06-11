@@ -5,7 +5,6 @@ import Link from "next/link";
 import {
   collection,
   onSnapshot,
-  orderBy,
   query,
   where
 } from "firebase/firestore";
@@ -19,7 +18,12 @@ import {
   Filter,
   RefreshCcw,
   Search,
-  Target
+  Send,
+  Target,
+  Trophy,
+  UserCheck,
+  UserPlus,
+  XCircle
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
@@ -33,6 +37,7 @@ import EmptyState from "@/components/ui/EmptyState";
 ========================= */
 const DEFAULT_FILTERS = {
   search: "",
+  ownership: "",
   stage: "",
   health: "",
   dateFrom: "",
@@ -101,14 +106,146 @@ const formatLabel = value => {
 
   return String(value)
     .replaceAll("_", " ")
+    .replaceAll("-", " ")
     .replace(/\b\w/g, char => char.toUpperCase());
+};
+
+const getUid = value => {
+  if (!value) return "";
+
+  if (typeof value === "string") {
+    return value.trim();
+  }
+
+  if (typeof value === "object") {
+    return (
+      value.uid ||
+      value.id ||
+      value.userId ||
+      value.value ||
+      ""
+    );
+  }
+
+  return "";
+};
+
+const getLeadCreatedByUid = lead =>
+  getUid(lead.createdByUid) ||
+  getUid(lead.createdBy) ||
+  getUid(lead.createdByUser) ||
+  getUid(lead.createdByUserId) ||
+  "";
+
+const getLeadAssignedToUid = lead =>
+  getUid(lead.assignedToUid) ||
+  getUid(lead.assignedTo) ||
+  getUid(lead.ownerUid) ||
+  getUid(lead.assignedToUser) ||
+  getUid(lead.accountManagerUid) ||
+  "";
+
+const getLeadAssignedByUid = lead =>
+  getUid(lead.assignedByUid) ||
+  getUid(lead.assignedBy) ||
+  getUid(lead.assignedByUser) ||
+  getUid(lead.lastAssignedByUid) ||
+  "";
+
+const getNormalizedLeadStage = lead =>
+  normalize(
+    lead.stage ||
+      lead.status ||
+      lead.leadStage ||
+      lead.pipelineStage ||
+      lead.dealStatus ||
+      lead.outcome ||
+      ""
+  )
+    .replaceAll("-", "_")
+    .replaceAll(" ", "_");
+
+const isDealWonLead = lead => {
+  if (
+    lead.dealWon === true ||
+    lead.businessGenerated === true ||
+    lead.isBusinessGenerated === true ||
+    lead.converted === true ||
+    lead.isConverted === true ||
+    lead.bookingConfirmed === true
+  ) {
+    return true;
+  }
+
+  if (
+    lead.dealWonAt ||
+    lead.businessGeneratedAt ||
+    lead.convertedAt ||
+    lead.bookingConfirmedAt ||
+    lead.closedWonAt
+  ) {
+    return true;
+  }
+
+  const stage = getNormalizedLeadStage(lead);
+
+  return [
+    "won",
+    "converted",
+    "booked",
+    "confirmed",
+    "closed_won",
+    "booking_confirmed",
+    "business_generated",
+    "package_confirmed",
+    "travel_confirmed",
+    "finalized"
+  ].includes(stage);
+};
+
+const isDealLostLead = lead => {
+  if (
+    lead.dealLost === true ||
+    lead.isDealLost === true ||
+    lead.lost === true
+  ) {
+    return true;
+  }
+
+  if (
+    lead.dealLostAt ||
+    lead.closedLostAt ||
+    lead.cancelledAt ||
+    lead.rejectedAt
+  ) {
+    return true;
+  }
+
+  const stage = getNormalizedLeadStage(lead);
+
+  return [
+    "lost",
+    "closed_lost",
+    "cancelled",
+    "canceled",
+    "rejected",
+    "dropped",
+    "not_interested",
+    "dead",
+    "failed"
+  ].includes(stage);
 };
 
 /* =========================
    LEAD HEALTH
 ========================= */
 function getLeadHealth(lead) {
-  const due = getValidDate(lead?.nextActionDueAt);
+  const due = getValidDate(
+    lead?.nextActionDueAt ||
+      lead?.nextFollowUpAt ||
+      lead?.followUpAt ||
+      lead?.nextActionDate
+  );
 
   if (!due) return "healthy";
 
@@ -145,19 +282,24 @@ const HEALTH_META = {
 
 const getLeadTitle = lead =>
   lead.leadCode ||
+  lead.leadName ||
+  lead.customerName ||
   lead.destinationName ||
   lead.travelAgentName ||
   lead.agentName ||
+  lead.agencyName ||
   "Lead";
 
 const getDestinationName = lead =>
   lead.destinationName ||
   lead.destination?.name ||
+  lead.primaryDestination ||
   "Not Set";
 
 const getOwnerName = lead =>
   lead.assignedToName ||
   lead.ownerName ||
+  lead.accountManagerName ||
   "Unassigned";
 
 /* =========================
@@ -174,9 +316,9 @@ function KpiCard({ icon: Icon, label, value, helper, tone = "blue" }) {
   };
 
   return (
-    <div className="rounded-3xl border border-gray-200 bg-white p-4 shadow-sm">
+    <div className="rounded-3xl border border-gray-200 bg-white p-4 shadow-sm hover:shadow-md transition">
       <div className="flex items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <p className="text-xs font-medium text-gray-500">
             {label}
           </p>
@@ -186,14 +328,14 @@ function KpiCard({ icon: Icon, label, value, helper, tone = "blue" }) {
           </p>
 
           {helper && (
-            <p className="mt-1 text-xs text-gray-400">
+            <p className="mt-1 text-xs text-gray-400 leading-5">
               {helper}
             </p>
           )}
         </div>
 
         <div
-          className={`h-11 w-11 rounded-2xl flex items-center justify-center ${
+          className={`h-11 w-11 rounded-2xl flex items-center justify-center shrink-0 ${
             toneClass[tone] || toneClass.blue
           }`}
         >
@@ -219,7 +361,9 @@ function SectionCard({ title, subtitle, children }) {
         )}
       </div>
 
-      <div className="p-4">{children}</div>
+      <div className="p-4">
+        {children}
+      </div>
     </section>
   );
 }
@@ -276,9 +420,56 @@ function HealthBadge({ health }) {
   );
 }
 
+function OwnershipBadges({ lead, user }) {
+  const createdByMe = getLeadCreatedByUid(lead) === user?.uid;
+  const assignedToMe = getLeadAssignedToUid(lead) === user?.uid;
+  const assignedByMe = getLeadAssignedByUid(lead) === user?.uid;
+
+  return (
+    <>
+      {createdByMe && (
+        <span className="rounded-full bg-blue-50 border border-blue-100 px-2.5 py-1 text-xs font-medium text-blue-700">
+          Created by me
+        </span>
+      )}
+
+      {assignedToMe && (
+        <span className="rounded-full bg-emerald-50 border border-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">
+          Assigned to me
+        </span>
+      )}
+
+      {assignedByMe && (
+        <span className="rounded-full bg-slate-50 border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700">
+          Assigned by me
+        </span>
+      )}
+    </>
+  );
+}
+
+function DealBadge({ lead }) {
+  if (isDealWonLead(lead)) {
+    return (
+      <span className="rounded-full bg-purple-50 border border-purple-100 px-2.5 py-1 text-xs font-semibold text-purple-700">
+        Deal Won
+      </span>
+    );
+  }
+
+  if (isDealLostLead(lead)) {
+    return (
+      <span className="rounded-full bg-red-50 border border-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">
+        Deal Lost
+      </span>
+    );
+  }
+
+  return null;
+}
+
 function RecentLeadItem({ lead, user }) {
   const health = getLeadHealth(lead);
-  const viewOnly = lead.assignedToUid !== user?.uid;
 
   return (
     <Link href={`/leads/${lead.id}`} className="block group">
@@ -296,11 +487,7 @@ function RecentLeadItem({ lead, user }) {
                     {getLeadTitle(lead)}
                   </p>
 
-                  {viewOnly && (
-                    <span className="rounded-full bg-amber-50 border border-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700">
-                      View only
-                    </span>
-                  )}
+                  <DealBadge lead={lead} />
                 </div>
 
                 <p className="mt-0.5 text-xs text-gray-500">
@@ -318,6 +505,8 @@ function RecentLeadItem({ lead, user }) {
             </div>
 
             <div className="mt-3 flex flex-wrap gap-2">
+              <OwnershipBadges lead={lead} user={user} />
+
               <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
                 {formatLabel(lead.stage)}
               </span>
@@ -337,9 +526,9 @@ function RecentLeadItem({ lead, user }) {
               )}
             </div>
 
-            {lead.nextActionDueAt && (
+            {(lead.nextActionDueAt || lead.nextFollowUpAt) && (
               <p className="mt-3 text-xs text-gray-500">
-                Next action due: {formatDate(lead.nextActionDueAt)}
+                Next action due: {formatDate(lead.nextActionDueAt || lead.nextFollowUpAt)}
               </p>
             )}
           </div>
@@ -363,6 +552,8 @@ export default function LeadDashboardPage() {
 
   /* =========================
      LOAD LEADS
+     No orderBy here to avoid Firestore composite index requirement.
+     Sorting is handled after mergeRows().
   ========================== */
   useEffect(() => {
     if (authLoading) return;
@@ -378,6 +569,7 @@ export default function LeadDashboardPage() {
 
     let assignedRows = new Map();
     let createdRows = new Map();
+    let assignedByRows = new Map();
 
     const mergeRows = () => {
       const merged = new Map();
@@ -387,6 +579,10 @@ export default function LeadDashboardPage() {
       });
 
       assignedRows.forEach((value, key) => {
+        merged.set(key, value);
+      });
+
+      assignedByRows.forEach((value, key) => {
         merged.set(key, value);
       });
 
@@ -402,14 +598,17 @@ export default function LeadDashboardPage() {
 
     const assignedQuery = query(
       collection(db, "leads"),
-      where("assignedToUid", "==", user.uid),
-      orderBy("createdAt", "desc")
+      where("assignedToUid", "==", user.uid)
     );
 
     const createdQuery = query(
       collection(db, "leads"),
-      where("createdByUid", "==", user.uid),
-      orderBy("createdAt", "desc")
+      where("createdByUid", "==", user.uid)
+    );
+
+    const assignedByQuery = query(
+      collection(db, "leads"),
+      where("assignedByUid", "==", user.uid)
     );
 
     const unsubAssigned = onSnapshot(
@@ -429,9 +628,7 @@ export default function LeadDashboardPage() {
       },
       err => {
         console.error("Failed to load assigned leads:", err);
-        setError(
-          "Unable to load assigned leads. Please check Firestore permissions or required index."
-        );
+        setError("Unable to load assigned leads. Please check Firestore permissions.");
         setLoading(false);
       }
     );
@@ -453,9 +650,29 @@ export default function LeadDashboardPage() {
       },
       err => {
         console.error("Failed to load created leads:", err);
-        setError(
-          "Unable to load created leads. Please check Firestore permissions or required index."
+        setError("Unable to load created leads. Please check Firestore permissions.");
+        setLoading(false);
+      }
+    );
+
+    const unsubAssignedBy = onSnapshot(
+      assignedByQuery,
+      snap => {
+        assignedByRows = new Map(
+          snap.docs.map(d => [
+            d.id,
+            {
+              id: d.id,
+              ...d.data()
+            }
+          ])
         );
+
+        mergeRows();
+      },
+      err => {
+        console.error("Failed to load assigned-by leads:", err);
+        setError("Unable to load leads assigned by you. Please check Firestore permissions.");
         setLoading(false);
       }
     );
@@ -463,6 +680,7 @@ export default function LeadDashboardPage() {
     return () => {
       unsubAssigned();
       unsubCreated();
+      unsubAssignedBy();
     };
   }, [user?.uid, authLoading]);
 
@@ -508,9 +726,35 @@ export default function LeadDashboardPage() {
       const createdDate = getValidDate(lead.createdAt);
       const health = getLeadHealth(lead);
 
+      const createdByMe = getLeadCreatedByUid(lead) === user?.uid;
+      const assignedToMe = getLeadAssignedToUid(lead) === user?.uid;
+      const assignedByMe = getLeadAssignedByUid(lead) === user?.uid;
+      const dealWon = isDealWonLead(lead);
+      const dealLost = isDealLostLead(lead);
+
       if ((fromDate || toDate) && !createdDate) return false;
       if (fromDate && createdDate < fromDate) return false;
       if (toDate && createdDate > toDate) return false;
+
+      if (filters.ownership === "created_by_me" && !createdByMe) {
+        return false;
+      }
+
+      if (filters.ownership === "assigned_to_me" && !assignedToMe) {
+        return false;
+      }
+
+      if (filters.ownership === "assigned_by_me" && !assignedByMe) {
+        return false;
+      }
+
+      if (filters.ownership === "deal_won" && !dealWon) {
+        return false;
+      }
+
+      if (filters.ownership === "deal_lost" && !dealLost) {
+        return false;
+      }
 
       if (filters.stage && lead.stage !== filters.stage) {
         return false;
@@ -523,10 +767,14 @@ export default function LeadDashboardPage() {
       if (searchText) {
         const searchableText = [
           lead.leadCode,
+          lead.leadName,
+          lead.customerName,
           lead.destinationName,
           lead.assignedToName,
           lead.createdByName,
+          lead.assignedByName,
           lead.stage,
+          lead.status,
           lead.nextActionType,
           lead.travelAgentName,
           lead.agentName,
@@ -543,7 +791,7 @@ export default function LeadDashboardPage() {
 
       return true;
     });
-  }, [leads, filters, dateRangeError]);
+  }, [leads, filters, dateRangeError, user?.uid]);
 
   /* =========================
      SUMMARY
@@ -555,6 +803,12 @@ export default function LeadDashboardPage() {
     let healthyCount = 0;
     let atRiskCount = 0;
     let overdueCount = 0;
+
+    let createdByMeCount = 0;
+    let assignedToMeCount = 0;
+    let assignedByMeCount = 0;
+    let dealWonCount = 0;
+    let dealLostCount = 0;
 
     const stageMap = {};
     const healthMap = {};
@@ -574,6 +828,13 @@ export default function LeadDashboardPage() {
       if (health === "healthy") healthyCount += 1;
       if (health === "at_risk") atRiskCount += 1;
       if (health === "overdue") overdueCount += 1;
+
+      if (getLeadCreatedByUid(lead) === user?.uid) createdByMeCount += 1;
+      if (getLeadAssignedToUid(lead) === user?.uid) assignedToMeCount += 1;
+      if (getLeadAssignedByUid(lead) === user?.uid) assignedByMeCount += 1;
+
+      if (isDealWonLead(lead)) dealWonCount += 1;
+      if (isDealLostLead(lead)) dealLostCount += 1;
 
       const stage = lead.stage || "not_set";
       stageMap[stage] = (stageMap[stage] || 0) + 1;
@@ -596,9 +857,26 @@ export default function LeadDashboardPage() {
         .map(([label, value]) => ({ label, value }))
         .sort((a, b) => b.value - a.value);
 
+    const wonRate =
+      filteredLeads.length > 0
+        ? Math.round((dealWonCount / filteredLeads.length) * 100)
+        : 0;
+
+    const lostRate =
+      filteredLeads.length > 0
+        ? Math.round((dealLostCount / filteredLeads.length) * 100)
+        : 0;
+
     return {
       total: filteredLeads.length,
       today: todayCount,
+      createdByMe: createdByMeCount,
+      assignedToMe: assignedToMeCount,
+      assignedByMe: assignedByMeCount,
+      dealWon: dealWonCount,
+      dealLost: dealLostCount,
+      wonRate,
+      lostRate,
       healthy: healthyCount,
       atRisk: atRiskCount,
       overdue: overdueCount,
@@ -608,7 +886,7 @@ export default function LeadDashboardPage() {
       ownerRows: toSorted(ownerMap).slice(0, 5),
       sourceRows: toSorted(sourceMap).slice(0, 5)
     };
-  }, [filteredLeads]);
+  }, [filteredLeads, user?.uid]);
 
   const recentLeads = useMemo(() => {
     return filteredLeads.slice(0, 6);
@@ -685,7 +963,8 @@ export default function LeadDashboardPage() {
         <div className="max-w-7xl mx-auto px-4 py-6 space-y-4">
           <CardSkeleton />
 
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
+            <CardSkeleton />
             <CardSkeleton />
             <CardSkeleton />
             <CardSkeleton />
@@ -722,9 +1001,10 @@ export default function LeadDashboardPage() {
                   Lead Dashboard
                 </h1>
 
-                <p className="mt-1 text-sm text-blue-100 max-w-2xl leading-6">
-                  Monitor assigned and created leads, pipeline stages, health,
-                  follow-ups and destination performance from one dashboard.
+                <p className="mt-1 text-sm text-blue-100 max-w-3xl leading-6">
+                  Track your total leads, created leads, assigned leads,
+                  delegated leads, won deals, lost deals and follow-up health
+                  from one dashboard.
                 </p>
               </div>
             </div>
@@ -733,7 +1013,7 @@ export default function LeadDashboardPage() {
 
         {/* ================= FILTER PANEL ================= */}
         <section className="rounded-3xl border border-gray-200 bg-white p-4 shadow-sm">
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-7 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-8 gap-3">
 
             <div className="xl:col-span-2">
               <label className="block text-xs font-semibold text-gray-600 mb-1.5">
@@ -755,6 +1035,27 @@ export default function LeadDashboardPage() {
                   className="w-full rounded-xl border border-gray-200 bg-gray-50 pl-9 pr-3 py-2.5 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                 />
               </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+                Ownership
+              </label>
+
+              <select
+                value={filters.ownership}
+                onChange={e =>
+                  updateFilter("ownership", e.target.value)
+                }
+                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              >
+                <option value="">All User Leads</option>
+                <option value="created_by_me">Created By Me</option>
+                <option value="assigned_to_me">Assigned To Me</option>
+                <option value="assigned_by_me">Assigned By Me</option>
+                <option value="deal_won">Deal Won</option>
+                <option value="deal_lost">Deal Lost</option>
+              </select>
             </div>
 
             <div>
@@ -895,22 +1196,65 @@ export default function LeadDashboardPage() {
           </div>
         )}
 
-        {/* ================= KPI GRID ================= */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
+        {/* ================= MAIN KPI GRID ================= */}
+        <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3">
           <KpiCard
             icon={Target}
-            label="Total Leads"
+            label="Total User Leads"
             value={summary.total}
-            helper="Matching selected filters"
+            helper="Created, assigned or assigned by you"
             tone="blue"
           />
 
           <KpiCard
-            icon={CalendarDays}
-            label="Today"
-            value={summary.today}
-            helper="Created today"
+            icon={UserPlus}
+            label="Created By Me"
+            value={summary.createdByMe}
+            helper="Leads originally created by you"
             tone="emerald"
+          />
+
+          <KpiCard
+            icon={UserCheck}
+            label="Assigned To Me"
+            value={summary.assignedToMe}
+            helper="Leads currently assigned to you"
+            tone="purple"
+          />
+
+          <KpiCard
+            icon={Send}
+            label="Assigned By Me"
+            value={summary.assignedByMe}
+            helper="Leads delegated by you"
+            tone="slate"
+          />
+
+          <KpiCard
+            icon={Trophy}
+            label="Deal Won"
+            value={summary.dealWon}
+            helper={`${summary.wonRate}% of selected leads`}
+            tone="emerald"
+          />
+
+          <KpiCard
+            icon={XCircle}
+            label="Deal Lost"
+            value={summary.dealLost}
+            helper={`${summary.lostRate}% of selected leads`}
+            tone="red"
+          />
+        </section>
+
+        {/* ================= HEALTH KPI GRID ================= */}
+        <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+          <KpiCard
+            icon={CalendarDays}
+            label="Created Today"
+            value={summary.today}
+            helper="New leads today"
+            tone="blue"
           />
 
           <KpiCard

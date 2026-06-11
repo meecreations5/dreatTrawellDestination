@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
@@ -11,13 +12,13 @@ import {
   orderBy,
   onSnapshot
 } from "firebase/firestore";
-import { Plus } from "lucide-react";
+import { ExternalLink, Plus } from "lucide-react";
 
 import { db } from "@/lib/firebase";
 
 import EngagementForm from "./EngagementForm";
 import EngagementCard from "@/components/engagement/EngagementCard";
-import BottomSheetModal from "@/components/ui/BottomSheetModal"; // ✅ SAME MODAL AS ATTENDANCE
+import BottomSheetModal from "@/components/ui/BottomSheetModal";
 import EmptyState from "@/components/ui/EmptyState";
 import CardSkeleton from "@/components/ui/CardSkeleton";
 import HeaderSkeleton from "@/components/ui/HeaderSkeleton";
@@ -31,8 +32,10 @@ function useIsMobile() {
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 1024px)");
     setIsMobile(mq.matches);
+
     const handler = e => setIsMobile(e.matches);
     mq.addEventListener("change", handler);
+
     return () => mq.removeEventListener("change", handler);
   }, []);
 
@@ -51,6 +54,7 @@ const formatDateLabel = date => {
   const d = new Date(date);
   const today = new Date();
   const yesterday = new Date(today);
+
   yesterday.setDate(today.getDate() - 1);
 
   if (isSameDay(d, today)) return "Today";
@@ -74,8 +78,9 @@ export default function EngagementPage() {
   const [loading, setLoading] = useState(true);
   const [collapsedDates, setCollapsedDates] = useState({});
   const [search, setSearch] = useState("");
-
   const [formOpen, setFormOpen] = useState(false);
+
+  const agentProfileHref = agentId ? `/travel-agents/${agentId}` : "";
 
   /* =========================
      LOAD AGENT
@@ -85,7 +90,10 @@ export default function EngagementPage() {
 
     getDoc(doc(db, "travelAgents", agentId)).then(snap => {
       if (snap.exists()) {
-        setAgent({ id: snap.id, ...snap.data() });
+        setAgent({
+          id: snap.id,
+          ...snap.data()
+        });
       }
     });
   }, [agentId]);
@@ -110,7 +118,10 @@ export default function EngagementPage() {
 
       if (engagements.length && rows[0]?.id !== engagements[0]?.id) {
         setHighlightId(rows[0].id);
-        setTimeout(() => setHighlightId(null), 2500);
+
+        setTimeout(() => {
+          setHighlightId(null);
+        }, 2500);
       }
 
       setEngagements(rows);
@@ -126,6 +137,7 @@ export default function EngagementPage() {
   ========================== */
   const filtered = useMemo(() => {
     if (!search.trim()) return engagements;
+
     const q = search.toLowerCase();
 
     return engagements.filter(e =>
@@ -137,7 +149,7 @@ export default function EngagementPage() {
         e.spoc?.name
       ]
         .filter(Boolean)
-        .some(v => v.toLowerCase().includes(q))
+        .some(v => String(v).toLowerCase().includes(q))
     );
   }, [search, engagements]);
 
@@ -151,6 +163,7 @@ export default function EngagementPage() {
 
       if (!acc[label]) acc[label] = [];
       acc[label].push(e);
+
       return acc;
     }, {});
   }, [filtered]);
@@ -172,9 +185,21 @@ export default function EngagementPage() {
     <main className="p-6 max-w-6xl mx-auto space-y-6 pb-24">
       {/* HEADER */}
       <div>
-        <h1 className="text-xl font-semibold">
-          Engagements — {agent.agencyName}
+        <h1 className="text-xl font-semibold text-gray-900">
+          Engagements —{" "}
+          {agentProfileHref ? (
+            <Link
+              href={agentProfileHref}
+              className="inline-flex items-center gap-1.5 text-blue-700 hover:underline"
+            >
+              {agent.agencyName || "Travel Agent"}
+              <ExternalLink className="w-4 h-4" />
+            </Link>
+          ) : (
+            agent.agencyName || "Travel Agent"
+          )}
         </h1>
+
         <p className="text-sm text-gray-500">
           Activity timeline
         </p>
@@ -190,6 +215,7 @@ export default function EngagementPage() {
         />
 
         <button
+          type="button"
           onClick={() =>
             todayRef.current?.scrollIntoView({ behavior: "smooth" })
           }
@@ -230,6 +256,7 @@ export default function EngagementPage() {
                   >
                     <div className="sticky top-0 bg-gray-50 z-10 py-2 flex items-center gap-3">
                       <button
+                        type="button"
                         onClick={() =>
                           setCollapsedDates(s => ({
                             ...s,
@@ -240,6 +267,7 @@ export default function EngagementPage() {
                       >
                         {collapsed ? "▶" : "▼"} {dateLabel}
                       </button>
+
                       <div className="flex-1 h-px bg-gray-200" />
                     </div>
 
@@ -251,6 +279,9 @@ export default function EngagementPage() {
                             engagement={e}
                             agent={agent}
                             highlight={e.id === highlightId}
+                            agentProfileHref={agentProfileHref}
+                            // viewEngagementHref={`/engagements/travel-agent/${agentId}`}
+                            showProfileBadge={false}
                           />
                         ))}
                       </div>
@@ -267,6 +298,7 @@ export default function EngagementPage() {
       {isMobile && (
         <>
           <button
+            type="button"
             onClick={() => setFormOpen(true)}
             className="
               fixed bottom-6 right-6 z-30

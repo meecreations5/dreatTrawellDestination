@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   collection,
+  doc,
   getDocs,
+  onSnapshot,
   query,
   where
 } from "firebase/firestore";
@@ -55,12 +57,16 @@ function toDate(value) {
 }
 
 function toDateKey(date = new Date()) {
-  const d = new Date(date);
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
 
-  return `${year}-${month}-${day}`;
+  const map = Object.fromEntries(parts.map(part => [part.type, part.value]));
+
+  return `${map.year}-${map.month}-${map.day}`;
 }
 
 function isSameDay(dateA, dateB = new Date()) {
@@ -119,6 +125,47 @@ function formatMinutes(minutes) {
 function normalizeText(value, fallback = "—") {
   if (!value) return fallback;
   return String(value).trim() || fallback;
+}
+
+function getUid(value) {
+  if (!value) return "";
+
+  if (typeof value === "string") {
+    return value.trim();
+  }
+
+  if (typeof value === "object") {
+    return (
+      value.uid ||
+      value.id ||
+      value.userId ||
+      value.value ||
+      ""
+    );
+  }
+
+  return "";
+}
+
+function getLeadCreatedByUid(lead) {
+  return (
+    getUid(lead.createdByUid) ||
+    getUid(lead.createdBy) ||
+    getUid(lead.createdByUser) ||
+    getUid(lead.createdByUserId) ||
+    ""
+  );
+}
+
+function getLeadAssignedToUid(lead) {
+  return (
+    getUid(lead.assignedToUid) ||
+    getUid(lead.assignedTo) ||
+    getUid(lead.assignedToUser) ||
+    getUid(lead.ownerUid) ||
+    getUid(lead.accountManagerUid) ||
+    ""
+  );
 }
 
 function getLeadTitle(lead) {
@@ -550,7 +597,6 @@ export default function TeamDashboardGraph() {
         ownerUidLeads,
         createdByEngagements,
         ownerEngagements,
-        attendanceRows,
         agentRows
       ] = await Promise.all([
         safeGetDocs(
@@ -591,13 +637,6 @@ export default function TeamDashboardGraph() {
         ),
         safeGetDocs(
           query(
-            collection(db, "attendance_sessions"),
-            where("uid", "==", uid),
-            where("date", "==", todayKey)
-          )
-        ),
-        safeGetDocs(
-          query(
             collection(db, "travel-agents"),
             where("assignedTo", "==", uid)
           )
@@ -620,7 +659,6 @@ export default function TeamDashboardGraph() {
 
       setLeads(mergedLeads);
       setEngagements(mergedEngagements);
-      setAttendanceToday(attendanceRows?.[0] || null);
       setTravelAgents(agentRows || []);
       setLastUpdated(new Date());
       setFetching(false);
@@ -631,6 +669,39 @@ export default function TeamDashboardGraph() {
     return () => {
       active = false;
     };
+  }, [loading, user?.uid]);
+
+  /* =========================
+     LIVE ATTENDANCE LISTENER
+     Firestore path:
+     attendance/{uid}_{YYYY-MM-DD}
+  ========================= */
+  useEffect(() => {
+    if (loading || !user?.uid) return;
+
+    const attendanceDocId = `${user.uid}_${todayKey}`;
+    const attendanceRef = doc(db, "attendance", attendanceDocId);
+
+    const unsubscribe = onSnapshot(
+      attendanceRef,
+      (docSnap) => {
+        if (!docSnap.exists()) {
+          setAttendanceToday(null);
+          return;
+        }
+
+        setAttendanceToday({
+          id: docSnap.id,
+          ...docSnap.data()
+        });
+      },
+      (error) => {
+        console.error("Today attendance listener failed:", error);
+        setAttendanceToday(null);
+      }
+    );
+
+    return () => unsubscribe();
   }, [loading, user?.uid, todayKey]);
 
   const stats = useMemo(() => {
@@ -641,8 +712,28 @@ export default function TeamDashboardGraph() {
       no_followup: 0
     };
 
+    const ownership = {
+      createdByMe: 0,
+      assignedToMe: 0,
+      assignedByOthers: 0,
+      selfOwned: 0,
+      unassigned: 0
+    };
+
     leads.forEach(lead => {
       health[getLeadHealth(lead)] += 1;
+
+      const createdByUid = getLeadCreatedByUid(lead);
+      const assignedToUid = getLeadAssignedToUid(lead);
+
+      const createdByMe = createdByUid === user?.uid;
+      const assignedToMe = assignedToUid === user?.uid;
+
+      if (createdByMe) ownership.createdByMe += 1;
+      if (assignedToMe) ownership.assignedToMe += 1;
+      if (createdByMe && assignedToMe) ownership.selfOwned += 1;
+      if (!createdByMe && assignedToMe) ownership.assignedByOthers += 1;
+      if (!assignedToUid) ownership.unassigned += 1;
     });
 
     const overdueLeads = leads
@@ -721,6 +812,7 @@ export default function TeamDashboardGraph() {
 
     return {
       health,
+      ownership,
       overdueLeads,
       dueTodayLeads,
       meetingsToday,
@@ -729,7 +821,7 @@ export default function TeamDashboardGraph() {
       topCities,
       stageBreakdown
     };
-  }, [leads, engagements, travelAgents]);
+  }, [leads, engagements, travelAgents, user?.uid]);
 
   const attendanceStatus = useMemo(() => {
     if (!attendanceToday) {
@@ -750,16 +842,56 @@ export default function TeamDashboardGraph() {
     const firstSession = sessions[0];
     const lastSession = sessions[sessions.length - 1];
 
-    const checkedIn = firstSession?.checkInAt;
-    const checkedOut = lastSession?.checkOutAt;
+    const checkedIn = firstSession?.checkInAt || attendanceToday.checkInAt;
+    const checkedOut = lastSession?.checkOutAt || attendanceToday.checkOutAt;
+
+    const totalMinutes =
+      Number(attendanceToday.totalMinutes || 0) ||
+      sessions.reduce((sum, session) => {
+        return sum + Number(session.minutes || 0);
+      }, 0);
+
+    const hasOpenSession = sessions.some(
+      session => session.checkInAt && !session.checkOutAt
+    );
+
+    const hasCompletedSession = sessions.some(
+      session => session.checkInAt && session.checkOutAt
+    );
+
+    if (hasOpenSession) {
+      return {
+        label: "Checked in",
+        tone: "blue",
+        icon: CalendarCheck,
+        checkIn: formatTime(checkedIn),
+        checkOut: "—",
+        total: formatMinutes(totalMinutes)
+      };
+    }
+
+    if (
+      hasCompletedSession ||
+      attendanceToday.status === "present" ||
+      totalMinutes > 0
+    ) {
+      return {
+        label: "Present",
+        tone: "green",
+        icon: CheckCircle2,
+        checkIn: formatTime(checkedIn),
+        checkOut: formatTime(checkedOut),
+        total: formatMinutes(totalMinutes)
+      };
+    }
 
     return {
-      label: attendanceToday.status || "Present",
-      tone: checkedOut ? "green" : "blue",
-      icon: checkedOut ? CheckCircle2 : CalendarCheck,
+      label: attendanceToday.status || "Marked",
+      tone: "blue",
+      icon: CalendarCheck,
       checkIn: formatTime(checkedIn),
       checkOut: formatTime(checkedOut),
-      total: formatMinutes(attendanceToday.totalMinutes)
+      total: formatMinutes(totalMinutes)
     };
   }, [attendanceToday]);
 
@@ -804,6 +936,8 @@ export default function TeamDashboardGraph() {
     1
   );
 
+  const AttendanceIcon = attendanceStatus.icon;
+
   return (
     <div className="space-y-5">
 
@@ -843,6 +977,45 @@ export default function TeamDashboardGraph() {
           icon={Video}
           tone="purple"
           onClick={() => router.push("/engagements")}
+        />
+      </div>
+
+      {/* ================= LEAD OWNERSHIP ================= */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <StatCard
+          title="Created By Me"
+          value={stats.ownership.createdByMe}
+          subtitle="Leads originally created by you"
+          icon={Plus}
+          tone="blue"
+          onClick={() => router.push("/leads")}
+        />
+
+        <StatCard
+          title="Assigned To Me"
+          value={stats.ownership.assignedToMe}
+          subtitle="Leads currently assigned to you"
+          icon={Users}
+          tone="green"
+          onClick={() => router.push("/leads")}
+        />
+
+        <StatCard
+          title="Assigned By Others"
+          value={stats.ownership.assignedByOthers}
+          subtitle="Created by others but assigned to you"
+          icon={ArrowRight}
+          tone="purple"
+          onClick={() => router.push("/leads")}
+        />
+
+        <StatCard
+          title="Self Owned"
+          value={stats.ownership.selfOwned}
+          subtitle="Created and assigned to you"
+          icon={CheckCircle2}
+          tone="slate"
+          onClick={() => router.push("/leads")}
         />
       </div>
 
@@ -1056,7 +1229,7 @@ export default function TeamDashboardGraph() {
                 </div>
 
                 <div className="h-12 w-12 rounded-2xl bg-white text-blue-700 flex items-center justify-center shadow-sm">
-                  <attendanceStatus.icon className="w-6 h-6" />
+                  <AttendanceIcon className="w-6 h-6" />
                 </div>
               </div>
 

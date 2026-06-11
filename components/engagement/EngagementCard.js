@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -14,7 +15,9 @@ import {
   Eye,
   MapPin,
   User,
-  ExternalLink
+  ExternalLink,
+  CheckCircle2,
+  AlertTriangle
 } from "lucide-react";
 
 import InitialAvatar from "@/components/ui/InitialAvatar";
@@ -49,7 +52,6 @@ const CHANNEL_CONFIG = {
 
 /* =========================
    HTML TO CLEAN TEXT
-   Safe for Next.js render
 ========================= */
 function normalizeHtmlText(input = "") {
   if (!input) return "";
@@ -70,44 +72,178 @@ function normalizeHtmlText(input = "") {
     .trim();
 }
 
+/* =========================
+   FIELD HELPERS
+========================= */
+const getAgentId = (engagement, agent) =>
+  agent?.id ||
+  engagement?.travelAgentId ||
+  engagement?.agentId ||
+  engagement?.travelAgentRefId ||
+  engagement?.travelAgentDocId ||
+  engagement?.agent?.id ||
+  engagement?.agent?.travelAgentId ||
+  engagement?.travelAgent?.id ||
+  "";
+
+const getAgentPhone = (engagement, agent) =>
+  agent?.phone ||
+  engagement?.agentPhone ||
+  engagement?.travelAgentPhone ||
+  engagement?.phone ||
+  engagement?.mobile ||
+  engagement?.spoc?.phone ||
+  engagement?.spoc?.mobile ||
+  engagement?.agent?.phone ||
+  engagement?.agent?.mobile ||
+  engagement?.travelAgent?.phone ||
+  "";
+
+const getAgentEmail = (engagement, agent) =>
+  agent?.email ||
+  engagement?.agentEmail ||
+  engagement?.travelAgentEmail ||
+  engagement?.email ||
+  engagement?.spoc?.email ||
+  engagement?.agent?.email ||
+  engagement?.travelAgent?.email ||
+  "";
+
+const getAgentCity = (engagement, agent) =>
+  agent?.city ||
+  engagement?.agentCity ||
+  engagement?.travelAgentCity ||
+  engagement?.city ||
+  engagement?.agent?.city ||
+  engagement?.agent?.address?.city ||
+  engagement?.travelAgent?.city ||
+  engagement?.travelAgent?.address?.city ||
+  "";
+
+const getProfileStatus = (engagement, agent) => {
+  const directlyComplete =
+    agent?.profileComplete === true ||
+    engagement?.profileComplete === true ||
+    engagement?.travelAgentProfileComplete === true ||
+    engagement?.agent?.profileComplete === true ||
+    engagement?.travelAgent?.profileComplete === true;
+
+  if (directlyComplete) {
+    return {
+      complete: true,
+      percentage: 100,
+      missing: []
+    };
+  }
+
+  if (typeof agent?.profileCompletionPercentage === "number") {
+    return {
+      complete: agent.profileCompletionPercentage >= 100,
+      percentage: agent.profileCompletionPercentage,
+      missing: agent?.missingProfileFields || []
+    };
+  }
+
+  const checks = [
+    {
+      label: "Agency name",
+      ok: Boolean(
+        agent?.agencyName ||
+          agent?.name ||
+          engagement?.travelAgentName ||
+          engagement?.agentName ||
+          engagement?.agencyName
+      )
+    },
+    {
+      label: "SPOC",
+      ok: Boolean(
+        engagement?.spoc?.name ||
+          engagement?.spocName ||
+          engagement?.contactPerson ||
+          agent?.spocName
+      )
+    },
+    {
+      label: "Phone",
+      ok: Boolean(getAgentPhone(engagement, agent))
+    },
+    {
+      label: "Email",
+      ok: Boolean(getAgentEmail(engagement, agent))
+    },
+    {
+      label: "City",
+      ok: Boolean(getAgentCity(engagement, agent))
+    }
+  ];
+
+  const completed = checks.filter(item => item.ok).length;
+
+  return {
+    complete: completed === checks.length,
+    percentage: Math.round((completed / checks.length) * 100),
+    missing: checks.filter(item => !item.ok).map(item => item.label)
+  };
+};
+
 export default function EngagementCard({
   engagement,
   agent,
-  highlight = false
+  highlight = false,
+
+  /* page-specific controls */
+  agentProfileHref = "",
+  viewEngagementHref = "",
+  leadCreateHref = "",
+  showSendCommunication = true,
+  showProfileBadge = true
 }) {
   const router = useRouter();
 
   const [expanded, setExpanded] = useState(false);
-  const [pinned, setPinned] = useState(!!engagement.pinned);
+  const [pinned, setPinned] = useState(!!engagement?.pinned);
   const [leadOpen, setLeadOpen] = useState(false);
   const [commOpen, setCommOpen] = useState(false);
 
   const PREVIEW_CHARS = 140;
 
   const message = normalizeHtmlText(
-    engagement.message ||
-      engagement.messageText ||
-      engagement.messageHtml ||
+    engagement?.message ||
+      engagement?.messageText ||
+      engagement?.messageHtml ||
       ""
   );
 
-  const channelKey = String(engagement.channel || "meeting").toLowerCase();
+  const channelKey = String(engagement?.channel || "meeting").toLowerCase();
   const channel = CHANNEL_CONFIG[channelKey] || CHANNEL_CONFIG.meeting;
   const ChannelIcon = channel.icon;
 
+  const agentId = getAgentId(engagement, agent);
+
+  const resolvedAgentProfileHref =
+    agentProfileHref || (agentId ? `/travel-agents/${agentId}` : "");
+
+  const resolvedViewEngagementHref =
+    viewEngagementHref ||
+    (engagement?.id ? `/engagements/${engagement.id}` : "");
+
   const travelAgentName =
-    engagement.travelAgentName ||
-    engagement.agentName ||
-    engagement.agent?.name ||
+    engagement?.travelAgentName ||
+    engagement?.agentName ||
+    engagement?.agent?.name ||
     agent?.agencyName ||
     agent?.name ||
     "—";
 
   const spocName =
-    engagement.spoc?.name ||
-    engagement.spoc?.email ||
-    engagement.spoc?.mobile ||
+    agent?.spocName ||
+    engagement?.spoc?.name ||
+    engagement?.spoc?.email ||
+    engagement?.spoc?.mobile ||
     "";
+
+  const profile = getProfileStatus(engagement, agent);
 
   const touchStartX = useRef(0);
 
@@ -120,18 +256,31 @@ export default function EngagementCard({
 
     if (Math.abs(diff) < 80) return;
 
-    if (diff > 80) {
+    if (diff > 80 && showSendCommunication) {
       setCommOpen(true);
     }
 
-    if (diff < -80 && !engagement.leadId) {
-      setLeadOpen(true);
+    if (diff < -80 && !engagement?.leadId) {
+      if (leadCreateHref) {
+        router.push(leadCreateHref);
+      } else {
+        setLeadOpen(true);
+      }
     }
   };
 
   const openEngagementDetail = () => {
-    if (!engagement?.id) return;
-    router.push(`/engagements/${engagement.id}`);
+    if (!resolvedViewEngagementHref) return;
+    router.push(resolvedViewEngagementHref);
+  };
+
+  const openLeadCreate = () => {
+    if (leadCreateHref) {
+      router.push(leadCreateHref);
+      return;
+    }
+
+    setLeadOpen(true);
   };
 
   return (
@@ -159,7 +308,7 @@ export default function EngagementCard({
             <Clock className="w-4 h-4 text-orange-500 ml-2 shrink-0" />
 
             <span className="text-xs text-gray-600 capitalize truncate">
-              {engagement.status || "logged"}
+              {engagement?.status || "logged"}
             </span>
           </button>
 
@@ -190,7 +339,7 @@ export default function EngagementCard({
         </div>
 
         {/* DESTINATION */}
-        {engagement.destinationName && (
+        {engagement?.destinationName && (
           <button
             type="button"
             onClick={openEngagementDetail}
@@ -245,8 +394,42 @@ export default function EngagementCard({
         <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
           <div className="flex items-center gap-1.5 min-w-0">
             <User className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">{travelAgentName}</span>
+
+            {resolvedAgentProfileHref ? (
+              <Link
+                href={resolvedAgentProfileHref}
+                className="inline-flex items-center gap-1 text-gray-700 hover:text-blue-700 min-w-0"
+              >
+                <span className="truncate">{travelAgentName}</span>
+                <ExternalLink className="w-3 h-3 shrink-0" />
+              </Link>
+            ) : (
+              <span className="truncate">{travelAgentName}</span>
+            )}
           </div>
+
+          {showProfileBadge && (
+            <>
+              {profile.complete ? (
+                <span className="inline-flex items-center gap-1 rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                  <CheckCircle2 className="w-3 h-3" />
+                  Profile Complete
+                </span>
+              ) : (
+                <span
+                  title={
+                    profile.missing?.length
+                      ? `Missing: ${profile.missing.join(", ")}`
+                      : "Profile details incomplete"
+                  }
+                  className="inline-flex items-center gap-1 rounded-full border border-amber-100 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700"
+                >
+                  <AlertTriangle className="w-3 h-3" />
+                  Profile {profile.percentage}%
+                </span>
+              )}
+            </>
+          )}
 
           {spocName && (
             <div className="flex items-center gap-1.5 min-w-0">
@@ -255,7 +438,7 @@ export default function EngagementCard({
             </div>
           )}
 
-          {engagement.createdByName && (
+          {engagement?.createdByName && (
             <div className="flex items-center gap-1.5 min-w-0">
               <InitialAvatar name={engagement.createdByName} size="xs" />
               <span className="truncate">{engagement.createdByName}</span>
@@ -264,7 +447,11 @@ export default function EngagementCard({
         </div>
 
         {/* ACTIONS */}
-        <div className="grid grid-cols-3 gap-2 pt-1">
+        <div
+          className={`grid gap-2 pt-1 ${
+            showSendCommunication ? "grid-cols-3" : "grid-cols-2"
+          }`}
+        >
           <button
             type="button"
             onClick={openEngagementDetail}
@@ -274,19 +461,21 @@ export default function EngagementCard({
             Details
           </button>
 
-          <button
-            type="button"
-            onClick={() => setCommOpen(true)}
-            className="py-1.5 rounded-md text-xs font-medium bg-blue-600 text-white flex items-center justify-center gap-1 hover:bg-blue-700"
-          >
-            <Send className="w-3.5 h-3.5" />
-            Send
-          </button>
-
-          {!engagement.leadId ? (
+          {showSendCommunication && (
             <button
               type="button"
-              onClick={() => setLeadOpen(true)}
+              onClick={() => setCommOpen(true)}
+              className="py-1.5 rounded-md text-xs font-medium bg-blue-600 text-white flex items-center justify-center gap-1 hover:bg-blue-700"
+            >
+              <Send className="w-3.5 h-3.5" />
+              Send
+            </button>
+          )}
+
+          {!engagement?.leadId ? (
+            <button
+              type="button"
+              onClick={openLeadCreate}
               className="py-1.5 rounded-md text-xs font-medium border border-green-600 text-green-600 flex items-center justify-center gap-1 hover:bg-green-50"
             >
               <PlusCircle className="w-3.5 h-3.5" />
@@ -306,7 +495,7 @@ export default function EngagementCard({
       </article>
 
       {/* MODALS */}
-      {commOpen && (
+      {showSendCommunication && commOpen && (
         <SendCommunicationModal
           engagement={engagement}
           agent={agent}
