@@ -340,7 +340,7 @@ export default function BrandingSettingsPage() {
                 onChange={e =>
                   updateField("supportEmail", e.target.value)
                 }
-                placeholder="info@dreamtrawelldestination.com"
+                placeholder="outbound@dreamtrawelldestination.com"
               />
             </div>
 
