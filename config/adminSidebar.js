@@ -20,7 +20,8 @@ import {
   ClipboardCheck,
   Calendar,
   UploadCloud,
-  ShieldCheck
+  ShieldCheck,
+  Building2
 } from "lucide-react";
 
 export const adminSidebar = [
@@ -93,6 +94,12 @@ export const adminSidebar = [
         permission: "leadManagement"
       }
     ]
+  },
+  {
+    label: "Vendors",
+    icon: Building2,
+    href: "/admin/vendors",
+    permission: "leadManagement"
   },
 
   {

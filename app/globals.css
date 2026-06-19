@@ -100,3 +100,28 @@ body {
 .logo-breath {
   animation: logoBreath 3.5s ease-in-out infinite;
 }
+
+.quotation-html-editor ul,
+.quotation-html-editor ol {
+  padding-left: 24px;
+  margin: 8px 0;
+}
+
+.quotation-html-editor li {
+  margin: 4px 0;
+  padding-left: 2px;
+}
+
+.quotation-html-editor strong,
+.quotation-html-editor b {
+  font-weight: 700;
+}
+
+.quotation-html-editor em,
+.quotation-html-editor i {
+  font-style: italic;
+}
+
+.quotation-html-editor u {
+  text-decoration: underline;
+}

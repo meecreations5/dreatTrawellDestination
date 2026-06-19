@@ -52,6 +52,7 @@ const inputClass = `
 /* =========================
    BASIC HELPERS
 ========================= */
+
 function stripHtml(html = "") {
   return html
     .replace(/<style[\s\S]*?<\/style>/gi, "")
@@ -84,6 +85,7 @@ function htmlContainsGreeting(html = "") {
   return (
     text.includes("dear ") ||
     text.includes("greetings from") ||
+    text.includes("thank you for choosing") ||
     text.includes("thank you for giving us") ||
     text.includes("thank you for giving") ||
     text.includes("kindly check the above quotation") ||
@@ -147,9 +149,86 @@ function isInternalUser(member) {
   return !inactive && !excludedRoles.includes(role);
 }
 
+function getInitialPricingSnapshot(initialQuotation, lead) {
+  const snapshot =
+    initialQuotation?.pricingSnapshot ||
+    initialQuotation?.metadata?.pricingSnapshot ||
+    {};
+
+  const selectedVendorCost =
+    snapshot.selectedVendorCost ??
+    initialQuotation?.selectedVendorCost ??
+    initialQuotation?.vendorCost ??
+    initialQuotation?.metadata?.vendorCost ??
+    lead?.selectedVendorCost ??
+    lead?.finalVendorCost ??
+    "";
+
+  const selectedVendorCurrency =
+    snapshot.selectedVendorCurrency ||
+    initialQuotation?.selectedVendorCurrency ||
+    lead?.selectedVendorCurrency ||
+    lead?.finalVendorCurrency ||
+    "INR";
+
+  const selectedVendorName =
+    snapshot.selectedVendorName ||
+    initialQuotation?.selectedVendorName ||
+    lead?.selectedVendorName ||
+    lead?.finalVendorName ||
+    "";
+
+  const selectedVendorQuoteId =
+    snapshot.selectedVendorQuoteId ||
+    initialQuotation?.selectedVendorQuoteId ||
+    lead?.selectedVendorQuoteId ||
+    lead?.finalVendorQuoteId ||
+    "";
+
+  const selectedVendorRequestId =
+    snapshot.selectedVendorRequestId ||
+    initialQuotation?.selectedVendorRequestId ||
+    lead?.selectedVendorRequestId ||
+    lead?.finalVendorRequestId ||
+    "";
+
+  const customerQuoteAmount =
+    snapshot.customerQuoteAmount ??
+    initialQuotation?.customerQuoteAmount ??
+    initialQuotation?.customerQuotedAmount ??
+    initialQuotation?.totalAmount ??
+    initialQuotation?.totalPrice ??
+    initialQuotation?.metadata?.customerQuotedAmount ??
+    "";
+
+  const quotationPricingMode =
+    snapshot.quotationPricingMode ||
+    initialQuotation?.quotationPricingMode ||
+    initialQuotation?.metadata?.quotationPricingMode ||
+    "direct";
+
+  const vendorQuoteFinalized =
+    snapshot.vendorQuoteFinalized ??
+    initialQuotation?.vendorQuoteFinalized ??
+    initialQuotation?.metadata?.vendorQuoteFinalized ??
+    false;
+
+  return {
+    quotationPricingMode,
+    vendorQuoteFinalized,
+    selectedVendorCost,
+    selectedVendorCurrency,
+    selectedVendorName,
+    selectedVendorQuoteId,
+    selectedVendorRequestId,
+    customerQuoteAmount
+  };
+}
+
 /* =========================
    TIMELINE HELPERS
 ========================= */
+
 async function updateQuotationSentStatus({
   leadId,
   quotationId,
@@ -204,7 +283,14 @@ async function logQuotationCommunication({
   grossProfit,
   marginPercent,
   itineraryHtml,
-  isFinalQuotation
+  isFinalQuotation,
+  quotationPricingMode,
+  vendorQuoteFinalized,
+
+  selectedVendorName,
+  selectedVendorQuoteId,
+  selectedVendorRequestId,
+  selectedVendorCurrency
 }) {
   if (!leadId || !channel) return;
 
@@ -251,9 +337,20 @@ async function logQuotationCommunication({
 
         itineraryHtml: itineraryHtml || "",
 
+        quotationPricingMode,
+        vendorQuoteFinalized,
         totalAmount: customerAmountNumber,
         customerQuotedAmount: customerAmountNumber,
+        customerQuoteAmount: customerAmountNumber,
+        customerQuoteCurrency: selectedVendorCurrency || "INR",
+
         vendorCost: hasVendorCost ? vendorCostNumber : null,
+        selectedVendorCost: hasVendorCost ? vendorCostNumber : null,
+        selectedVendorCurrency: selectedVendorCurrency || "INR",
+        selectedVendorName: selectedVendorName || "",
+        selectedVendorQuoteId: selectedVendorQuoteId || "",
+        selectedVendorRequestId: selectedVendorRequestId || "",
+
         grossProfit,
         marginPercent:
           marginPercent === null || marginPercent === undefined
@@ -284,6 +381,7 @@ async function logQuotationCommunication({
 /* =========================
    HTML / PASTE HELPERS
 ========================= */
+
 function convertPlainTextToHtml(text = "") {
   const trimmed = text.trimEnd();
 
@@ -313,7 +411,63 @@ function convertPlainTextToHtml(text = "") {
     `;
   }
 
-  return escapeHtml(trimmed).replace(/\r?\n/g, "<br />");
+  const lines = trimmed.split(/\r?\n/);
+  const output = [];
+  let activeListType = "";
+  let activeListItems = [];
+
+  function flushList() {
+    if (!activeListType || !activeListItems.length) return;
+
+    output.push(`
+      <${activeListType}>
+        ${activeListItems.map(item => `<li>${item}</li>`).join("")}
+      </${activeListType}>
+    `);
+
+    activeListType = "";
+    activeListItems = [];
+  }
+
+  lines.forEach(line => {
+    const value = line.trim();
+
+    if (!value) {
+      flushList();
+      output.push("<p><br /></p>");
+      return;
+    }
+
+    const bulletMatch = value.match(/^([•·*+\-])\s+(.+)$/);
+    const numberMatch = value.match(/^(\d+)[.)]\s+(.+)$/);
+
+    if (bulletMatch) {
+      if (activeListType && activeListType !== "ul") {
+        flushList();
+      }
+
+      activeListType = "ul";
+      activeListItems.push(escapeHtml(bulletMatch[2]));
+      return;
+    }
+
+    if (numberMatch) {
+      if (activeListType && activeListType !== "ol") {
+        flushList();
+      }
+
+      activeListType = "ol";
+      activeListItems.push(escapeHtml(numberMatch[2]));
+      return;
+    }
+
+    flushList();
+    output.push(`<p>${escapeHtml(value)}</p>`);
+  });
+
+  flushList();
+
+  return output.join("");
 }
 
 function cleanStyle(styleValue = "") {
@@ -401,6 +555,101 @@ function inlineClassStyles(doc) {
       const existing = element.getAttribute("style") || "";
       element.setAttribute("style", `${existing}; ${cssBody}`);
     });
+  });
+}
+
+function isWordListElement(element) {
+  if (!element || element.nodeType !== 1) return false;
+
+  const className = element.getAttribute("class") || "";
+  const style = element.getAttribute("style") || "";
+  const text = element.textContent?.replace(/\s+/g, " ").trim() || "";
+
+  return (
+    /MsoListParagraph/i.test(className) ||
+    /mso-list/i.test(style) ||
+    /^[•·*+\-]\s+/.test(text) ||
+    /^\d+[.)]\s+/.test(text)
+  );
+}
+
+function getWordListType(element) {
+  const text = element.textContent?.replace(/\s+/g, " ").trim() || "";
+
+  const marker =
+    element.querySelector('span[style*="mso-list"]')?.textContent ||
+    text;
+
+  if (/^\s*\d+[.)]/.test(marker) || /^\s*\d+[.)]/.test(text)) {
+    return "ol";
+  }
+
+  return "ul";
+}
+
+function removeWordListMarker(element) {
+  element
+    .querySelectorAll('span[style*="mso-list"]')
+    .forEach(node => node.remove());
+
+  function removeLeadingMarker(node) {
+    if (!node) return false;
+
+    if (node.nodeType === 3) {
+      const original = node.textContent || "";
+      const cleaned = original.replace(
+        /^\s*(?:[•·*+\-]\s+|\d+[.)]\s+)/,
+        ""
+      );
+
+      if (cleaned !== original) {
+        node.textContent = cleaned;
+        return true;
+      }
+
+      return false;
+    }
+
+    for (const child of Array.from(node.childNodes || [])) {
+      if (removeLeadingMarker(child)) return true;
+    }
+
+    return false;
+  }
+
+  removeLeadingMarker(element);
+}
+
+function normalizeWordLists(doc) {
+  const bodyChildren = Array.from(doc.body.children);
+  let currentList = null;
+  let currentListType = "";
+
+  bodyChildren.forEach(element => {
+    if (!isWordListElement(element)) {
+      currentList = null;
+      currentListType = "";
+      return;
+    }
+
+    const listType = getWordListType(element);
+
+    if (!currentList || currentListType !== listType) {
+      currentList = doc.createElement(listType);
+      currentListType = listType;
+      element.parentNode.insertBefore(currentList, element);
+    }
+
+    removeWordListMarker(element);
+
+    const li = doc.createElement("li");
+
+    while (element.firstChild) {
+      li.appendChild(element.firstChild);
+    }
+
+    currentList.appendChild(li);
+    element.remove();
   });
 }
 
@@ -560,6 +809,7 @@ function prepareQuotationHtmlForEmail(rawHtml = "") {
 /* =========================
    UI HELPERS
 ========================= */
+
 function TabButton({ active, onClick, children }) {
   return (
     <button
@@ -569,6 +819,24 @@ function TabButton({ active, onClick, children }) {
         ? "bg-blue-600 text-white border-blue-600"
         : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
         }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ToolbarButton({ title, onClick, children }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onMouseDown={event => event.preventDefault()}
+      onClick={onClick}
+      className="
+        h-8 min-w-8 rounded-lg border border-gray-200 bg-white
+        px-2 text-xs font-semibold text-gray-700
+        hover:bg-gray-50 hover:text-gray-950
+      "
     >
       {children}
     </button>
@@ -611,6 +879,7 @@ function ConfirmSendModal({
           <h3 className="text-base font-semibold text-gray-900">
             {isDraftSend ? "Confirm Send Draft" : "Confirm Send Quotation"}
           </h3>
+
           <p className="text-xs text-gray-500 mt-1">
             Please verify the recipient, channels and internal commercial
             details before sending.
@@ -692,6 +961,7 @@ function ConfirmSendModal({
 /* =========================
    COMPONENT
 ========================= */
+
 export default function QuotationEditor({
   lead,
   onClose,
@@ -719,6 +989,30 @@ export default function QuotationEditor({
   const [savingDraft, setSavingDraft] = useState(false);
   const [draftQuotationId, setDraftQuotationId] = useState("");
   const [draftRevision, setDraftRevision] = useState(null);
+
+  const initialPricingSnapshot = useMemo(() => {
+    return getInitialPricingSnapshot(initialQuotation, lead);
+  }, [initialQuotation, lead]);
+
+  const selectedVendorName = initialPricingSnapshot.selectedVendorName;
+  const selectedVendorQuoteId = initialPricingSnapshot.selectedVendorQuoteId;
+  const selectedVendorRequestId =
+    initialPricingSnapshot.selectedVendorRequestId;
+
+  const selectedVendorCurrency =
+    initialPricingSnapshot.selectedVendorCurrency || "INR";
+
+  const quotationPricingMode =
+    initialPricingSnapshot.quotationPricingMode || "direct";
+
+  const vendorQuoteFinalized =
+    Boolean(initialPricingSnapshot.vendorQuoteFinalized);
+
+  const vendorCostLocked = Boolean(
+    selectedVendorQuoteId ||
+    selectedVendorRequestId ||
+    selectedVendorName
+  );
 
   const recipient = useMemo(() => {
     const name = getFirstValue(
@@ -925,7 +1219,6 @@ export default function QuotationEditor({
     };
   }, [selectedSignatureUser, currentUserOption]);
 
-
   useEffect(() => {
     if (activeTab !== "edit") return;
 
@@ -943,12 +1236,28 @@ export default function QuotationEditor({
   }, [activeTab, html]);
 
   useEffect(() => {
+    const pricing = getInitialPricingSnapshot(initialQuotation, lead);
+
     if (!initialQuotation) {
       loadedQuotationKeyRef.current = "";
       pendingEditorHydrateRef.current = true;
       setHtml("");
       setDraftQuotationId("");
       setDraftRevision(null);
+
+      setCustomerQuotedAmount(
+        pricing.customerQuoteAmount === null ||
+          pricing.customerQuoteAmount === undefined
+          ? ""
+          : String(pricing.customerQuoteAmount)
+      );
+
+      setVendorCost(
+        pricing.selectedVendorCost === null ||
+          pricing.selectedVendorCost === undefined
+          ? ""
+          : String(pricing.selectedVendorCost)
+      );
 
       if (editorRef.current) {
         editorRef.current.innerHTML = "";
@@ -960,7 +1269,11 @@ export default function QuotationEditor({
     const quotationKey =
       initialQuotation.id ||
       initialQuotation.quotationId ||
-      `${initialQuotation.leadId || ""}-${initialQuotation.revision || ""}`;
+      initialQuotation.selectedVendorQuoteId ||
+      initialQuotation.pricingSnapshot?.selectedVendorQuoteId ||
+      `${initialQuotation.leadId || lead?.id || ""}-${initialQuotation.revision || ""
+      }-${pricing.customerQuoteAmount || ""}-${pricing.selectedVendorCost || ""
+      }`;
 
     if (loadedQuotationKeyRef.current === quotationKey) return;
 
@@ -978,22 +1291,17 @@ export default function QuotationEditor({
     setHtml(draftHtml);
 
     setCustomerQuotedAmount(
-      initialQuotation.customerQuotedAmount ??
-      initialQuotation.totalAmount ??
-      initialQuotation.totalPrice ??
-      initialQuotation.metadata?.customerQuotedAmount ??
-      initialQuotation.metadata?.totalAmount ??
-      ""
+      pricing.customerQuoteAmount === null ||
+        pricing.customerQuoteAmount === undefined
+        ? ""
+        : String(pricing.customerQuoteAmount)
     );
 
     setVendorCost(
-      initialQuotation.vendorCost === null ||
-        initialQuotation.vendorCost === undefined
-        ? initialQuotation.metadata?.vendorCost === null ||
-          initialQuotation.metadata?.vendorCost === undefined
-          ? ""
-          : String(initialQuotation.metadata.vendorCost)
-        : String(initialQuotation.vendorCost)
+      pricing.selectedVendorCost === null ||
+        pricing.selectedVendorCost === undefined
+        ? ""
+        : String(pricing.selectedVendorCost)
     );
 
     setNote(initialQuotation.note || initialQuotation.metadata?.note || "");
@@ -1022,7 +1330,7 @@ export default function QuotationEditor({
     if (signatureUid) {
       setSelectedSignatureUid(signatureUid);
     }
-  }, [initialQuotation]);
+  }, [initialQuotation, lead]);
 
   if (!user || !lead) return null;
 
@@ -1046,6 +1354,21 @@ export default function QuotationEditor({
 
   const syncEditorHtml = () => {
     setHtml(editorRef.current?.innerHTML || "");
+  };
+
+  const executeEditorCommand = (command, value = null) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    editor.focus();
+
+    try {
+      document.execCommand(command, false, value);
+    } catch (error) {
+      console.warn("Editor command failed:", error);
+    }
+
+    syncEditorHtml();
   };
 
   const insertHtmlAtCursor = insertHtml => {
@@ -1131,6 +1454,15 @@ export default function QuotationEditor({
       (!Number.isFinite(vendorCostNumber) || vendorCostNumber < 0)
     ) {
       alert("Valid vendor cost is required");
+      return false;
+    }
+
+    if (
+      hasVendorCost &&
+      Number.isFinite(vendorCostNumber) &&
+      customerAmountNumber < vendorCostNumber
+    ) {
+      alert("Customer quotation amount cannot be lower than vendor cost.");
       return false;
     }
 
@@ -1222,10 +1554,22 @@ export default function QuotationEditor({
         itineraryHtml,
 
         customerQuotedAmount: customerAmountNumber || 0,
+        customerQuoteAmount: customerAmountNumber || 0,
+        customerQuoteCurrency: selectedVendorCurrency,
+
         vendorCost: hasVendorCost ? vendorCostNumber : null,
+        selectedVendorCost: hasVendorCost ? vendorCostNumber : null,
+        selectedVendorCurrency,
+        selectedVendorName,
+        selectedVendorQuoteId,
+        selectedVendorRequestId,
+        quotationPricingMode,
+        vendorQuoteFinalized,
         grossProfit,
         marginPercent:
           marginPercent === null ? null : Number(marginPercent.toFixed(2)),
+
+        pricingVisibleToCustomer: false,
 
         note,
 
@@ -1288,7 +1632,9 @@ export default function QuotationEditor({
       throw new Error("Draft quotation ID missing");
     }
 
-    const safeRevision = revision || draftRevision || initialQuotation?.revision || "";
+    const safeRevision =
+      revision || draftRevision || initialQuotation?.revision || "";
+
     const finalStatus = isFinalQuotation ? "final" : "sent";
 
     const signaturePayload = {
@@ -1329,7 +1675,17 @@ export default function QuotationEditor({
         totalPrice: customerAmountNumber,
         totalAmount: customerAmountNumber,
         customerQuotedAmount: customerAmountNumber,
+        customerQuoteAmount: customerAmountNumber,
+        customerQuoteCurrency: selectedVendorCurrency,
+
         vendorCost: hasVendorCost ? vendorCostNumber : null,
+        selectedVendorCost: hasVendorCost ? vendorCostNumber : null,
+        selectedVendorCurrency,
+        selectedVendorName,
+        selectedVendorQuoteId,
+        selectedVendorRequestId,
+        quotationPricingMode,
+        vendorQuoteFinalized,
         grossProfit,
         marginPercent:
           marginPercent === null
@@ -1357,14 +1713,23 @@ export default function QuotationEditor({
       latestQuotationStatus: finalStatus,
 
       latestQuotationAmount: customerAmountNumber,
+      latestCustomerQuoteCurrency: selectedVendorCurrency,
+
       latestVendorCost: hasVendorCost ? vendorCostNumber : null,
+      latestSelectedVendorName: selectedVendorName,
+      latestSelectedVendorQuoteId: selectedVendorQuoteId,
+      latestSelectedVendorRequestId: selectedVendorRequestId,
+      quotationPricingMode,
+      vendorQuoteFinalized,
+
       latestGrossProfit: grossProfit,
       latestMarginPercent:
         marginPercent === null
           ? null
           : Number(marginPercent.toFixed(2)),
 
-      stage: "quoted",
+      stage: "quote_sent",
+      stageLabel: "Quote sent",
       updatedAt: serverTimestamp(),
 
       ...(isFinalQuotation
@@ -1372,7 +1737,13 @@ export default function QuotationEditor({
           finalQuotationId: quotationId,
           finalQuotationRevision: safeRevision,
           finalQuotationAmount: customerAmountNumber,
+          finalCustomerQuoteCurrency: selectedVendorCurrency,
+
           finalVendorCost: hasVendorCost ? vendorCostNumber : null,
+          finalSelectedVendorName: selectedVendorName,
+          finalSelectedVendorQuoteId: selectedVendorQuoteId,
+          finalSelectedVendorRequestId: selectedVendorRequestId,
+
           finalGrossProfit: grossProfit,
           finalMarginPercent:
             marginPercent === null
@@ -1484,8 +1855,20 @@ export default function QuotationEditor({
           itineraryHtml,
 
           totalPrice: customerAmountNumber,
+          totalAmount: customerAmountNumber,
           customerQuotedAmount: customerAmountNumber,
+          customerQuoteAmount: customerAmountNumber,
+          customerQuoteCurrency: selectedVendorCurrency,
+          quotationPricingMode,
+          vendorQuoteFinalized,
+
           vendorCost: hasVendorCost ? vendorCostNumber : null,
+          selectedVendorCost: hasVendorCost ? vendorCostNumber : null,
+          selectedVendorCurrency,
+          selectedVendorName,
+          selectedVendorQuoteId,
+          selectedVendorRequestId,
+
           grossProfit,
           marginPercent:
             marginPercent === null
@@ -1523,7 +1906,6 @@ export default function QuotationEditor({
             signatureText: whatsappSignatureText
           },
 
-          // This prevents duplicate "Quotation Created" timeline log
           skipTimelineLog: true,
 
           user
@@ -1563,7 +1945,7 @@ export default function QuotationEditor({
             </p>
 
             <p style="margin: 0 0 16px;">
-              Greetings from DreamTrawell Destination.
+              Thank you for choosing DreamTrawell Destination.
             </p>
 
             <p style="margin: 0 0 16px;">
@@ -1655,7 +2037,7 @@ export default function QuotationEditor({
         const whatsappMessage = [
           `Dear ${recipient.name || "Guest"},`,
           "",
-          "Greetings from DreamTrawell Destination.",
+          "Thank you for choosing DreamTrawell Destination.",
           "",
           `Your quotation for ${lead.destinationName || "your travel enquiry"
           } has been prepared.`,
@@ -1713,7 +2095,14 @@ export default function QuotationEditor({
           grossProfit,
           marginPercent,
           itineraryHtml,
-          isFinalQuotation
+          isFinalQuotation,
+          quotationPricingMode,
+          vendorQuoteFinalized,
+
+          selectedVendorName,
+          selectedVendorQuoteId,
+          selectedVendorRequestId,
+          selectedVendorCurrency
         });
       }
 
@@ -1757,7 +2146,7 @@ export default function QuotationEditor({
         </p>
 
         <p style="margin: 0 0 16px;">
-          Greetings from DreamTrawell Destination.
+          Thank you for choosing DreamTrawell Destination.
         </p>
 
         <p style="margin: 0 0 16px;">
@@ -1784,7 +2173,7 @@ export default function QuotationEditor({
   const previewWhatsappMessage = [
     `Dear ${recipient.name || "Guest"},`,
     "",
-    "Greetings from DreamTrawell Destination.",
+    "Thank you for choosing DreamTrawell Destination.",
     "",
     `Your quotation for ${lead.destinationName || "your travel enquiry"
     } has been prepared.`,
@@ -1864,16 +2253,67 @@ export default function QuotationEditor({
 
               {activeTab === "edit" && (
                 <div className="border border-gray-200 rounded-lg overflow-hidden bg-white">
-                  <div className="border-b border-gray-100 px-4 py-2 bg-gray-50 flex items-center justify-between gap-3">
-                    <p className="text-xs text-gray-500">
-                      Paste itinerary from Excel / Google Sheets. Tables,
-                      columns, borders and cell background colors will be
-                      preserved.
-                    </p>
+                  <div className="border-b border-gray-100 bg-gray-50">
+                    <div className="px-4 py-2 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <ToolbarButton
+                          title="Bold"
+                          onClick={() => executeEditorCommand("bold")}
+                        >
+                          <span className="font-bold">B</span>
+                        </ToolbarButton>
 
-                    <span className="text-[11px] bg-green-50 text-green-700 border border-green-100 px-2 py-1 rounded-full">
-                      Customer Visible
-                    </span>
+                        <ToolbarButton
+                          title="Italic"
+                          onClick={() => executeEditorCommand("italic")}
+                        >
+                          <span className="italic">I</span>
+                        </ToolbarButton>
+
+                        <ToolbarButton
+                          title="Underline"
+                          onClick={() => executeEditorCommand("underline")}
+                        >
+                          <span className="underline">U</span>
+                        </ToolbarButton>
+
+                        <span className="h-6 w-px bg-gray-200 mx-1" />
+
+                        <ToolbarButton
+                          title="Bullet List"
+                          onClick={() => executeEditorCommand("insertUnorderedList")}
+                        >
+                          • List
+                        </ToolbarButton>
+
+                        <ToolbarButton
+                          title="Numbered List"
+                          onClick={() => executeEditorCommand("insertOrderedList")}
+                        >
+                          1. List
+                        </ToolbarButton>
+
+                        <span className="h-6 w-px bg-gray-200 mx-1" />
+
+                        <ToolbarButton
+                          title="Remove Formatting"
+                          onClick={() => executeEditorCommand("removeFormat")}
+                        >
+                          Clear
+                        </ToolbarButton>
+                      </div>
+
+                      <span className="text-[11px] bg-green-50 text-green-700 border border-green-100 px-2 py-1 rounded-full w-fit">
+                        Customer Visible
+                      </span>
+                    </div>
+
+                    <div className="px-4 pb-2">
+                      <p className="text-xs text-gray-500">
+                        Paste from Word, Google Docs, Excel or Sheets. Bold, italic, underline,
+                        bullets, numbering, tables and colors will be preserved where possible.
+                      </p>
+                    </div>
                   </div>
 
                   <div
@@ -1906,6 +2346,7 @@ export default function QuotationEditor({
                     <p className="text-sm font-semibold text-gray-900">
                       Email Preview
                     </p>
+
                     <p className="text-xs text-gray-500 mt-1">
                       This is how the quotation email body will look before
                       sending.
@@ -1931,6 +2372,7 @@ export default function QuotationEditor({
                     <p className="text-sm font-semibold text-gray-900">
                       WhatsApp Preview
                     </p>
+
                     <p className="text-xs text-gray-500 mt-1">
                       This text will open in WhatsApp Web.
                     </p>
@@ -1951,6 +2393,7 @@ export default function QuotationEditor({
                   <p className="text-sm font-semibold text-gray-900">
                     Recipient
                   </p>
+
                   <p className="text-xs text-gray-500">
                     Customer or travel agent contact.
                   </p>
@@ -1972,6 +2415,7 @@ export default function QuotationEditor({
                   <p className="text-sm font-semibold text-gray-900">
                     Communication Signature
                   </p>
+
                   <p className="text-xs text-gray-500">
                     Pulled from profile and admin branding.
                   </p>
@@ -2003,6 +2447,7 @@ export default function QuotationEditor({
                     <p className="font-semibold text-gray-900">
                       {getMemberName(previewSignature)}
                     </p>
+
                     <p>{getMemberRole(previewSignature) || "Role not set"}</p>
                     <p>{getMemberEmail(previewSignature) || "Email not set"}</p>
                     <p>
@@ -2017,6 +2462,7 @@ export default function QuotationEditor({
                             "DreamTrawell Destination"}
                         </b>
                       </p>
+
                       <p>
                         Signature:{" "}
                         <b>
@@ -2030,12 +2476,57 @@ export default function QuotationEditor({
                 )}
               </div>
 
+              {(selectedVendorName || hasVendorCost) && (
+                <div className="bg-green-50 border border-green-100 rounded-lg p-4 space-y-3">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">
+                      Final Vendor Pricing
+                    </p>
+
+                    <p className="text-xs text-gray-500">
+                      Pulled from selected vendor quote.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2 text-xs">
+                    <div className="flex justify-between gap-3">
+                      <span className="text-gray-500">Vendor</span>
+
+                      <b className="text-gray-900 text-right">
+                        {selectedVendorName || "Selected Vendor"}
+                      </b>
+                    </div>
+
+                    <div className="flex justify-between gap-3">
+                      <span className="text-gray-500">Vendor Cost</span>
+
+                      <b className="text-gray-900">
+                        {hasVendorCost
+                          ? formatCurrency(vendorCostNumber)
+                          : "—"}
+                      </b>
+                    </div>
+
+                    {selectedVendorQuoteId && (
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-500">Vendor Quote ID</span>
+
+                        <b className="text-gray-900 text-right break-all">
+                          {selectedVendorQuoteId}
+                        </b>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div className="bg-orange-50 border border-orange-100 rounded-lg p-4 space-y-3">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-gray-900">
                       Internal Commercials
                     </p>
+
                     <p className="text-xs text-gray-500">
                       Never sent to customer.
                     </p>
@@ -2063,8 +2554,19 @@ export default function QuotationEditor({
                   className={inputClass}
                   placeholder="Vendor Cost (₹)"
                   value={vendorCost}
-                  onChange={e => setVendorCost(e.target.value)}
+                  readOnly={vendorCostLocked}
+                  onChange={e => {
+                    if (!vendorCostLocked) {
+                      setVendorCost(e.target.value);
+                    }
+                  }}
                 />
+
+                {vendorCostLocked && (
+                  <p className="text-[11px] text-green-700">
+                    Vendor cost is locked from final selected vendor quote.
+                  </p>
+                )}
 
                 {(customerQuotedAmount || hasVendorCost) && (
                   <div className="bg-white border border-orange-100 rounded-lg p-3 text-xs text-gray-700 space-y-2">
@@ -2101,6 +2603,16 @@ export default function QuotationEditor({
                     </div>
                   </div>
                 )}
+
+                {hasVendorCost &&
+                  Number.isFinite(vendorCostNumber) &&
+                  customerAmountNumber > 0 &&
+                  customerAmountNumber < vendorCostNumber && (
+                    <div className="bg-red-50 border border-red-100 rounded-lg px-3 py-2 text-xs text-red-700">
+                      Customer quotation amount is lower than vendor cost.
+                      Please increase quotation amount before sending.
+                    </div>
+                  )}
               </div>
 
               <div className="bg-white border border-gray-200 rounded-lg p-4 space-y-3">

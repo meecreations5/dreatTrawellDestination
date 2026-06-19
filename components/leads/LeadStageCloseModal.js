@@ -1,12 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Trophy, XCircle, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Loader2,
+  Trophy,
+  X
+} from "lucide-react";
 
-const STAGE_LABELS = {
-  closed_won: "Closed Won",
-  closed_lost: "Closed Lost"
-};
+import {
+  LOST_REASON_OPTIONS,
+  getLeadStageMeta,
+  isConvertedStage,
+  isLostStage
+} from "@/lib/leadStages";
 
 export default function LeadStageCloseModal({
   open,
@@ -17,45 +24,61 @@ export default function LeadStageCloseModal({
   onConfirm
 }) {
   const [remark, setRemark] = useState("");
+  const [lostReason, setLostReason] = useState("");
   const [localError, setLocalError] = useState("");
 
-  const isWon = newStage === "closed_won";
+  const stageMeta = getLeadStageMeta(newStage);
+  const isConverted = isConvertedStage(newStage);
+  const isLost = isLostStage(newStage);
 
   useEffect(() => {
     if (!open) return;
 
     setRemark("");
+    setLostReason("");
     setLocalError("");
   }, [open, newStage]);
 
   const quickRemarks = useMemo(() => {
-    if (isWon) {
+    if (isConverted) {
       return [
-        "Client confirmed booking and accepted quotation.",
-        "Client approved final package and payment is expected.",
-        "Booking converted after follow-up and package discussion."
+        "Travel agent confirmed booking and payment is pending.",
+        "Final quotation accepted and booking moved to conversion.",
+        "Agent confirmed package after follow-up."
       ];
     }
 
     return [
-      "Client dropped due to budget mismatch.",
-      "Client stopped responding after follow-ups.",
-      "Client chose another travel partner.",
-      "Client postponed the travel plan."
+      "Agent dropped due to budget mismatch.",
+      "No response after multiple follow-ups.",
+      "Agent chose another travel partner.",
+      "Travel date is not fixed yet."
     ];
-  }, [isWon]);
+  }, [isConverted]);
 
   if (!open) return null;
 
   const handleConfirm = () => {
     setLocalError("");
 
-    if (!remark.trim()) {
-      setLocalError("Closing remark is required.");
+    if (isLost && !lostReason) {
+      setLocalError("Lost reason is required.");
       return;
     }
 
-    onConfirm?.(remark.trim());
+    if (!remark.trim()) {
+      setLocalError(
+        isLost
+          ? "Lost remark is required."
+          : "Conversion remark is required."
+      );
+      return;
+    }
+
+    onConfirm?.({
+      remark: remark.trim(),
+      lostReason: isLost ? lostReason : ""
+    });
   };
 
   return (
@@ -68,24 +91,28 @@ export default function LeadStageCloseModal({
               className={`
                 h-10 w-10 rounded-xl flex items-center justify-center
                 ${
-                  isWon
+                  isConverted
                     ? "bg-green-50 text-green-700"
-                    : "bg-red-50 text-red-700"
+                    : "bg-rose-50 text-rose-700"
                 }
               `}
             >
-              {isWon ? <Trophy size={20} /> : <XCircle size={20} />}
+              {isConverted ? (
+                <Trophy size={20} />
+              ) : (
+                <AlertTriangle size={20} />
+              )}
             </div>
 
             <div>
               <h2 className="text-base font-semibold text-gray-900">
-                Confirm Lead Closure
+                Confirm Stage Change
               </h2>
 
               <p className="text-sm text-gray-500 mt-1">
                 Moving this lead to{" "}
                 <span className="font-semibold text-gray-800">
-                  {STAGE_LABELS[newStage] || "Closed"}
+                  {stageMeta.label}
                 </span>
                 .
               </p>
@@ -108,38 +135,72 @@ export default function LeadStageCloseModal({
             className={`
               rounded-xl p-3 border text-sm
               ${
-                isWon
+                isConverted
                   ? "bg-green-50 border-green-100 text-green-700"
-                  : "bg-red-50 border-red-100 text-red-700"
+                  : "bg-rose-50 border-rose-100 text-rose-700"
               }
             `}
           >
-            {isWon
-              ? "Mark this lead as successfully converted."
+            {isConverted
+              ? "Mark this lead as converted after final confirmation."
               : "Mark this lead as lost with a clear reason."}
           </div>
 
+          {isLost && (
+            <div>
+              <label className="text-xs font-medium text-gray-500">
+                Lost Reason <span className="text-red-500">*</span>
+              </label>
+
+              <select
+                value={lostReason}
+                disabled={saving}
+                onChange={e => {
+                  setLostReason(e.target.value);
+                  setLocalError("");
+                }}
+                className="
+                  mt-1 w-full border border-gray-200 rounded-lg
+                  px-3 py-2 text-sm bg-white
+                  focus:outline-none focus:ring-2 focus:ring-blue-100
+                  disabled:bg-gray-50 disabled:text-gray-400
+                "
+              >
+                <option value="">Select lost reason</option>
+
+                {LOST_REASON_OPTIONS.map(item => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div>
             <label className="text-xs font-medium text-gray-500">
-              Closing Remark <span className="text-red-500">*</span>
+              {isLost ? "Lost Remark" : "Conversion Remark"}{" "}
+              <span className="text-red-500">*</span>
             </label>
 
             <textarea
               rows={4}
               value={remark}
+              disabled={saving}
               onChange={e => {
                 setRemark(e.target.value);
                 setLocalError("");
               }}
               placeholder={
-                isWon
-                  ? "Example: Client confirmed booking and quotation accepted."
-                  : "Example: Client dropped due to budget, no response, or chose another vendor."
+                isLost
+                  ? "Example: Agent selected another vendor due to price difference."
+                  : "Example: Agent confirmed final quotation and payment is expected."
               }
               className="
                 mt-1 w-full border border-gray-200 rounded-lg
                 px-3 py-2 text-sm resize-none
                 focus:outline-none focus:ring-2 focus:ring-blue-100
+                disabled:bg-gray-50 disabled:text-gray-400
               "
             />
           </div>
@@ -149,16 +210,17 @@ export default function LeadStageCloseModal({
               <button
                 key={item}
                 type="button"
+                disabled={saving}
                 onClick={() => {
                   setRemark(item);
                   setLocalError("");
                 }}
                 className={`
-                  text-xs px-3 py-1.5 rounded-full border
+                  text-xs px-3 py-1.5 rounded-full border disabled:opacity-60
                   ${
-                    isWon
+                    isConverted
                       ? "bg-green-50 text-green-700 border-green-100"
-                      : "bg-red-50 text-red-700 border-red-100"
+                      : "bg-rose-50 text-rose-700 border-rose-100"
                   }
                 `}
               >
@@ -198,16 +260,14 @@ export default function LeadStageCloseModal({
               disabled:opacity-60
               inline-flex items-center justify-center gap-2
               ${
-                isWon
+                isConverted
                   ? "bg-green-600 hover:bg-green-700"
-                  : "bg-red-600 hover:bg-red-700"
+                  : "bg-rose-600 hover:bg-rose-700"
               }
             `}
           >
             {saving && <Loader2 size={15} className="animate-spin" />}
-            {saving
-              ? "Updating..."
-              : `Confirm ${STAGE_LABELS[newStage] || "Close"}`}
+            {saving ? "Updating..." : `Confirm ${stageMeta.label}`}
           </button>
         </div>
       </div>
