@@ -21,7 +21,8 @@ import {
   Calendar,
   UploadCloud,
   ShieldCheck,
-  Building2
+  Building2,
+  ListChecks
 } from "lucide-react";
 
 export const adminSidebar = [
@@ -95,11 +96,25 @@ export const adminSidebar = [
       }
     ]
   },
+
   {
     label: "Vendors",
     icon: Building2,
-    href: "/admin/vendors",
-    permission: "leadManagement"
+    permission: "leadManagement",
+    children: [
+      {
+        label: "All Vendors",
+        icon: Building2,
+        href: "/admin/vendors",
+        permission: "leadManagement"
+      },
+      {
+        label: "Add Vendor",
+        icon: PlusCircle,
+        href: "/admin/vendors/new",
+        permission: "leadManagement"
+      }
+    ]
   },
 
   {
