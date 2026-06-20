@@ -22,55 +22,44 @@ import {
   ShieldCheck,
   Sparkles,
   AlertCircle,
-  CheckCircle2
+  CheckCircle2,
+  Plus,
+  Trash2,
+  Youtube,
+  MapPin,
+  Layers3,
+  GripVertical
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
 import { generateDestinationId } from "@/lib/generateDestinationId";
 
+import {
+  DESTINATION_TYPES,
+  LOCATION_TYPES
+} from "@/lib/destinationConstants";
+
+import {
+  DESTINATION_FORM_DEFAULTS,
+  normalizeDestinationForm,
+  createEmptyLocation
+} from "@/lib/destinationSchema";
+
+import {
+  createYouTubeMediaItem,
+  normalizeMediaGallery,
+  extractYouTubeId
+} from "@/lib/destinationMediaUtils";
+
 import MediaUploader from "@/components/destination/MediaUploader";
 import ContentBlockEditor from "@/components/destination/ContentBlockEditor";
 import SimpleListEditor from "@/components/destination/SimpleListEditor";
 import TravelStyleChips from "@/components/destination/TravelStyleChips";
+import AdvancedActivityEditor from "@/components/destination/AdvancedActivityEditor";
 
 /* =========================
-   EMPTY FORM
+   HELPERS
 ========================= */
-const EMPTY_FORM = {
-  destinationId: "",
-  name: "",
-  code: "",
-  shortDescription: "",
-  description: "",
-
-  bestTimeToVisit: "",
-  idealTripDuration: "",
-  destinationType: "international",
-
-  travelStyles: {
-    family: false,
-    couple: false,
-    luxury: false,
-    adventure: false
-  },
-
-  coverPhoto: null,
-  gallery: [],
-
-  activities: [],
-  attractions: [],
-  placesToVisit: [],
-  foodCulture: [],
-
-  channels: [],
-  salesPartners: [],
-  bookingPartners: [],
-
-  mediaFolder: "",
-
-  status: "draft",
-  active: true
-};
 
 function createDraftMediaKey() {
   if (
@@ -97,29 +86,25 @@ function makeCodeFromName(value = "") {
   return normalizeCode(value.trim().replace(/\s+/g, "-"));
 }
 
-function normalizeDestinationData(data = {}) {
-  return {
-    ...EMPTY_FORM,
-    ...data,
-    travelStyles: {
-      ...EMPTY_FORM.travelStyles,
-      ...(data.travelStyles || {})
-    },
-    gallery: Array.isArray(data.gallery) ? data.gallery : [],
-    activities: Array.isArray(data.activities) ? data.activities : [],
-    attractions: Array.isArray(data.attractions) ? data.attractions : [],
-    placesToVisit: Array.isArray(data.placesToVisit)
-      ? data.placesToVisit
-      : [],
-    foodCulture: Array.isArray(data.foodCulture) ? data.foodCulture : [],
-    channels: Array.isArray(data.channels) ? data.channels : [],
-    salesPartners: Array.isArray(data.salesPartners)
-      ? data.salesPartners
-      : [],
-    bookingPartners: Array.isArray(data.bookingPartners)
-      ? data.bookingPartners
-      : []
-  };
+function reorderItems(items = [], fromIndex, toIndex) {
+  const copy = [...items];
+
+  if (
+    fromIndex < 0 ||
+    toIndex < 0 ||
+    fromIndex >= copy.length ||
+    toIndex >= copy.length
+  ) {
+    return copy;
+  }
+
+  const [removed] = copy.splice(fromIndex, 1);
+  copy.splice(toIndex, 0, removed);
+
+  return copy.map((item, index) => ({
+    ...item,
+    order: index + 1
+  }));
 }
 
 export default function DestinationOverviewPage() {
@@ -130,7 +115,7 @@ export default function DestinationOverviewPage() {
 
   const [draftMediaKey] = useState(() => createDraftMediaKey());
 
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [form, setForm] = useState(DESTINATION_FORM_DEFAULTS);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [errors, setErrors] = useState({});
@@ -154,6 +139,7 @@ export default function DestinationOverviewPage() {
   ========================= */
   useEffect(() => {
     if (!destinationId || isNew) {
+      setForm(normalizeDestinationForm(DESTINATION_FORM_DEFAULTS));
       setLoading(false);
       return;
     }
@@ -170,7 +156,7 @@ export default function DestinationOverviewPage() {
           return;
         }
 
-        setForm(normalizeDestinationData(snap.data()));
+        setForm(normalizeDestinationForm(snap.data()));
       } catch (error) {
         console.error(error);
         setLoadError("Unable to load destination. Please try again.");
@@ -201,7 +187,7 @@ export default function DestinationOverviewPage() {
   }, []);
 
   /* =========================
-     HELPERS
+     UPDATE HELPERS
   ========================= */
   const clearErrors = keys => {
     setErrors(prev => {
@@ -211,9 +197,13 @@ export default function DestinationOverviewPage() {
     });
   };
 
-  const update = (key, value) => {
+  const markDirty = () => {
     dirtyRef.current = true;
     setSaveError("");
+  };
+
+  const update = (key, value) => {
+    markDirty();
 
     setForm(prev => ({
       ...prev,
@@ -223,9 +213,19 @@ export default function DestinationOverviewPage() {
     clearErrors([key]);
   };
 
+  const updateMany = patch => {
+    markDirty();
+
+    setForm(prev => ({
+      ...prev,
+      ...patch
+    }));
+
+    clearErrors(Object.keys(patch));
+  };
+
   const handleNameChange = value => {
-    dirtyRef.current = true;
-    setSaveError("");
+    markDirty();
 
     setForm(prev => {
       const next = {
@@ -248,9 +248,89 @@ export default function DestinationOverviewPage() {
   };
 
   /* =========================
+     LOCATIONS
+  ========================= */
+  const addLocation = () => {
+    const next = createEmptyLocation();
+
+    update("locations", [
+      ...(form.locations || []),
+      {
+        ...next,
+        order: (form.locations || []).length + 1
+      }
+    ]);
+  };
+
+  const updateLocation = (locationId, patch) => {
+    update(
+      "locations",
+      (form.locations || []).map(location =>
+        location.id === locationId
+          ? {
+              ...location,
+              ...patch
+            }
+          : location
+      )
+    );
+  };
+
+  const deleteLocation = locationId => {
+    const confirmed = window.confirm(
+      "Delete this location and all its activities/content?"
+    );
+
+    if (!confirmed) return;
+
+    update(
+      "locations",
+      (form.locations || [])
+        .filter(location => location.id !== locationId)
+        .map((location, index) => ({
+          ...location,
+          order: index + 1
+        }))
+    );
+  };
+
+  const moveLocation = (index, direction) => {
+    const nextIndex = direction === "up" ? index - 1 : index + 1;
+    update("locations", reorderItems(form.locations || [], index, nextIndex));
+  };
+
+  const handleActivityStructureChange = hasSubLocations => {
+    const patch = {
+      hasSubLocations
+    };
+
+    if (hasSubLocations && !(form.locations || []).length) {
+      patch.locations = [
+        {
+          ...createEmptyLocation(),
+          order: 1
+        }
+      ];
+    }
+
+    updateMany(patch);
+  };
+
+  /* =========================
      COMPLETION
   ========================= */
   const completion = useMemo(() => {
+    const galleryCount =
+      (Array.isArray(form.gallery) ? form.gallery.length : 0) +
+      (Array.isArray(form.mediaGallery) ? form.mediaGallery.length : 0);
+
+    const totalActivities = form.hasSubLocations
+      ? (form.locations || []).reduce(
+          (sum, location) => sum + (location.activities?.length || 0),
+          0
+        )
+      : form.activities?.length || 0;
+
     const checks = [
       {
         label: "Destination name",
@@ -273,22 +353,14 @@ export default function DestinationOverviewPage() {
         done: Boolean(form.coverPhoto)
       },
       {
-        label: "Gallery",
-        done: Array.isArray(form.gallery) && form.gallery.length > 0
+        label: "Gallery / YouTube media",
+        done: galleryCount > 0
       },
       {
-        label: "Activities",
-        done: Array.isArray(form.activities) && form.activities.length > 0
-      },
-      {
-        label: "Attractions",
-        done: Array.isArray(form.attractions) && form.attractions.length > 0
-      },
-      {
-        label: "Places to visit",
-        done:
-          Array.isArray(form.placesToVisit) &&
-          form.placesToVisit.length > 0
+        label: form.hasSubLocations ? "Locations added" : "Activities added",
+        done: form.hasSubLocations
+          ? (form.locations || []).length > 0
+          : totalActivities > 0
       },
       {
         label: "Best time to visit",
@@ -306,30 +378,35 @@ export default function DestinationOverviewPage() {
       completed,
       total: checks.length,
       percent: Math.round((completed / checks.length) * 100),
-      missing: checks.filter(item => !item.done).slice(0, 4)
+      missing: checks.filter(item => !item.done).slice(0, 4),
+      totalActivities,
+      galleryCount
     };
   }, [form]);
 
   const quickStats = useMemo(() => {
     return [
       {
+        label: "Locations",
+        value: form.locations?.length || 0
+      },
+      {
+        label: "Activities",
+        value: completion.totalActivities || 0
+      },
+      {
         label: "Gallery",
         value: form.gallery?.length || 0
       },
       {
-        label: "Activities",
-        value: form.activities?.length || 0
-      },
-      {
-        label: "Attractions",
-        value: form.attractions?.length || 0
-      },
-      {
-        label: "Places",
-        value: form.placesToVisit?.length || 0
+        label: "Videos",
+        value:
+          form.mediaGallery?.filter(
+            item => item.type === "video" && item.source === "youtube"
+          )?.length || 0
       }
     ];
-  }, [form]);
+  }, [form, completion.totalActivities]);
 
   /* =========================
      VALIDATION
@@ -345,6 +422,10 @@ export default function DestinationOverviewPage() {
       e.code = "Destination code is required";
     } else if (normalizeCode(form.code).length < 2) {
       e.code = "Destination code must be at least 2 characters";
+    }
+
+    if (form.hasSubLocations && !(form.locations || []).length) {
+      e.locations = "Add at least one city / island / region.";
     }
 
     setErrors(e);
@@ -379,7 +460,37 @@ export default function DestinationOverviewPage() {
         bestTimeToVisit: form.bestTimeToVisit?.trim() || "",
         idealTripDuration: form.idealTripDuration?.trim() || "",
 
+        locationLabel: form.locationLabel || "Locations",
+
+        locations: Array.isArray(form.locations)
+          ? form.locations.map((location, index) => ({
+              ...location,
+              order: index + 1,
+              name: location.name?.trim() || "",
+              type: location.type || "city",
+
+              activities: Array.isArray(location.activities)
+                ? location.activities
+                : [],
+
+              attractions: Array.isArray(location.attractions)
+                ? location.attractions
+                : [],
+
+              placesToVisit: Array.isArray(location.placesToVisit)
+                ? location.placesToVisit
+                : [],
+
+              foodCulture: Array.isArray(location.foodCulture)
+                ? location.foodCulture
+                : [],
+
+              mediaGallery: normalizeMediaGallery(location.mediaGallery || [])
+            }))
+          : [],
+
         mediaFolder: mediaBasePath,
+        mediaGallery: normalizeMediaGallery(form.mediaGallery || []),
 
         updatedAt: serverTimestamp()
       };
@@ -401,6 +512,7 @@ export default function DestinationOverviewPage() {
       await updateDoc(doc(db, "destinations", destinationId), payload);
 
       dirtyRef.current = false;
+
       setForm(prev => ({
         ...prev,
         ...payload
@@ -417,12 +529,12 @@ export default function DestinationOverviewPage() {
     return (
       <main className="min-h-screen bg-slate-50 p-6">
         <div className="mx-auto max-w-7xl space-y-6">
-          <div className="h-28 animate-pulse rounded-3xl bg-white shadow-sm" />
-          <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-            <div className="h-96 animate-pulse rounded-3xl bg-white shadow-sm" />
+          <div className="h-28 animate-pulse rounded-3xl bg-white " />
+          <div className="grid gap-6 lg:grid-cols-[290px_minmax(0,1fr)]">
+            <div className="h-96 animate-pulse rounded-3xl bg-white " />
             <div className="space-y-6">
-              <div className="h-80 animate-pulse rounded-3xl bg-white shadow-sm" />
-              <div className="h-80 animate-pulse rounded-3xl bg-white shadow-sm" />
+              <div className="h-80 animate-pulse rounded-3xl bg-white " />
+              <div className="h-80 animate-pulse rounded-3xl bg-white " />
             </div>
           </div>
         </div>
@@ -433,7 +545,7 @@ export default function DestinationOverviewPage() {
   if (loadError) {
     return (
       <main className="min-h-screen bg-slate-50 p-6">
-        <div className="mx-auto max-w-3xl rounded-3xl border border-red-100 bg-white p-8 text-center shadow-sm">
+        <div className="mx-auto max-w-3xl rounded-3xl border border-red-100 bg-white p-8 text-center ">
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 text-red-600">
             <AlertCircle size={22} />
           </div>
@@ -459,17 +571,17 @@ export default function DestinationOverviewPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-6 lg:px-8">
-      <div className="mx-auto max-w-7xl space-y-6 pb-28">
+    <main className="min-h-screen px-4 py-6 lg:px-8">
+      <div className="mx-auto max-w-[1600px] space-y-6 pb-28">
         {/* HEADER */}
-        <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+        <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white ">
           <div className="border-b border-slate-100 bg-gradient-to-r from-blue-50 via-white to-emerald-50 p-6">
             <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
               <div className="flex items-start gap-4">
                 <button
                   type="button"
                   onClick={() => router.back()}
-                  className="mt-1 flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-900"
+                  className="mt-1 flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600  transition hover:border-slate-300 hover:text-slate-900"
                   aria-label="Go back"
                 >
                   <ArrowLeft size={18} />
@@ -489,14 +601,16 @@ export default function DestinationOverviewPage() {
                   </h1>
 
                   <p className="mt-1 max-w-2xl text-sm text-slate-500">
-                    Add destination content, travel highlights, media,
-                    partner channels, and publishing settings from one place.
+                    Manage destination profile, media, locations, activities,
+                    partners, and visibility.
                   </p>
 
                   {!isNew && (
                     <p className="mt-2 text-xs font-medium text-slate-400">
                       Document ID: {destinationId}
-                      {form.destinationId ? ` | Business ID: ${form.destinationId}` : ""}
+                      {form.destinationId
+                        ? ` | Business ID: ${form.destinationId}`
+                        : ""}
                     </p>
                   )}
                 </div>
@@ -508,7 +622,7 @@ export default function DestinationOverviewPage() {
                     href={`/destinations/${destinationId}`}
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:border-blue-200 hover:text-blue-700"
+                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700  transition hover:border-blue-200 hover:text-blue-700"
                   >
                     <Eye size={16} />
                     Preview
@@ -519,7 +633,7 @@ export default function DestinationOverviewPage() {
                   type="button"
                   onClick={save}
                   disabled={saving}
-                  className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
+                  className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white  transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
                 >
                   <Save size={16} />
                   {saving ? "Saving..." : "Save Destination"}
@@ -555,11 +669,11 @@ export default function DestinationOverviewPage() {
         <div className="grid gap-6 lg:grid-cols-[290px_minmax(0,1fr)]">
           {/* LEFT SUMMARY */}
           <aside className="space-y-4 lg:sticky lg:top-6 lg:self-start">
-            <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <section className="rounded-3xl border border-slate-200 bg-white p-5 ">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                    Completion
+                    Readiness
                   </p>
                   <h2 className="mt-1 text-xl font-semibold text-slate-950">
                     {completion.percent}%
@@ -604,15 +718,16 @@ export default function DestinationOverviewPage() {
               )}
             </section>
 
-            <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+            <section className="rounded-3xl border border-slate-200 bg-white p-4 ">
               <p className="mb-3 px-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                Page Sections
+                Sections
               </p>
 
               <nav className="space-y-1">
                 <SideLink href="#basic" label="Basic Information" />
                 <SideLink href="#styles" label="Travel Styles" />
-                <SideLink href="#media" label="Media" />
+                <SideLink href="#media" label="Media Gallery" />
+                <SideLink href="#structure" label="Activity Structure" />
                 <SideLink href="#experiences" label="Experiences" />
                 <SideLink href="#meta" label="Trip Meta" />
                 <SideLink href="#partners" label="Channels & Partners" />
@@ -668,6 +783,23 @@ export default function DestinationOverviewPage() {
                 minHeight="min-h-[150px]"
                 onChange={v => update("description", v)}
               />
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <SelectField
+                  label="Destination Type"
+                  value={form.destinationType}
+                  onChange={v => update("destinationType", v)}
+                  options={DESTINATION_TYPES}
+                />
+
+                <Input
+                  label="Location Label"
+                  value={form.locationLabel}
+                  placeholder="Example: Cities, Islands, Regions"
+                  hint="Used only when location-wise structure is enabled."
+                  onChange={v => update("locationLabel", v)}
+                />
+              </div>
             </Surface>
 
             {/* TRAVEL STYLES */}
@@ -687,8 +819,8 @@ export default function DestinationOverviewPage() {
             <Surface
               id="media"
               icon={ImageIcon}
-              title="Media"
-              description="Upload a strong cover image and supporting gallery photos."
+              title="Media Gallery"
+              description="Add cover photo, multiple photos, and YouTube videos for sales and public pages."
             >
               <div className="grid gap-5 lg:grid-cols-2">
                 <MediaUploader
@@ -699,7 +831,7 @@ export default function DestinationOverviewPage() {
                 />
 
                 <MediaUploader
-                  label="Gallery"
+                  label="Photo Gallery"
                   multiple
                   value={form.gallery}
                   path={`${mediaBasePath}/gallery`}
@@ -707,48 +839,91 @@ export default function DestinationOverviewPage() {
                 />
               </div>
 
-              <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-700">
-                Tip: Use one clean hero image for cover and 4-8 images for
-                gallery to make the destination page look premium.
-              </div>
+              <YouTubeGalleryEditor
+                value={form.mediaGallery || []}
+                onChange={items => update("mediaGallery", items)}
+              />
+            </Surface>
+
+            {/* ACTIVITY STRUCTURE */}
+            <Surface
+              id="structure"
+              icon={Layers3}
+              title="Activity Structure"
+              description="Choose whether activities are managed directly under destination or under city / island / region."
+            >
+              <ActivityStructureSelector
+                hasSubLocations={form.hasSubLocations}
+                onChange={handleActivityStructureChange}
+              />
+
+              {errors.locations && (
+                <p
+                  data-field="locations"
+                  className="flex items-center gap-2 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-xs font-medium text-red-700"
+                >
+                  <AlertCircle size={15} />
+                  {errors.locations}
+                </p>
+              )}
             </Surface>
 
             {/* EXPERIENCES */}
             <Surface
               id="experiences"
               icon={MapPinned}
-              title="Experiences"
-              description="Add rich content blocks for activities, attractions, places, and food culture."
+              title={
+                form.hasSubLocations
+                  ? `${form.locationLabel || "Locations"} & Experiences`
+                  : "Destination Experiences"
+              }
+              description={
+                form.hasSubLocations
+                  ? "Manage city, island, or region-wise content."
+                  : "Manage destination-level activities, attractions, places, and food culture."
+              }
             >
-              <div className="space-y-8">
-                <ContentBlockEditor
-                  title="Activities"
-                  items={form.activities}
-                  basePath={`${mediaBasePath}/activities`}
-                  onChange={v => update("activities", v)}
+              {form.hasSubLocations ? (
+                <LocationManager
+                  locations={form.locations || []}
+                  locationLabel={form.locationLabel || "Locations"}
+                  mediaBasePath={mediaBasePath}
+                  onAdd={addLocation}
+                  onUpdate={updateLocation}
+                  onDelete={deleteLocation}
+                  onMove={moveLocation}
                 />
+              ) : (
+                <div className="space-y-8">
+                  <AdvancedActivityEditor
+                    title="Activities"
+                    items={form.activities}
+                    basePath={`${mediaBasePath}/activities`}
+                    onChange={v => update("activities", v)}
+                  />
 
-                <ContentBlockEditor
-                  title="Attractions"
-                  items={form.attractions}
-                  basePath={`${mediaBasePath}/attractions`}
-                  onChange={v => update("attractions", v)}
-                />
+                  <ContentBlockEditor
+                    title="Attractions"
+                    items={form.attractions}
+                    basePath={`${mediaBasePath}/attractions`}
+                    onChange={v => update("attractions", v)}
+                  />
 
-                <ContentBlockEditor
-                  title="Places To Visit"
-                  items={form.placesToVisit}
-                  basePath={`${mediaBasePath}/places`}
-                  onChange={v => update("placesToVisit", v)}
-                />
+                  <ContentBlockEditor
+                    title="Places To Visit"
+                    items={form.placesToVisit}
+                    basePath={`${mediaBasePath}/places`}
+                    onChange={v => update("placesToVisit", v)}
+                  />
 
-                <ContentBlockEditor
-                  title="Food Culture"
-                  items={form.foodCulture}
-                  basePath={`${mediaBasePath}/food`}
-                  onChange={v => update("foodCulture", v)}
-                />
-              </div>
+                  <ContentBlockEditor
+                    title="Food Culture"
+                    items={form.foodCulture}
+                    basePath={`${mediaBasePath}/food`}
+                    onChange={v => update("foodCulture", v)}
+                  />
+                </div>
+              )}
             </Surface>
 
             {/* META */}
@@ -758,7 +933,7 @@ export default function DestinationOverviewPage() {
               title="Trip Meta"
               description="Useful trip planning details for sales team and travel agents."
             >
-              <div className="grid gap-4 lg:grid-cols-3">
+              <div className="grid gap-4 lg:grid-cols-2">
                 <Input
                   label="Best Time To Visit"
                   value={form.bestTimeToVisit}
@@ -771,22 +946,6 @@ export default function DestinationOverviewPage() {
                   value={form.idealTripDuration}
                   placeholder="Example: 5 Nights / 6 Days"
                   onChange={v => update("idealTripDuration", v)}
-                />
-
-                <SelectField
-                  label="Destination Type"
-                  value={form.destinationType}
-                  onChange={v => update("destinationType", v)}
-                  options={[
-                    {
-                      value: "international",
-                      label: "International"
-                    },
-                    {
-                      value: "domestic",
-                      label: "Domestic"
-                    }
-                  ]}
                 />
               </div>
             </Surface>
@@ -853,6 +1012,10 @@ export default function DestinationOverviewPage() {
                     {
                       value: "published",
                       label: "Published"
+                    },
+                    {
+                      value: "archived",
+                      label: "Archived"
                     }
                   ]}
                 />
@@ -882,7 +1045,8 @@ export default function DestinationOverviewPage() {
                 {isNew ? "Create destination record" : "Save destination changes"}
               </p>
               <p className="text-xs text-slate-500">
-                Completion: {completion.percent}% | Status: {form.status}
+                Readiness: {completion.percent}% | Structure:{" "}
+                {form.hasSubLocations ? "Location-wise" : "Destination-level"}
               </p>
             </div>
           </div>
@@ -900,7 +1064,7 @@ export default function DestinationOverviewPage() {
               type="button"
               onClick={save}
               disabled={saving}
-              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
+              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white  transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
             >
               <Save size={16} />
               {saving ? "Saving..." : "Save Destination"}
@@ -913,6 +1077,520 @@ export default function DestinationOverviewPage() {
 }
 
 /* =========================
+   ACTIVITY STRUCTURE
+========================= */
+
+function ActivityStructureSelector({ hasSubLocations, onChange }) {
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <button
+        type="button"
+        onClick={() => onChange(false)}
+        className={`
+          rounded-2xl border p-4 text-left transition
+          ${
+            !hasSubLocations
+              ? "border-blue-300 bg-blue-50 ring-2 ring-blue-100"
+              : "border-slate-200 bg-white hover:border-slate-300"
+          }
+        `}
+      >
+        <div className="flex items-start gap-3">
+          <div
+            className={`
+              flex h-10 w-10 items-center justify-center rounded-2xl
+              ${!hasSubLocations ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600"}
+            `}
+          >
+            <Globe2 size={19} />
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-slate-950">
+              Destination-level activities
+            </h3>
+            <p className="mt-1 text-xs leading-relaxed text-slate-500">
+              Best for Maldives, Dubai, Singapore, or single-city destinations.
+            </p>
+          </div>
+        </div>
+      </button>
+
+      <button
+        type="button"
+        onClick={() => onChange(true)}
+        className={`
+          rounded-2xl border p-4 text-left transition
+          ${
+            hasSubLocations
+              ? "border-blue-300 bg-blue-50 ring-2 ring-blue-100"
+              : "border-slate-200 bg-white hover:border-slate-300"
+          }
+        `}
+      >
+        <div className="flex items-start gap-3">
+          <div
+            className={`
+              flex h-10 w-10 items-center justify-center rounded-2xl
+              ${hasSubLocations ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600"}
+            `}
+          >
+            <MapPin size={19} />
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-slate-950">
+              City / island / region-wise
+            </h3>
+            <p className="mt-1 text-xs leading-relaxed text-slate-500">
+              Best for Thailand, Europe, Vietnam, Japan, or multi-location trips.
+            </p>
+          </div>
+        </div>
+      </button>
+    </div>
+  );
+}
+
+/* =========================
+   LOCATION MANAGER
+========================= */
+
+function LocationManager({
+  locations,
+  locationLabel,
+  mediaBasePath,
+  onAdd,
+  onUpdate,
+  onDelete,
+  onMove
+}) {
+  if (!locations.length) {
+    return (
+      <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-slate-600 ">
+          <MapPin size={22} />
+        </div>
+
+        <h3 className="text-base font-semibold text-slate-950">
+          No {locationLabel?.toLowerCase() || "locations"} added
+        </h3>
+
+        <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">
+          Add city, island, region, or resort area to manage experiences
+          separately.
+        </p>
+
+        <button
+          type="button"
+          onClick={onAdd}
+          className="mt-5 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white  transition hover:bg-blue-700"
+        >
+          <Plus size={16} />
+          Add {locationLabel || "Location"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-950">
+            {locationLabel || "Locations"}
+          </h3>
+          <p className="text-xs text-slate-500">
+            Add city, island, region, or resort-wise content.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={onAdd}
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white  transition hover:bg-blue-700"
+        >
+          <Plus size={16} />
+          Add {locationLabel || "Location"}
+        </button>
+      </div>
+
+      <div className="space-y-5">
+        {locations.map((location, index) => (
+          <LocationCard
+            key={location.id}
+            location={location}
+            index={index}
+            total={locations.length}
+            mediaBasePath={mediaBasePath}
+            onUpdate={patch => onUpdate(location.id, patch)}
+            onDelete={() => onDelete(location.id)}
+            onMove={direction => onMove(index, direction)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LocationCard({
+  location,
+  index,
+  total,
+  mediaBasePath,
+  onUpdate,
+  onDelete,
+  onMove
+}) {
+  const [open, setOpen] = useState(index === 0);
+
+  const locationPath = `${mediaBasePath}/locations/${location.id}`;
+
+  return (
+    <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white ">
+      <div className="flex flex-col gap-4 border-b border-slate-100 bg-slate-50 p-4 lg:flex-row lg:items-center lg:justify-between">
+        <button
+          type="button"
+          onClick={() => setOpen(prev => !prev)}
+          className="flex flex-1 items-start gap-3 text-left"
+        >
+          <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-2xl bg-white text-slate-600 ">
+            <GripVertical size={17} />
+          </div>
+
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-sm font-semibold text-slate-950">
+                {location.name?.trim() || `Location ${index + 1}`}
+              </h3>
+
+              <span className="rounded-full bg-blue-100 px-2.5 py-1 text-[11px] font-semibold capitalize text-blue-700">
+                {String(location.type || "city").replace(/_/g, " ")}
+              </span>
+
+              {!location.active && (
+                <span className="rounded-full bg-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+                  Inactive
+                </span>
+              )}
+            </div>
+
+            <p className="mt-1 text-xs text-slate-500">
+              {location.recommendedNights
+                ? `${location.recommendedNights} night(s)`
+                : "Recommended nights not set"}{" "}
+              | {location.activities?.length || 0} activities |{" "}
+              {location.attractions?.length || 0} attractions
+            </p>
+          </div>
+        </button>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={index === 0}
+            onClick={() => onMove("up")}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 transition hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Up
+          </button>
+
+          <button
+            type="button"
+            disabled={index === total - 1}
+            onClick={() => onMove("down")}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 transition hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Down
+          </button>
+
+          <button
+            type="button"
+            onClick={onDelete}
+            className="flex h-9 w-9 items-center justify-center rounded-xl border border-red-100 bg-white text-red-600 transition hover:bg-red-50"
+            aria-label="Delete location"
+          >
+            <Trash2 size={16} />
+          </button>
+        </div>
+      </div>
+
+      {open && (
+        <div className="space-y-6 p-4 lg:p-5">
+          <div className="grid gap-4 lg:grid-cols-3">
+            <Input
+              label="Location Name"
+              value={location.name}
+              placeholder="Example: Bangkok"
+              onChange={v => onUpdate({ name: v })}
+            />
+
+            <SelectField
+              label="Location Type"
+              value={location.type || "city"}
+              onChange={v => onUpdate({ type: v })}
+              options={LOCATION_TYPES}
+            />
+
+            <Input
+              label="Recommended Nights"
+              value={location.recommendedNights}
+              placeholder="Example: 2"
+              onChange={v => onUpdate({ recommendedNights: v })}
+            />
+          </div>
+
+          <Textarea
+            label="Short Description"
+            value={location.shortDescription}
+            placeholder="Short city / island / region description."
+            onChange={v => onUpdate({ shortDescription: v })}
+          />
+
+          <div className="grid gap-5 lg:grid-cols-2">
+            <MediaUploader
+              label="Location Cover Photo"
+              value={location.coverPhoto}
+              path={`${locationPath}/cover`}
+              onChange={file => onUpdate({ coverPhoto: file })}
+            />
+
+            <MediaUploader
+              label="Location Gallery"
+              multiple
+              value={location.gallery || []}
+              path={`${locationPath}/gallery`}
+              onChange={files => onUpdate({ gallery: files })}
+            />
+          </div>
+
+          <AdvancedActivityEditor
+            title="Activities"
+            items={location.activities || []}
+            basePath={`${locationPath}/activities`}
+            onChange={v => onUpdate({ activities: v })}
+          />
+
+          <ContentBlockEditor
+            title="Attractions"
+            items={location.attractions || []}
+            basePath={`${locationPath}/attractions`}
+            onChange={v => onUpdate({ attractions: v })}
+          />
+
+          <ContentBlockEditor
+            title="Places To Visit"
+            items={location.placesToVisit || []}
+            basePath={`${locationPath}/places`}
+            onChange={v => onUpdate({ placesToVisit: v })}
+          />
+
+          <ContentBlockEditor
+            title="Food Culture"
+            items={location.foodCulture || []}
+            basePath={`${locationPath}/food`}
+            onChange={v => onUpdate({ foodCulture: v })}
+          />
+
+          <Textarea
+            label="Transfer Notes"
+            value={location.transferNotes}
+            placeholder="Example: Airport to hotel takes approx 45-60 minutes."
+            onChange={v => onUpdate({ transferNotes: v })}
+          />
+
+          <Textarea
+            label="Internal Notes"
+            value={location.internalNotes}
+            placeholder="Internal sales or operations notes."
+            onChange={v => onUpdate({ internalNotes: v })}
+          />
+
+          <ToggleCard
+            checked={location.active ?? true}
+            title="Active Location"
+            description="Inactive locations can be hidden from package and quotation selection."
+            onChange={checked => onUpdate({ active: checked })}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =========================
+   YOUTUBE GALLERY
+========================= */
+
+function YouTubeGalleryEditor({ value = [], onChange }) {
+  const [youtubeUrl, setYoutubeUrl] = useState("");
+  const [title, setTitle] = useState("");
+
+  const youtubeItems = useMemo(() => {
+    return normalizeMediaGallery(value).filter(
+      item => item.type === "video" && item.source === "youtube"
+    );
+  }, [value]);
+
+  const addYouTube = () => {
+    const id = extractYouTubeId(youtubeUrl);
+
+    if (!id) {
+      alert("Please enter a valid YouTube URL.");
+      return;
+    }
+
+    const newItem = createYouTubeMediaItem(youtubeUrl, {
+      title,
+      order: value.length + 1
+    });
+
+    onChange(normalizeMediaGallery([...(value || []), newItem]));
+
+    setYoutubeUrl("");
+    setTitle("");
+  };
+
+  const removeItem = id => {
+    onChange(normalizeMediaGallery(value.filter(item => item.id !== id)));
+  };
+
+  const updateItem = (id, patch) => {
+    onChange(
+      normalizeMediaGallery(
+        value.map(item =>
+          item.id === id
+            ? {
+                ...item,
+                ...patch,
+                updatedAt: new Date().toISOString()
+              }
+            : item
+        )
+      )
+    );
+  };
+
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+      <div className="mb-4 flex items-start gap-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-red-50 text-red-600">
+          <Youtube size={20} />
+        </div>
+
+        <div>
+          <h3 className="text-sm font-semibold text-slate-950">
+            YouTube Video Gallery
+          </h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Add destination videos without uploading heavy video files.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-[1fr_1fr_auto]">
+        <input
+          value={youtubeUrl}
+          onChange={e => setYoutubeUrl(e.target.value)}
+          placeholder="YouTube URL"
+          className="mui-input bg-white"
+        />
+
+        <input
+          value={title}
+          onChange={e => setTitle(e.target.value)}
+          placeholder="Video title"
+          className="mui-input bg-white"
+        />
+
+        <button
+          type="button"
+          onClick={addYouTube}
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white  transition hover:bg-red-700"
+        >
+          <Plus size={16} />
+          Add Video
+        </button>
+      </div>
+
+      {youtubeItems.length > 0 && (
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          {youtubeItems.map(item => (
+            <div
+              key={item.id}
+              className="overflow-hidden rounded-2xl border border-slate-200 bg-white "
+            >
+              {item.thumbnailUrl ? (
+                <img
+                  src={item.thumbnailUrl}
+                  alt={item.title || "YouTube video"}
+                  className="h-40 w-full object-cover"
+                />
+              ) : (
+                <div className="flex h-40 items-center justify-center bg-slate-100 text-slate-400">
+                  <Youtube size={32} />
+                </div>
+              )}
+
+              <div className="space-y-3 p-4">
+                <Input
+                  label="Video Title"
+                  value={item.title}
+                  onChange={v => updateItem(item.id, { title: v })}
+                />
+
+                <Textarea
+                  label="Caption"
+                  value={item.caption}
+                  onChange={v => updateItem(item.id, { caption: v })}
+                />
+
+                <div className="flex items-center justify-between gap-3">
+                  <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                    <input
+                      type="checkbox"
+                      checked={item.featured}
+                      onChange={e =>
+                        updateItem(item.id, {
+                          featured: e.target.checked
+                        })
+                      }
+                    />
+                    Featured
+                  </label>
+
+                  <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                    <input
+                      type="checkbox"
+                      checked={item.active}
+                      onChange={e =>
+                        updateItem(item.id, {
+                          active: e.target.checked
+                        })
+                      }
+                    />
+                    Active
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={() => removeItem(item.id)}
+                    className="inline-flex items-center gap-1 rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-100"
+                  >
+                    <Trash2 size={13} />
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =========================
    UI HELPERS
 ========================= */
 
@@ -920,7 +1598,7 @@ function Surface({ id, icon: Icon, title, description, children }) {
   return (
     <section
       id={id}
-      className="scroll-mt-8 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm lg:p-6"
+      className="scroll-mt-8 rounded-3xl border border-slate-200 bg-white p-5  lg:p-6"
     >
       <div className="mb-5 flex items-start gap-3 border-b border-slate-100 pb-4">
         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
@@ -967,15 +1645,16 @@ function Input({
         placeholder={placeholder}
         onChange={e => onChange(e.target.value)}
         className={`
-          mui-input
-          bg-white
-          ${error ? "border-red-500 focus:border-red-500 focus:ring-red-200" : ""}
+          mui-input bg-white
+          ${
+            error
+              ? "border-red-500 focus:border-red-500 focus:ring-red-200"
+              : ""
+          }
         `}
       />
 
-      {hint && !error && (
-        <p className="text-xs text-slate-400">{hint}</p>
-      )}
+      {hint && !error && <p className="text-xs text-slate-400">{hint}</p>}
 
       {error && (
         <p className="flex items-center gap-1 text-xs font-medium text-red-600">
@@ -1048,9 +1727,7 @@ function ToggleCard({ checked, title, description, onChange }) {
   return (
     <label className="flex cursor-pointer items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 transition hover:border-blue-200 hover:bg-blue-50/40">
       <div>
-        <p className="text-sm font-semibold text-slate-900">
-          {title}
-        </p>
+        <p className="text-sm font-semibold text-slate-900">{title}</p>
         <p className="mt-1 text-xs leading-relaxed text-slate-500">
           {description}
         </p>
@@ -1081,7 +1758,9 @@ function StatusPill({ status, active }) {
   const statusClass =
     status === "published"
       ? "bg-emerald-100 text-emerald-700"
-      : "bg-amber-100 text-amber-700";
+      : status === "archived"
+        ? "bg-slate-200 text-slate-700"
+        : "bg-amber-100 text-amber-700";
 
   const activeClass = active
     ? "bg-blue-100 text-blue-700"
@@ -1089,11 +1768,15 @@ function StatusPill({ status, active }) {
 
   return (
     <>
-      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusClass}`}>
-        {status === "published" ? "Published" : "Draft"}
+      <span
+        className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${statusClass}`}
+      >
+        {status || "draft"}
       </span>
 
-      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${activeClass}`}>
+      <span
+        className={`rounded-full px-3 py-1 text-xs font-semibold ${activeClass}`}
+      >
         {active ? "Active" : "Inactive"}
       </span>
     </>
