@@ -22,7 +22,8 @@ import {
   UploadCloud,
   ShieldCheck,
   Building2,
-  ListChecks
+  ListChecks,
+  UserCheck
 } from "lucide-react";
 
 export const adminSidebar = [
@@ -48,6 +49,18 @@ export const adminSidebar = [
         label: "All Agents",
         icon: Users,
         href: "/admin/travel-agents",
+        permission: "travelAgentManagement"
+      },
+      {
+        label: "Assigned Agents",
+        icon: UserCheck,
+        href: "/admin/travel-agents/assigned",
+        permission: "travelAgentManagement"
+      },
+      {
+        label: "My Assigned",
+        icon: ListChecks,
+        href: "/admin/travel-agents/my-assigned",
         permission: "travelAgentManagement"
       },
       {

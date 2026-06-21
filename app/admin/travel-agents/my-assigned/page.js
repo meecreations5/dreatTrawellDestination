@@ -415,8 +415,8 @@ export default function MyAssignedTravelAgentsPage() {
 
   return (
     <AdminGuard>
-      <main className="min-h-screen bg-slate-50 p-4 md:p-6">
-        <div className="mx-auto max-w-7xl space-y-6">
+      <main className="min-h-screen p-4 md:p-6">
+        <div className="mx-auto max-w-9xl space-y-6">
           {/* HEADER */}
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-500 p-5 text-white md:p-6">

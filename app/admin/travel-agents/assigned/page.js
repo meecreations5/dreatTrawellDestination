@@ -303,7 +303,7 @@ export default function AssignedTravelAgentsPage() {
           </div>
 
           {/* FILTER BAR */}
-          <div className="sticky top-0 z-30 rounded-2xl border border-slate-200 bg-white/95 p-4  backdrop-blur">
+          <div className="sticky top-20 z-30 rounded-2xl border border-slate-200 bg-white/95 p-4  backdrop-blur">
             <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-900">
               <Filter size={16} />
               Assignment Filters
