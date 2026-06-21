@@ -9,7 +9,7 @@ import {
   serverTimestamp,
   updateDoc
 } from "firebase/firestore";
-import { Loader2, ShieldAlert, Trash2 } from "lucide-react";
+import { Loader2, ShieldAlert, Trash2, UserCheck } from "lucide-react";
 import Link from "next/link";
 
 import { db } from "@/lib/firebase";
@@ -20,6 +20,7 @@ import TravelAgentFilterBar from "@/components/travel-agents/TravelAgentFilters"
 import TravelAgentExportCSV from "@/components/travel-agents/TravelAgentExportCSV";
 import TravelAgentImportCSV from "@/components/travel-agents/TravelAgentImportCSV";
 import AgentSideDrawer from "@/components/travel-agents/AgentSideDrawer";
+import AssignTravelAgentModal from "@/components/travel-agents/AssignTravelAgentModal";
 
 import EmptyState from "@/components/ui/EmptyState";
 
@@ -53,6 +54,80 @@ const StatusBadge = ({ status }) => {
   );
 };
 
+const AssignmentBadge = ({ status }) => {
+  const finalStatus = status || "Unassigned";
+
+  const style =
+    finalStatus === "Assigned"
+      ? "bg-emerald-50 text-emerald-700"
+      : finalStatus === "Reassigned"
+      ? "bg-blue-50 text-blue-700"
+      : finalStatus === "On Hold"
+      ? "bg-slate-100 text-slate-600"
+      : "bg-amber-50 text-amber-700";
+
+  return (
+    <span className={`rounded-md px-2 py-[2px] text-[11px] ${style}`}>
+      {finalStatus}
+    </span>
+  );
+};
+
+const PriorityBadge = ({ priority }) => {
+  const finalPriority = priority || "Medium";
+
+  const style =
+    finalPriority === "Critical"
+      ? "bg-red-50 text-red-700"
+      : finalPriority === "High"
+      ? "bg-orange-50 text-orange-700"
+      : finalPriority === "Low"
+      ? "bg-slate-100 text-slate-600"
+      : "bg-blue-50 text-blue-700";
+
+  return (
+    <span className={`rounded-md px-2 py-[2px] text-[11px] ${style}`}>
+      {finalPriority}
+    </span>
+  );
+};
+
+const CategoryBadge = ({ category }) => {
+  const value = category || "B";
+
+  const style =
+    value === "A+"
+      ? "bg-purple-50 text-purple-700"
+      : value === "A"
+      ? "bg-emerald-50 text-emerald-700"
+      : value === "C"
+      ? "bg-slate-100 text-slate-600"
+      : "bg-blue-50 text-blue-700";
+
+  return (
+    <span className={`rounded-md px-2 py-[2px] text-[11px] ${style}`}>
+      {value}
+    </span>
+  );
+};
+
+const RiskBadge = ({ risk }) => {
+  const value = risk || "Low";
+
+  const style =
+    value === "High"
+      ? "bg-red-50 text-red-700"
+      : value === "Medium"
+      ? "bg-amber-50 text-amber-700"
+      : "bg-emerald-50 text-emerald-700";
+
+  return (
+    <span className={`rounded-md px-2 py-[2px] text-[11px] ${style}`}>
+      {value} Risk
+    </span>
+  );
+};
+
 const SortButton = ({ label, sortKey, sort, setSort }) => {
   const active = sort.key === sortKey;
   const nextDirection =
@@ -82,6 +157,11 @@ const normalizeRole = value =>
     .trim()
     .toLowerCase()
     .replace(/[\s-]+/g, "_");
+
+const normalizeText = value =>
+  String(value || "")
+    .trim()
+    .toLowerCase();
 
 const isUserSuperAdmin = user => {
   if (!user) return false;
@@ -238,6 +318,40 @@ const getEngagementStatus = agent => {
   };
 };
 
+/* =========================
+   ASSIGNMENT HELPERS
+========================= */
+
+const getAssignedUid = agent =>
+  agent.assignedToUid || agent.accountManagerUid || "";
+
+const getAssignedName = agent =>
+  agent.assignedToName ||
+  agent.assignedToEmail ||
+  agent.assignedTo ||
+  agent.accountManagerUid ||
+  "";
+
+const getAssignedTeam = agent =>
+  agent.assignedTeam || agent.team || "";
+
+const getAssignmentStatus = agent => {
+  if (agent.assignmentStatus) return agent.assignmentStatus;
+
+  return getAssignedUid(agent) || getAssignedName(agent)
+    ? "Assigned"
+    : "Unassigned";
+};
+
+const getAssignmentPriority = agent =>
+  agent.assignmentPriority || "Medium";
+
+const getAgentCategory = agent =>
+  agent.agentCategory || "B";
+
+const getPaymentRisk = agent =>
+  agent.paymentRisk || "Low";
+
 export default function AdminTravelAgentsPage() {
   const { user } = useAuth();
 
@@ -248,6 +362,7 @@ export default function AdminTravelAgentsPage() {
   const [view, setView] = useState("table");
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [assignTarget, setAssignTarget] = useState(null);
   const [actionLoading, setActionLoading] = useState({});
 
   const isSuperAdmin = isUserSuperAdmin(user);
@@ -264,7 +379,11 @@ export default function AdminTravelAgentsPage() {
     destinationId: "",
     relationshipStage: "",
     city: "",
-    engagement: ""
+    engagement: "",
+    assignmentStatus: "",
+    assignmentPriority: "",
+    assignedTeam: "",
+    assignedUser: ""
   });
 
   const setBusy = (agentId, action, value) => {
@@ -299,6 +418,9 @@ export default function AdminTravelAgentsPage() {
           name: d.data().name
         }))
       );
+    } catch (error) {
+      console.error(error);
+      alert(error?.message || "Unable to load travel agents.");
     } finally {
       setLoading(false);
     }
@@ -434,12 +556,37 @@ export default function AdminTravelAgentsPage() {
     return [...new Set(cities)].sort();
   }, [agents]);
 
+  const assignedTeamOptions = useMemo(() => {
+    return [
+      ...new Set(
+        agents
+          .map(agent => getAssignedTeam(agent))
+          .filter(Boolean)
+      )
+    ].sort();
+  }, [agents]);
+
+  const assignedUserOptions = useMemo(() => {
+    return [
+      ...new Set(
+        agents
+          .map(agent => getAssignedName(agent))
+          .filter(Boolean)
+      )
+    ].sort();
+  }, [agents]);
+
   const filteredAgents = useMemo(() => {
     return agents.filter(agent => {
       const spoc = getPrimarySpoc(agent);
       const s = filters.search.trim().toLowerCase();
       const location = getAgentLocation(agent);
       const agentDestinations = getAgentDestinations(agent);
+
+      const assignedName = getAssignedName(agent);
+      const assignedTeam = getAssignedTeam(agent);
+      const assignmentStatus = getAssignmentStatus(agent);
+      const assignmentPriority = getAssignmentPriority(agent);
 
       if (
         s &&
@@ -448,7 +595,9 @@ export default function AdminTravelAgentsPage() {
         !spoc?.name?.toLowerCase().includes(s) &&
         !spoc?.email?.toLowerCase().includes(s) &&
         !spoc?.mobile?.toLowerCase().includes(s) &&
-        !location?.toLowerCase().includes(s)
+        !location?.toLowerCase().includes(s) &&
+        !normalizeText(assignedName).includes(s) &&
+        !normalizeText(assignedTeam).includes(s)
       ) {
         return false;
       }
@@ -476,6 +625,34 @@ export default function AdminTravelAgentsPage() {
       }
 
       if (filters.city && location !== filters.city) {
+        return false;
+      }
+
+      if (
+        filters.assignmentStatus &&
+        assignmentStatus !== filters.assignmentStatus
+      ) {
+        return false;
+      }
+
+      if (
+        filters.assignmentPriority &&
+        assignmentPriority !== filters.assignmentPriority
+      ) {
+        return false;
+      }
+
+      if (
+        filters.assignedTeam &&
+        assignedTeam !== filters.assignedTeam
+      ) {
+        return false;
+      }
+
+      if (
+        filters.assignedUser &&
+        assignedName !== filters.assignedUser
+      ) {
         return false;
       }
 
@@ -508,6 +685,13 @@ export default function AdminTravelAgentsPage() {
     const normalize = value =>
       String(value || "").trim().toLowerCase();
 
+    const priorityOrder = {
+      Critical: 4,
+      High: 3,
+      Medium: 2,
+      Low: 1
+    };
+
     const getValue = agent => {
       const spoc = getPrimarySpoc(agent);
       const engagement = getLatestEngagement(agent);
@@ -539,6 +723,15 @@ export default function AdminTravelAgentsPage() {
 
         case "latestEngagement":
           return engagement.date ? engagement.date.getTime() : 0;
+
+        case "assignedTo":
+          return normalize(getAssignedName(agent));
+
+        case "assignmentStatus":
+          return normalize(getAssignmentStatus(agent));
+
+        case "assignmentPriority":
+          return priorityOrder[getAssignmentPriority(agent)] || 0;
 
         default:
           return normalize(agent.agencyName);
@@ -614,6 +807,22 @@ export default function AdminTravelAgentsPage() {
     );
   };
 
+  const renderAssignAction = agent => {
+    const status = getAssignmentStatus(agent);
+    const label = status === "Unassigned" ? "Assign" : "Reassign";
+
+    return (
+      <button
+        type="button"
+        onClick={() => setAssignTarget(agent)}
+        className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-700"
+      >
+        <UserCheck className="h-3.5 w-3.5" />
+        {label}
+      </button>
+    );
+  };
+
   return (
     <AdminGuard>
       <main className="p-6 w-full mx-auto space-y-4">
@@ -623,7 +832,7 @@ export default function AdminTravelAgentsPage() {
               Travel Agents
             </h1>
             <p className="text-xs text-gray-500 mt-1">
-              Manage agencies, locations and latest engagement
+              Manage agencies, assignments, locations and latest engagement
             </p>
           </div>
 
@@ -650,6 +859,81 @@ export default function AdminTravelAgentsPage() {
           exportAgents={filteredAgents}
         />
 
+        {/* COMPACT ASSIGNMENT FILTERS */}
+        <div className="rounded-xl border border-gray-100 bg-white p-3">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
+            <select
+              value={filters.assignmentStatus}
+              onChange={e =>
+                setFilters(prev => ({
+                  ...prev,
+                  assignmentStatus: e.target.value
+                }))
+              }
+              className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-xs"
+            >
+              <option value="">All Assignment Status</option>
+              <option value="Assigned">Assigned</option>
+              <option value="Reassigned">Reassigned</option>
+              <option value="Unassigned">Unassigned</option>
+              <option value="On Hold">On Hold</option>
+            </select>
+
+            <select
+              value={filters.assignmentPriority}
+              onChange={e =>
+                setFilters(prev => ({
+                  ...prev,
+                  assignmentPriority: e.target.value
+                }))
+              }
+              className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-xs"
+            >
+              <option value="">All Priority</option>
+              <option value="Critical">Critical</option>
+              <option value="High">High</option>
+              <option value="Medium">Medium</option>
+              <option value="Low">Low</option>
+            </select>
+
+            <select
+              value={filters.assignedTeam}
+              onChange={e =>
+                setFilters(prev => ({
+                  ...prev,
+                  assignedTeam: e.target.value
+                }))
+              }
+              className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-xs"
+            >
+              <option value="">All Assigned Teams</option>
+              {assignedTeamOptions.map(team => (
+                <option key={team} value={team}>
+                  {team}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={filters.assignedUser}
+              onChange={e =>
+                setFilters(prev => ({
+                  ...prev,
+                  assignedUser: e.target.value
+                }))
+              }
+              className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-xs"
+            >
+              <option value="">All Assigned Users</option>
+              {assignedUserOptions.map(name => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
         <div className="flex flex-wrap justify-between gap-2">
           <div className="flex items-center gap-2">
             <label className="text-xs text-gray-500">
@@ -674,6 +958,10 @@ export default function AdminTravelAgentsPage() {
               <option value="relationshipStage:asc">Stage A-Z</option>
               <option value="destinations:desc">Most Destinations</option>
               <option value="destinations:asc">Least Destinations</option>
+              <option value="assignedTo:asc">Assigned User A-Z</option>
+              <option value="assignmentStatus:asc">Assignment Status A-Z</option>
+              <option value="assignmentPriority:desc">Highest Priority</option>
+              <option value="assignmentPriority:asc">Lowest Priority</option>
             </select>
           </div>
 
@@ -699,7 +987,7 @@ export default function AdminTravelAgentsPage() {
         {!loading && view === "table" && sortedAgents.length > 0 && (
           <div className="border border-gray-100 rounded-xl bg-white overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="min-w-[1180px] w-full text-sm">
+              <table className="min-w-[1320px] w-full text-sm">
                 <thead className="bg-gray-50/60 text-xs text-gray-500">
                   <tr>
                     <th className="px-4 py-3 text-left">
@@ -727,6 +1015,10 @@ export default function AdminTravelAgentsPage() {
                         sort={sort}
                         setSort={setSort}
                       />
+                    </th>
+
+                    <th className="px-4 py-3 text-left">
+                      Assignment
                     </th>
 
                     <th className="px-4 py-3 text-left">
@@ -776,12 +1068,20 @@ export default function AdminTravelAgentsPage() {
                         className="border-b border-gray-100 hover:bg-gray-50/60"
                       >
                         <td className="px-4 py-3">
-                          <p className="font-medium text-gray-800">
-                            {agent.agencyName || "Unnamed agency"}
-                          </p>
+                          <div className="flex items-center gap-2">
+                            <p className="max-w-[220px] truncate font-medium text-gray-800">
+                              {agent.agencyName || "Unnamed agency"}
+                            </p>
+                            <CategoryBadge category={getAgentCategory(agent)} />
+                          </div>
+
                           <p className="text-xs text-gray-500">
                             {agent.agentCode || "No code"}
                           </p>
+
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            <RiskBadge risk={getPaymentRisk(agent)} />
+                          </div>
                         </td>
 
                         <td className="px-4 py-3">
@@ -806,17 +1106,48 @@ export default function AdminTravelAgentsPage() {
                         </td>
 
                         <td className="px-4 py-3">
-                          <div className="flex flex-wrap gap-1 max-w-[260px]">
-                            {agentDestinations.slice(0, 3).map((d, i) => (
+                          <div className="space-y-1">
+                            {getAssignedName(agent) ? (
+                              <>
+                                <p className="max-w-[170px] truncate text-sm font-medium text-gray-800">
+                                  {getAssignedName(agent)}
+                                </p>
+
+                                {getAssignedTeam(agent) && (
+                                  <p className="max-w-[170px] truncate text-xs text-gray-500">
+                                    {getAssignedTeam(agent)}
+                                  </p>
+                                )}
+                              </>
+                            ) : (
+                              <p className="text-xs text-amber-600">
+                                Not assigned
+                              </p>
+                            )}
+
+                            <div className="flex flex-wrap gap-1">
+                              <AssignmentBadge
+                                status={getAssignmentStatus(agent)}
+                              />
+                              <PriorityBadge
+                                priority={getAssignmentPriority(agent)}
+                              />
+                            </div>
+                          </div>
+                        </td>
+
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap gap-1 max-w-[220px]">
+                            {agentDestinations.slice(0, 2).map((d, i) => (
                               <MAUChip
                                 key={`${d.id}-${i}`}
                                 label={d.name}
                               />
                             ))}
 
-                            {agentDestinations.length > 3 && (
+                            {agentDestinations.length > 2 && (
                               <span className="text-[11px] text-gray-500">
-                                +{agentDestinations.length - 3} more
+                                +{agentDestinations.length - 2} more
                               </span>
                             )}
 
@@ -844,7 +1175,7 @@ export default function AdminTravelAgentsPage() {
                                 </p>
 
                                 {engagement.note && (
-                                  <p className="text-xs text-gray-400 truncate max-w-[220px]">
+                                  <p className="text-xs text-gray-400 truncate max-w-[180px]">
                                     {engagement.note}
                                   </p>
                                 )}
@@ -881,6 +1212,7 @@ export default function AdminTravelAgentsPage() {
                               Edit
                             </Link>
 
+                            {renderAssignAction(agent)}
                             {renderDeleteAction(agent)}
                           </div>
                         </td>
@@ -908,15 +1240,44 @@ export default function AdminTravelAgentsPage() {
                 >
                   <div className="flex justify-between gap-3">
                     <div>
-                      <p className="font-semibold text-gray-800">
-                        {agent.agencyName || "Unnamed agency"}
-                      </p>
+                      <div className="flex items-center gap-2">
+                        <p className="max-w-[220px] truncate font-semibold text-gray-800">
+                          {agent.agencyName || "Unnamed agency"}
+                        </p>
+                        <CategoryBadge category={getAgentCategory(agent)} />
+                      </div>
+
                       <p className="text-xs text-gray-500">
                         {agent.agentCode || "No code"}
                       </p>
                     </div>
 
                     {renderStatusAction(agent)}
+                  </div>
+
+                  <div className="mt-3 rounded-lg bg-slate-50 p-2">
+                    <p className="text-[10px] uppercase tracking-wide text-slate-400">
+                      Assigned
+                    </p>
+
+                    <p className="mt-1 truncate text-sm font-medium text-slate-800">
+                      {getAssignedName(agent) || "Not assigned"}
+                    </p>
+
+                    {getAssignedTeam(agent) && (
+                      <p className="truncate text-xs text-slate-500">
+                        {getAssignedTeam(agent)}
+                      </p>
+                    )}
+
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      <AssignmentBadge
+                        status={getAssignmentStatus(agent)}
+                      />
+                      <PriorityBadge
+                        priority={getAssignmentPriority(agent)}
+                      />
+                    </div>
                   </div>
 
                   <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
@@ -945,7 +1306,9 @@ export default function AdminTravelAgentsPage() {
                   )}
 
                   <div className="mt-3 flex flex-wrap gap-1">
-                    {agentDestinations.slice(0, 4).map((d, i) => (
+                    <RiskBadge risk={getPaymentRisk(agent)} />
+
+                    {agentDestinations.slice(0, 3).map((d, i) => (
                       <MAUChip
                         key={`${d.id}-${i}`}
                         label={d.name}
@@ -982,6 +1345,7 @@ export default function AdminTravelAgentsPage() {
                       Edit
                     </Link>
 
+                    {renderAssignAction(agent)}
                     {renderDeleteAction(agent)}
                   </div>
                 </div>
@@ -997,6 +1361,16 @@ export default function AdminTravelAgentsPage() {
             onClose={() => setSelectedAgent(null)}
           />
         )}
+
+        <AssignTravelAgentModal
+          open={!!assignTarget}
+          agent={assignTarget}
+          onClose={() => setAssignTarget(null)}
+          onAssigned={async () => {
+            setAssignTarget(null);
+            await loadData();
+          }}
+        />
 
         {deleteTarget && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
