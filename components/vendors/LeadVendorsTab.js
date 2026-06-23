@@ -17,11 +17,24 @@ import {
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
+import { useAuth } from "@/hooks/useAuth";
 import LeadVendorRequestForm from "@/components/vendors/LeadVendorRequestForm";
 
 /* =========================
    HELPERS
 ========================= */
+
+function getVendorRequestCode(request = {}) {
+  return (
+    cleanString(request?.vendorLeadReference) ||
+    cleanString(request?.emailVendorReference) ||
+    cleanString(request?.vendorRequestCode) ||
+    cleanString(request?.vendorRefCode) ||
+    (request?.id
+      ? `VR-${String(request.id).slice(-6).toUpperCase()}`
+      : "—")
+  );
+}
 
 function cleanString(value = "") {
   return String(value || "").trim();
@@ -78,26 +91,26 @@ function formatMoney(value, currency = "INR") {
 function getQuoteCount(request) {
   return Number(
     request?.latestRevision ||
-      request?.quoteCount ||
-      request?.vendorQuoteCount ||
-      0
+    request?.quoteCount ||
+    request?.vendorQuoteCount ||
+    0
   );
 }
 
 function getLatestCost(request) {
   return Number(
     request?.selectedVendorCost ||
-      request?.latestVendorCost ||
-      request?.latestCost ||
-      0
+    request?.latestVendorCost ||
+    request?.latestCost ||
+    0
   );
 }
 
 function isSelectedRequest(request) {
   return Boolean(
     request?.selected ||
-      request?.status === "selected" ||
-      request?.selectedQuoteId
+    request?.status === "selected" ||
+    request?.selectedQuoteId
   );
 }
 
@@ -268,6 +281,8 @@ function VendorRequestCard({
     request?.vendorCode ||
     "Vendor";
 
+  const vendorRequestCode = getVendorRequestCode(request);
+
   const currency =
     request?.selectedVendorCurrency ||
     request?.latestCurrency ||
@@ -278,10 +293,9 @@ function VendorRequestCard({
     <div
       className={`
         rounded-2xl border bg-white shadow-sm overflow-hidden transition
-        ${
-          selected
-            ? "border-green-200 ring-2 ring-green-50"
-            : "border-gray-100 hover:border-purple-200"
+        ${selected
+          ? "border-green-200 ring-2 ring-green-50"
+          : "border-gray-100 hover:border-purple-200"
         }
       `}
     >
@@ -298,10 +312,20 @@ function VendorRequestCard({
                   {vendorName}
                 </h3>
 
-                <p className="text-xs text-gray-500">
-                  Request sent{" "}
-                  {formatDateTime(request?.sentAt || request?.createdAt)}
-                </p>
+                <div className="space-y-1">
+                  <p className="text-xs text-gray-500">
+                    Request sent{" "}
+                    {formatDateTime(request?.sentAt || request?.createdAt)}
+                  </p>
+
+                  <div className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                    <FileText size={13} />
+                    Vendor Ref:
+                    <span className="font-bold text-slate-950">
+                      {vendorRequestCode}
+                    </span>
+                  </div>
+                </div>
               </div>
 
               <StatusBadge status={request?.status || "sent"} />
@@ -361,9 +385,9 @@ function VendorRequestCard({
                 <p className="text-lg font-bold text-green-950 mt-1">
                   {selected
                     ? formatMoney(
-                        request?.selectedVendorCost || latestCost,
-                        currency
-                      )
+                      request?.selectedVendorCost || latestCost,
+                      currency
+                    )
                     : "Not marked"}
                 </p>
               </div>
@@ -425,6 +449,9 @@ export default function LeadVendorsTab({
   const [loadingRequests, setLoadingRequests] = useState(true);
   const [requestFormOpen, setRequestFormOpen] = useState(false);
   const [loadError, setLoadError] = useState("");
+
+
+  const { user } = useAuth();
 
   useEffect(() => {
     if (!leadId) {
@@ -687,6 +714,7 @@ export default function LeadVendorsTab({
         <LeadVendorRequestForm
           lead={lead}
           vendorRequests={vendorRequests}
+          user={user}
           onClose={() => setRequestFormOpen(false)}
           onCreated={() => setRequestFormOpen(false)}
         />

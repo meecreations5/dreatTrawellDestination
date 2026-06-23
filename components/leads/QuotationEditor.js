@@ -2,7 +2,7 @@
 
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   arrayUnion,
   collection,
@@ -23,6 +23,19 @@ import { saveQuotationDraft } from "@/lib/saveQuotationDraft";
 import { getCommunicationSettings } from "@/lib/communicationSettings";
 import { getBrandingSettings } from "@/lib/brandingSettings";
 import { getUserProfileByUid } from "@/lib/userProfileRef";
+import { buildTravelAgentQuotationEmailTemplate } from "@/lib/emailTemplates";
+
+import {
+  buildStructuredQuotationHtml
+} from "@/lib/quotationEmailBlocks";
+
+import {
+  getDestinationQuotationTemplate,
+  getDefaultSelectedAutoSections,
+  buildDestinationTemplateSnapshot,
+  QUOTATION_AUTO_SECTION_KEYS,
+  QUOTATION_SECTION_LABELS
+} from "@/lib/quotationTemplateService";
 
 import {
   logLeadAction,
@@ -49,9 +62,182 @@ const inputClass = `
   focus:outline-none focus:ring-2 focus:ring-blue-100
 `;
 
+const textareaClass = `
+  w-full border border-gray-200 rounded-lg
+  px-3 py-2 text-sm bg-white resize-none
+  focus:outline-none focus:ring-2 focus:ring-blue-100
+`;
+
+
+const CURRENCY_OPTIONS = [
+  { value: "USD", label: "USD - US Dollar" },
+  { value: "INR", label: "INR - Indian Rupee" },
+  { value: "AED", label: "AED - UAE Dirham" },
+  { value: "SGD", label: "SGD - Singapore Dollar" },
+  { value: "MYR", label: "MYR - Malaysian Ringgit" },
+  { value: "THB", label: "THB - Thai Baht" },
+  { value: "IDR", label: "IDR - Indonesian Rupiah" },
+  { value: "VND", label: "VND - Vietnamese Dong" },
+  { value: "EUR", label: "EUR - Euro" },
+  { value: "GBP", label: "GBP - British Pound" }
+];
+
+
+const QUOTATION_TYPES = [
+  { value: "package", label: "Package Quotation" },
+  { value: "hotel_only", label: "Hotel Only" },
+  { value: "land_only", label: "Land Only" },
+  { value: "visa_only", label: "Visa Only" },
+  { value: "flight_only", label: "Flight / Air Ticket Only" },
+  { value: "custom", label: "Custom Service" }
+];
+
 /* =========================
    BASIC HELPERS
 ========================= */
+
+function cleanString(value = "") {
+  return String(value || "").trim();
+}
+
+function safeArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function formatDisplayDate(value = "") {
+  const clean = cleanString(value);
+
+  if (!clean) return "";
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
+    const [year, month, day] = clean.split("-").map(Number);
+    const date = new Date(year, month - 1, day);
+
+    return date.toLocaleDateString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric"
+    });
+  }
+
+  return clean;
+}
+
+function formatDisplayMonth(value = "") {
+  const clean = cleanString(value);
+
+  if (!clean) return "";
+
+  if (/^\d{4}-\d{2}$/.test(clean)) {
+    const [year, month] = clean.split("-").map(Number);
+    const date = new Date(year, month - 1, 1);
+
+    return date.toLocaleDateString("en-IN", {
+      month: "long",
+      year: "numeric"
+    });
+  }
+
+  return clean;
+}
+
+function toDateInputValue(value) {
+  if (!value) return "";
+
+  let date = null;
+
+  if (value?.toDate) {
+    date = value.toDate();
+  } else if (value instanceof Date) {
+    date = value;
+  } else if (typeof value === "string") {
+    const clean = value.trim();
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
+      return clean;
+    }
+
+    const parsed = new Date(clean);
+    if (!Number.isNaN(parsed.getTime())) {
+      date = parsed;
+    }
+  }
+
+  if (!date || Number.isNaN(date.getTime())) return "";
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function toMonthInputValue(value) {
+  if (!value) return "";
+
+  if (typeof value === "string") {
+    const clean = value.trim();
+
+    if (/^\d{4}-\d{2}$/.test(clean)) {
+      return clean;
+    }
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
+      return clean.slice(0, 7);
+    }
+
+    const parsed = new Date(clean);
+    if (!Number.isNaN(parsed.getTime())) {
+      const year = parsed.getFullYear();
+      const month = String(parsed.getMonth() + 1).padStart(2, "0");
+      return `${year}-${month}`;
+    }
+  }
+
+  const date = value?.toDate
+    ? value.toDate()
+    : value instanceof Date
+      ? value
+      : null;
+
+  if (!date || Number.isNaN(date.getTime())) return "";
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+
+  return `${year}-${month}`;
+}
+
+function buildQuotationTravelAgentEmailHtml({
+  recipient,
+  lead,
+  revision,
+  itineraryHtml,
+  branding,
+  emailSignatureHtml,
+  itineraryAlreadyHasGreeting
+}) {
+  const destinationName = getFirstValue(
+    lead?.destinationName,
+    lead?.destination,
+    "your travel enquiry"
+  );
+
+  return buildTravelAgentQuotationEmailTemplate({
+    branding,
+
+    recipientName: recipient?.name || "Guest",
+    leadCode: lead?.leadCode || "",
+    revision,
+    destinationName,
+
+    itineraryHtml,
+    quotationClosingLine: branding?.quotationClosingLine || "",
+
+    emailSignatureHtml,
+    itineraryAlreadyHasGreeting
+  });
+}
 
 function stripHtml(html = "") {
   return html
@@ -226,6 +412,349 @@ function getInitialPricingSnapshot(initialQuotation, lead) {
 }
 
 /* =========================
+   STRUCTURED QUOTATION HELPERS
+========================= */
+
+function getLeadTravelDefaults(lead = {}) {
+  return {
+    destinationName: getFirstValue(
+      lead?.destinationName,
+      lead?.destination,
+      lead?.destinationTitle
+    ),
+
+    travelMonth: getFirstValue(
+      toMonthInputValue(lead?.travelMonth),
+      toMonthInputValue(lead?.month),
+      toMonthInputValue(lead?.travelDate),
+      toMonthInputValue(lead?.travelPeriod),
+      toMonthInputValue(lead?.travelStartDate),
+      toMonthInputValue(lead?.startDate)
+    ),
+
+    checkIn: getFirstValue(
+      toDateInputValue(lead?.checkIn),
+      toDateInputValue(lead?.checkInDate),
+      toDateInputValue(lead?.travelStartDate),
+      toDateInputValue(lead?.startDate)
+    ),
+
+    checkOut: getFirstValue(
+      toDateInputValue(lead?.checkOut),
+      toDateInputValue(lead?.checkOutDate),
+      toDateInputValue(lead?.travelEndDate),
+      toDateInputValue(lead?.endDate)
+    ),
+
+    paxText: getFirstValue(
+      lead?.paxText,
+      lead?.noOfPax,
+      lead?.pax,
+      lead?.totalPax
+    )
+  };
+}
+
+function createDefaultQuotationData(lead = {}, currency = "USD") {
+  const travelDefaults = getLeadTravelDefaults(lead);
+
+  return {
+    leadCode: lead?.leadCode || "",
+
+    quotationType: "package",
+
+    travelDetails: {
+      destinationName: travelDefaults.destinationName,
+      travelMonth: travelDefaults.travelMonth,
+      checkIn: travelDefaults.checkIn,
+      checkOut: travelDefaults.checkOut,
+      paxText: travelDefaults.paxText
+    },
+
+    packageDetails: {
+      currency: currency || "USD",
+      hotelPart: {
+        enabled: true,
+        amount: "",
+        unit: "Per Person",
+        basis: "on DBL/Twin Sharing"
+      },
+      landPart: {
+        enabled: true,
+        amount: "",
+        unit: "Per Adult",
+        basis: ""
+      }
+    },
+
+    hotelInclusions: [
+      {
+        nights: "",
+        hotelName: "",
+        roomCategory: "",
+        mealPlan: "Breakfast",
+        location: ""
+      }
+    ],
+
+    transferInclusions: [
+      "Meet & Greet assistance at the airport.",
+      "Return airport and inter-hotel transfer by private basis.",
+      "Transfers with air-conditioned vehicle and English-speaking driver."
+    ],
+
+    itineraryDays: [
+      {
+        day: 1,
+        title: "",
+        description: "",
+        meals: "",
+        meetingPoint: "",
+        timing: "",
+        includes: ""
+      }
+    ],
+
+    serviceItems: [
+      {
+        serviceType: "visa",
+        title: "",
+        description: "",
+        currency: "INR",
+        amount: "",
+        remarks: ""
+      }
+    ],
+
+    flightDetails: [
+      {
+        airline: "",
+        route: "",
+        departureDate: "",
+        returnDate: "",
+        baggage: "",
+        currency: "INR",
+        fare: "",
+        remarks: ""
+      }
+    ],
+
+    selectedAutoSections: {},
+    destinationTemplateId: "",
+    destinationTemplateSnapshot: null
+  };
+}
+
+function mergeQuotationDataWithDefaults(lead, savedData, currency = "USD") {
+  const defaults = createDefaultQuotationData(lead, currency);
+  const saved = savedData || {};
+
+  return {
+    ...defaults,
+    ...saved,
+
+    quotationType: saved.quotationType || defaults.quotationType,
+
+    travelDetails: {
+      ...defaults.travelDetails,
+      ...(saved.travelDetails || {})
+    },
+
+    packageDetails: {
+      ...defaults.packageDetails,
+      ...(saved.packageDetails || {}),
+      hotelPart: {
+        ...defaults.packageDetails.hotelPart,
+        ...(saved.packageDetails?.hotelPart || {})
+      },
+      landPart: {
+        ...defaults.packageDetails.landPart,
+        ...(saved.packageDetails?.landPart || {})
+      }
+    },
+
+    hotelInclusions:
+      Array.isArray(saved.hotelInclusions) && saved.hotelInclusions.length
+        ? saved.hotelInclusions
+        : defaults.hotelInclusions,
+
+    transferInclusions:
+      Array.isArray(saved.transferInclusions) && saved.transferInclusions.length
+        ? saved.transferInclusions
+        : defaults.transferInclusions,
+
+    itineraryDays:
+      Array.isArray(saved.itineraryDays) && saved.itineraryDays.length
+        ? saved.itineraryDays
+        : defaults.itineraryDays,
+
+    serviceItems:
+      Array.isArray(saved.serviceItems) && saved.serviceItems.length
+        ? saved.serviceItems
+        : defaults.serviceItems,
+
+    flightDetails:
+      Array.isArray(saved.flightDetails) && saved.flightDetails.length
+        ? saved.flightDetails
+        : defaults.flightDetails,
+
+    selectedAutoSections: saved.selectedAutoSections || {},
+    destinationTemplateSnapshot: saved.destinationTemplateSnapshot || null
+  };
+}
+
+function cleanHotelRows(rows = []) {
+  return safeArray(rows)
+    .map(row => ({
+      nights: cleanString(row?.nights),
+      hotelName: cleanString(row?.hotelName),
+      roomCategory: cleanString(row?.roomCategory),
+      mealPlan: cleanString(row?.mealPlan),
+      location: cleanString(row?.location)
+    }))
+    .filter(
+      row =>
+        row.nights ||
+        row.hotelName ||
+        row.roomCategory ||
+        row.location
+    );
+}
+
+function cleanItineraryRows(rows = []) {
+  return safeArray(rows)
+    .map((row, index) => ({
+      day: cleanString(row?.day) || String(index + 1),
+      title: cleanString(row?.title),
+      description: cleanString(row?.description),
+      meals: cleanString(row?.meals),
+      meetingPoint: cleanString(row?.meetingPoint),
+      timing: cleanString(row?.timing),
+      includes: cleanString(row?.includes)
+    }))
+    .filter(
+      row =>
+        row.title ||
+        row.description ||
+        row.meals ||
+        row.meetingPoint ||
+        row.timing ||
+        row.includes
+    );
+}
+
+function cleanServiceItems(rows = []) {
+  return safeArray(rows)
+    .map(row => ({
+      serviceType: cleanString(row?.serviceType),
+      title: cleanString(row?.title),
+      description: cleanString(row?.description),
+      currency: cleanString(row?.currency) || "INR",
+      amount: cleanString(row?.amount),
+      remarks: cleanString(row?.remarks)
+    }))
+    .filter(
+      row =>
+        row.serviceType ||
+        row.title ||
+        row.description ||
+        row.amount ||
+        row.remarks
+    );
+}
+
+function cleanFlightDetails(rows = []) {
+  return safeArray(rows)
+    .map(row => ({
+      airline: cleanString(row?.airline),
+      route: cleanString(row?.route),
+      departureDate: cleanString(row?.departureDate),
+      returnDate: cleanString(row?.returnDate),
+      baggage: cleanString(row?.baggage),
+      currency: cleanString(row?.currency) || "INR",
+      fare: cleanString(row?.fare),
+      remarks: cleanString(row?.remarks)
+    }))
+    .filter(
+      row =>
+        row.airline ||
+        row.route ||
+        row.departureDate ||
+        row.returnDate ||
+        row.baggage ||
+        row.fare ||
+        row.remarks
+    );
+}
+
+function cleanTransferRows(rows = []) {
+  return safeArray(rows)
+    .map(item => cleanString(item))
+    .filter(Boolean);
+}
+
+
+function buildCleanQuotationData({
+  lead,
+  quotationData,
+  destinationTemplate
+}) {
+  const source = quotationData || createDefaultQuotationData(lead);
+
+  const templateSnapshot =
+    source.destinationTemplateSnapshot ||
+    (destinationTemplate
+      ? buildDestinationTemplateSnapshot(destinationTemplate)
+      : null);
+
+  return {
+    leadCode: source.leadCode || lead?.leadCode || "",
+
+    quotationType: source.quotationType || "package",
+
+    travelDetails: {
+      destinationName: cleanString(source.travelDetails?.destinationName),
+      travelMonth: cleanString(source.travelDetails?.travelMonth),
+      checkIn: cleanString(source.travelDetails?.checkIn),
+      checkOut: cleanString(source.travelDetails?.checkOut),
+      paxText: cleanString(source.travelDetails?.paxText)
+    },
+
+    packageDetails: {
+      currency: cleanString(source.packageDetails?.currency) || "USD",
+      hotelPart: {
+        enabled: Boolean(source.packageDetails?.hotelPart?.enabled),
+        amount: cleanString(source.packageDetails?.hotelPart?.amount),
+        unit: cleanString(source.packageDetails?.hotelPart?.unit),
+        basis: cleanString(source.packageDetails?.hotelPart?.basis)
+      },
+      landPart: {
+        enabled: Boolean(source.packageDetails?.landPart?.enabled),
+        amount: cleanString(source.packageDetails?.landPart?.amount),
+        unit: cleanString(source.packageDetails?.landPart?.unit),
+        basis: cleanString(source.packageDetails?.landPart?.basis)
+      }
+    },
+
+    hotelInclusions: cleanHotelRows(source.hotelInclusions),
+    transferInclusions: cleanTransferRows(source.transferInclusions),
+    itineraryDays: cleanItineraryRows(source.itineraryDays),
+
+    serviceItems: cleanServiceItems(source.serviceItems),
+    flightDetails: cleanFlightDetails(source.flightDetails),
+
+    selectedAutoSections: source.selectedAutoSections || {},
+    destinationTemplateId:
+      templateSnapshot?.templateId ||
+      templateSnapshot?.destinationId ||
+      source.destinationTemplateId ||
+      "",
+
+    destinationTemplateSnapshot: templateSnapshot
+  };
+}
+
+/* =========================
    TIMELINE HELPERS
 ========================= */
 
@@ -283,6 +812,7 @@ async function logQuotationCommunication({
   grossProfit,
   marginPercent,
   itineraryHtml,
+  quotationData,
   isFinalQuotation,
   quotationPricingMode,
   vendorQuoteFinalized,
@@ -336,6 +866,7 @@ async function logQuotationCommunication({
         revision: revision || "",
 
         itineraryHtml: itineraryHtml || "",
+        quotationData: quotationData || null,
 
         quotationPricingMode,
         vendorQuoteFinalized,
@@ -379,435 +910,7 @@ async function logQuotationCommunication({
 }
 
 /* =========================
-   HTML / PASTE HELPERS
-========================= */
-
-function convertPlainTextToHtml(text = "") {
-  const trimmed = text.trimEnd();
-
-  if (!trimmed) return "";
-
-  if (trimmed.includes("\t")) {
-    const rows = trimmed.split(/\r?\n/).map(row => row.split("\t"));
-
-    return `
-      <table>
-        <tbody>
-          ${rows
-        .map(
-          row => `
-                <tr>
-                  ${row
-              .map(
-                cell => `<td>${escapeHtml(cell) || "&nbsp;"}</td>`
-              )
-              .join("")}
-                </tr>
-              `
-        )
-        .join("")}
-        </tbody>
-      </table>
-    `;
-  }
-
-  const lines = trimmed.split(/\r?\n/);
-  const output = [];
-  let activeListType = "";
-  let activeListItems = [];
-
-  function flushList() {
-    if (!activeListType || !activeListItems.length) return;
-
-    output.push(`
-      <${activeListType}>
-        ${activeListItems.map(item => `<li>${item}</li>`).join("")}
-      </${activeListType}>
-    `);
-
-    activeListType = "";
-    activeListItems = [];
-  }
-
-  lines.forEach(line => {
-    const value = line.trim();
-
-    if (!value) {
-      flushList();
-      output.push("<p><br /></p>");
-      return;
-    }
-
-    const bulletMatch = value.match(/^([•·*+\-])\s+(.+)$/);
-    const numberMatch = value.match(/^(\d+)[.)]\s+(.+)$/);
-
-    if (bulletMatch) {
-      if (activeListType && activeListType !== "ul") {
-        flushList();
-      }
-
-      activeListType = "ul";
-      activeListItems.push(escapeHtml(bulletMatch[2]));
-      return;
-    }
-
-    if (numberMatch) {
-      if (activeListType && activeListType !== "ol") {
-        flushList();
-      }
-
-      activeListType = "ol";
-      activeListItems.push(escapeHtml(numberMatch[2]));
-      return;
-    }
-
-    flushList();
-    output.push(`<p>${escapeHtml(value)}</p>`);
-  });
-
-  flushList();
-
-  return output.join("");
-}
-
-function cleanStyle(styleValue = "") {
-  const allowedStyleProps = new Set([
-    "background",
-    "background-color",
-    "color",
-    "font-weight",
-    "font-style",
-    "font-size",
-    "font-family",
-    "text-decoration",
-    "text-align",
-    "vertical-align",
-    "border",
-    "border-top",
-    "border-right",
-    "border-bottom",
-    "border-left",
-    "border-color",
-    "border-width",
-    "border-style",
-    "border-collapse",
-    "padding",
-    "padding-top",
-    "padding-right",
-    "padding-bottom",
-    "padding-left",
-    "margin",
-    "margin-top",
-    "margin-right",
-    "margin-bottom",
-    "margin-left",
-    "width",
-    "min-width",
-    "max-width",
-    "height",
-    "line-height",
-    "white-space"
-  ]);
-
-  return styleValue
-    .split(";")
-    .map(rule => rule.trim())
-    .filter(Boolean)
-    .map(rule => {
-      const [rawProp, ...rawValue] = rule.split(":");
-      const prop = rawProp?.trim().toLowerCase();
-      const value = rawValue.join(":").trim();
-
-      if (!prop || !value) return "";
-      if (!allowedStyleProps.has(prop)) return "";
-      if (/javascript:|expression\(|url\(/i.test(value)) return "";
-
-      return `${prop}: ${value}`;
-    })
-    .filter(Boolean)
-    .join("; ");
-}
-
-function inlineClassStyles(doc) {
-  const styleText = Array.from(doc.querySelectorAll("style"))
-    .map(style => style.textContent || "")
-    .join("\n")
-    .replace(/\/\*[\s\S]*?\*\//g, "");
-
-  if (!styleText) return;
-
-  const classStyleMap = {};
-  const ruleRegex = /\.([a-zA-Z0-9_-]+)\s*\{([^}]+)\}/g;
-
-  let match;
-
-  while ((match = ruleRegex.exec(styleText))) {
-    const className = match[1];
-    const cssBody = cleanStyle(match[2]);
-
-    if (cssBody) {
-      classStyleMap[className] = cssBody;
-    }
-  }
-
-  Object.entries(classStyleMap).forEach(([className, cssBody]) => {
-    doc.querySelectorAll(`.${className}`).forEach(element => {
-      const existing = element.getAttribute("style") || "";
-      element.setAttribute("style", `${existing}; ${cssBody}`);
-    });
-  });
-}
-
-function isWordListElement(element) {
-  if (!element || element.nodeType !== 1) return false;
-
-  const className = element.getAttribute("class") || "";
-  const style = element.getAttribute("style") || "";
-  const text = element.textContent?.replace(/\s+/g, " ").trim() || "";
-
-  return (
-    /MsoListParagraph/i.test(className) ||
-    /mso-list/i.test(style) ||
-    /^[•·*+\-]\s+/.test(text) ||
-    /^\d+[.)]\s+/.test(text)
-  );
-}
-
-function getWordListType(element) {
-  const text = element.textContent?.replace(/\s+/g, " ").trim() || "";
-
-  const marker =
-    element.querySelector('span[style*="mso-list"]')?.textContent ||
-    text;
-
-  if (/^\s*\d+[.)]/.test(marker) || /^\s*\d+[.)]/.test(text)) {
-    return "ol";
-  }
-
-  return "ul";
-}
-
-function removeWordListMarker(element) {
-  element
-    .querySelectorAll('span[style*="mso-list"]')
-    .forEach(node => node.remove());
-
-  function removeLeadingMarker(node) {
-    if (!node) return false;
-
-    if (node.nodeType === 3) {
-      const original = node.textContent || "";
-      const cleaned = original.replace(
-        /^\s*(?:[•·*+\-]\s+|\d+[.)]\s+)/,
-        ""
-      );
-
-      if (cleaned !== original) {
-        node.textContent = cleaned;
-        return true;
-      }
-
-      return false;
-    }
-
-    for (const child of Array.from(node.childNodes || [])) {
-      if (removeLeadingMarker(child)) return true;
-    }
-
-    return false;
-  }
-
-  removeLeadingMarker(element);
-}
-
-function normalizeWordLists(doc) {
-  const bodyChildren = Array.from(doc.body.children);
-  let currentList = null;
-  let currentListType = "";
-
-  bodyChildren.forEach(element => {
-    if (!isWordListElement(element)) {
-      currentList = null;
-      currentListType = "";
-      return;
-    }
-
-    const listType = getWordListType(element);
-
-    if (!currentList || currentListType !== listType) {
-      currentList = doc.createElement(listType);
-      currentListType = listType;
-      element.parentNode.insertBefore(currentList, element);
-    }
-
-    removeWordListMarker(element);
-
-    const li = doc.createElement("li");
-
-    while (element.firstChild) {
-      li.appendChild(element.firstChild);
-    }
-
-    currentList.appendChild(li);
-    element.remove();
-  });
-}
-
-function sanitizeHtml(htmlString = "") {
-  if (typeof window === "undefined") return htmlString;
-
-  const allowedTags = new Set([
-    "table",
-    "thead",
-    "tbody",
-    "tfoot",
-    "tr",
-    "td",
-    "th",
-    "colgroup",
-    "col",
-    "p",
-    "div",
-    "span",
-    "br",
-    "b",
-    "strong",
-    "i",
-    "em",
-    "u",
-    "ul",
-    "ol",
-    "li",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "a"
-  ]);
-
-  const allowedAttrs = new Set([
-    "style",
-    "colspan",
-    "rowspan",
-    "width",
-    "height",
-    "align",
-    "valign",
-    "href",
-    "target"
-  ]);
-
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(htmlString, "text/html");
-
-  inlineClassStyles(doc);
-
-  function unwrapNode(node) {
-    const parent = node.parentNode;
-    if (!parent) return;
-
-    while (node.firstChild) {
-      parent.insertBefore(node.firstChild, node);
-    }
-
-    parent.removeChild(node);
-  }
-
-  function sanitizeNode(node) {
-    if (node.nodeType === 8) {
-      node.remove();
-      return;
-    }
-
-    if (node.nodeType !== 1) return;
-
-    const element = node;
-    const tagName = element.tagName.toLowerCase();
-
-    Array.from(element.childNodes).forEach(sanitizeNode);
-
-    if (!allowedTags.has(tagName)) {
-      unwrapNode(element);
-      return;
-    }
-
-    Array.from(element.attributes).forEach(attr => {
-      const attrName = attr.name.toLowerCase();
-      const attrValue = attr.value;
-
-      if (attrName.startsWith("on")) {
-        element.removeAttribute(attr.name);
-        return;
-      }
-
-      if (!allowedAttrs.has(attrName)) {
-        element.removeAttribute(attr.name);
-        return;
-      }
-
-      if (attrName === "style") {
-        const cleaned = cleanStyle(attrValue);
-
-        if (cleaned) {
-          element.setAttribute("style", cleaned);
-        } else {
-          element.removeAttribute("style");
-        }
-
-        return;
-      }
-
-      if (attrName === "href" && /^javascript:/i.test(attrValue)) {
-        element.removeAttribute(attr.name);
-      }
-    });
-
-    element.removeAttribute("class");
-    element.removeAttribute("id");
-  }
-
-  Array.from(doc.body.childNodes).forEach(sanitizeNode);
-
-  return doc.body.innerHTML;
-}
-
-function addStyleIfMissing(element, property, value) {
-  const currentStyle = element.getAttribute("style") || "";
-  const hasProperty = new RegExp(`(^|;)\\s*${property}\\s*:`, "i").test(
-    currentStyle
-  );
-
-  if (!hasProperty) {
-    element.setAttribute(
-      "style",
-      `${currentStyle}; ${property}: ${value}`.trim()
-    );
-  }
-}
-
-function prepareQuotationHtmlForEmail(rawHtml = "") {
-  if (typeof window === "undefined") return rawHtml;
-
-  const cleanHtml = sanitizeHtml(rawHtml);
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(cleanHtml, "text/html");
-
-  doc.querySelectorAll("table").forEach(table => {
-    addStyleIfMissing(table, "border-collapse", "collapse");
-    addStyleIfMissing(table, "width", "100%");
-  });
-
-  doc.querySelectorAll("td, th").forEach(cell => {
-    addStyleIfMissing(cell, "border", "1px solid #d1d5db");
-    addStyleIfMissing(cell, "padding", "6px 8px");
-    addStyleIfMissing(cell, "vertical-align", "top");
-  });
-
-  return doc.body.innerHTML;
-}
-
-/* =========================
-   UI HELPERS
+   SMALL UI HELPERS
 ========================= */
 
 function TabButton({ active, onClick, children }) {
@@ -825,24 +928,6 @@ function TabButton({ active, onClick, children }) {
   );
 }
 
-function ToolbarButton({ title, onClick, children }) {
-  return (
-    <button
-      type="button"
-      title={title}
-      onMouseDown={event => event.preventDefault()}
-      onClick={onClick}
-      className="
-        h-8 min-w-8 rounded-lg border border-gray-200 bg-white
-        px-2 text-xs font-semibold text-gray-700
-        hover:bg-gray-50 hover:text-gray-950
-      "
-    >
-      {children}
-    </button>
-  );
-}
-
 function InfoRow({ label, value }) {
   return (
     <div>
@@ -851,6 +936,49 @@ function InfoRow({ label, value }) {
         {value || "—"}
       </p>
     </div>
+  );
+}
+
+function FormSection({ title, description, children, right }) {
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
+      <div className="border-b border-gray-100 bg-gray-50 px-4 py-3 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-gray-900">{title}</p>
+          {description && (
+            <p className="text-xs text-gray-500 mt-1">{description}</p>
+          )}
+        </div>
+
+        {right}
+      </div>
+
+      <div className="p-4 space-y-4">{children}</div>
+    </div>
+  );
+}
+
+function AddButton({ onClick, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+    >
+      {children}
+    </button>
+  );
+}
+
+function RemoveButton({ onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-100"
+    >
+      Remove
+    </button>
   );
 }
 
@@ -968,14 +1096,20 @@ export default function QuotationEditor({
   initialQuotation = null
 }) {
   const { user } = useAuth();
-  const editorRef = useRef(null);
-  const pendingEditorHydrateRef = useRef(false);
-  const loadedQuotationKeyRef = useRef("");
 
   const [teamMembers, setTeamMembers] = useState([]);
   const [selectedSignatureUid, setSelectedSignatureUid] = useState("");
 
-  const [html, setHtml] = useState("");
+  const [quotationData, setQuotationData] = useState(() =>
+    createDefaultQuotationData(lead)
+  );
+
+  const [legacyHtml, setLegacyHtml] = useState("");
+
+  const [destinationTemplate, setDestinationTemplate] = useState(null);
+  const [templateLoading, setTemplateLoading] = useState(false);
+  const [templateError, setTemplateError] = useState("");
+
   const [customerQuotedAmount, setCustomerQuotedAmount] = useState("");
   const [vendorCost, setVendorCost] = useState("");
   const [note, setNote] = useState("");
@@ -1047,6 +1181,51 @@ export default function QuotationEditor({
   const [sendWhatsApp, setSendWhatsApp] = useState(
     !recipient.email && Boolean(recipient.mobile)
   );
+
+  useEffect(() => {
+    setSendEmail(Boolean(recipient.email));
+    setSendWhatsApp(!recipient.email && Boolean(recipient.mobile));
+  }, [recipient.email, recipient.mobile]);
+
+  const isLegacyQuotation = Boolean(
+    initialQuotation &&
+    !initialQuotation?.quotationData &&
+    cleanString(legacyHtml)
+  );
+
+  const activeDestinationTemplate = useMemo(() => {
+    return quotationData?.destinationTemplateSnapshot || destinationTemplate;
+  }, [quotationData?.destinationTemplateSnapshot, destinationTemplate]);
+
+  const cleanPreviewQuotationData = useMemo(() => {
+    return buildCleanQuotationData({
+      lead,
+      quotationData,
+      destinationTemplate: activeDestinationTemplate
+    });
+  }, [lead, quotationData, activeDestinationTemplate]);
+
+  const previewItineraryHtml = useMemo(() => {
+    if (isLegacyQuotation) {
+      return legacyHtml || "<p>No quotation content added yet.</p>";
+    }
+
+    return buildStructuredQuotationHtml({
+      lead,
+      quotationData: cleanPreviewQuotationData,
+      destinationTemplate: activeDestinationTemplate
+    });
+  }, [
+    isLegacyQuotation,
+    legacyHtml,
+    lead,
+    cleanPreviewQuotationData,
+    activeDestinationTemplate
+  ]);
+
+  /* =========================
+     LOAD TEAM MEMBERS
+  ========================== */
 
   useEffect(() => {
     let mounted = true;
@@ -1219,31 +1398,25 @@ export default function QuotationEditor({
     };
   }, [selectedSignatureUser, currentUserOption]);
 
-  useEffect(() => {
-    if (activeTab !== "edit") return;
-
-    const editor = editorRef.current;
-    if (!editor) return;
-
-    const shouldHydrate =
-      pendingEditorHydrateRef.current ||
-      editor.innerHTML.trim() === "";
-
-    if (!shouldHydrate) return;
-
-    editor.innerHTML = html || "";
-    pendingEditorHydrateRef.current = false;
-  }, [activeTab, html]);
+  /* =========================
+     HYDRATE QUOTATION
+  ========================== */
 
   useEffect(() => {
     const pricing = getInitialPricingSnapshot(initialQuotation, lead);
 
     if (!initialQuotation) {
-      loadedQuotationKeyRef.current = "";
-      pendingEditorHydrateRef.current = true;
-      setHtml("");
+      setQuotationData(
+        createDefaultQuotationData(
+          lead,
+          pricing.selectedVendorCurrency || "USD"
+        )
+      );
+      setLegacyHtml("");
       setDraftQuotationId("");
       setDraftRevision(null);
+      setNote("");
+      setIsFinalQuotation(false);
 
       setCustomerQuotedAmount(
         pricing.customerQuoteAmount === null ||
@@ -1259,36 +1432,38 @@ export default function QuotationEditor({
           : String(pricing.selectedVendorCost)
       );
 
-      if (editorRef.current) {
-        editorRef.current.innerHTML = "";
-      }
-
       return;
     }
 
-    const quotationKey =
-      initialQuotation.id ||
-      initialQuotation.quotationId ||
-      initialQuotation.selectedVendorQuoteId ||
-      initialQuotation.pricingSnapshot?.selectedVendorQuoteId ||
-      `${initialQuotation.leadId || lead?.id || ""}-${initialQuotation.revision || ""
-      }-${pricing.customerQuoteAmount || ""}-${pricing.selectedVendorCost || ""
-      }`;
+    const savedQuotationData =
+      initialQuotation.quotationData ||
+      initialQuotation.metadata?.quotationData ||
+      null;
 
-    if (loadedQuotationKeyRef.current === quotationKey) return;
-
-    loadedQuotationKeyRef.current = quotationKey;
-    pendingEditorHydrateRef.current = true;
-
-    const draftHtml =
-      initialQuotation.itineraryHtml ||
-      initialQuotation.html ||
-      initialQuotation.contentHtml ||
-      initialQuotation.metadata?.itineraryHtml ||
-      "";
-
-    setActiveTab("edit");
-    setHtml(draftHtml);
+    if (savedQuotationData) {
+      setQuotationData(
+        mergeQuotationDataWithDefaults(
+          lead,
+          savedQuotationData,
+          pricing.selectedVendorCurrency || "USD"
+        )
+      );
+      setLegacyHtml("");
+    } else {
+      setQuotationData(
+        createDefaultQuotationData(
+          lead,
+          pricing.selectedVendorCurrency || "USD"
+        )
+      );
+      setLegacyHtml(
+        initialQuotation.itineraryHtml ||
+        initialQuotation.html ||
+        initialQuotation.contentHtml ||
+        initialQuotation.metadata?.itineraryHtml ||
+        ""
+      );
+    }
 
     setCustomerQuotedAmount(
       pricing.customerQuoteAmount === null ||
@@ -1330,13 +1505,92 @@ export default function QuotationEditor({
     if (signatureUid) {
       setSelectedSignatureUid(signatureUid);
     }
+
+    setActiveTab("edit");
   }, [initialQuotation, lead]);
+
+  /* =========================
+     LOAD DESTINATION TEMPLATE
+  ========================== */
+
+  const selectedDestinationName =
+    quotationData?.travelDetails?.destinationName || "";
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadTemplate() {
+      const destinationName = cleanString(selectedDestinationName);
+
+      if (!destinationName || isLegacyQuotation) {
+        setDestinationTemplate(null);
+        return;
+      }
+
+      const existingSnapshot = quotationData?.destinationTemplateSnapshot;
+
+      if (
+        existingSnapshot?.destinationName &&
+        existingSnapshot.destinationName === destinationName
+      ) {
+        setDestinationTemplate(existingSnapshot);
+        return;
+      }
+
+      setTemplateLoading(true);
+      setTemplateError("");
+
+      try {
+        const template =
+          await getDestinationQuotationTemplate(destinationName);
+
+        if (!mounted) return;
+
+        setDestinationTemplate(template);
+
+        if (template) {
+          const snapshot = buildDestinationTemplateSnapshot(template);
+
+          setQuotationData(prev => ({
+            ...prev,
+            destinationTemplateId:
+              snapshot.templateId || snapshot.destinationId || "",
+            destinationTemplateSnapshot: snapshot,
+            selectedAutoSections:
+              Object.keys(prev.selectedAutoSections || {}).length
+                ? prev.selectedAutoSections
+                : getDefaultSelectedAutoSections(snapshot)
+          }));
+        } else {
+          setQuotationData(prev => ({
+            ...prev,
+            destinationTemplateId: "",
+            destinationTemplateSnapshot: null,
+            selectedAutoSections: {}
+          }));
+        }
+      } catch (error) {
+        if (mounted) {
+          setTemplateError(
+            error?.message || "Failed to load destination template."
+          );
+        }
+      } finally {
+        if (mounted) setTemplateLoading(false);
+      }
+    }
+
+    loadTemplate();
+
+    return () => {
+      mounted = false;
+    };
+  }, [selectedDestinationName, isLegacyQuotation]);
 
   if (!user || !lead) return null;
 
   const hasEmail = Boolean(recipient.email);
   const hasWhatsApp = Boolean(recipient.mobile);
-  const isEditorEmpty = !stripHtml(html);
 
   const customerAmountNumber = Number(customerQuotedAmount || 0);
   const vendorCostNumber = Number(vendorCost || 0);
@@ -1352,93 +1606,418 @@ export default function QuotationEditor({
       ? (grossProfit / customerAmountNumber) * 100
       : null;
 
-  const syncEditorHtml = () => {
-    setHtml(editorRef.current?.innerHTML || "");
+
+  function shouldShowPackageDetails(type) {
+    return ["package", "hotel_only", "land_only", "custom"].includes(type);
+  }
+
+  function shouldShowHotelSection(type) {
+    return ["package", "hotel_only", "custom"].includes(type);
+  }
+
+  function shouldShowTransferSection(type) {
+    return ["package", "land_only", "custom"].includes(type);
+  }
+
+  function shouldShowItinerarySection(type) {
+    return ["package", "land_only", "custom"].includes(type);
+  }
+
+  function shouldShowServiceSection(type) {
+    return ["visa_only", "custom"].includes(type);
+  }
+
+  function shouldShowFlightSection(type) {
+    return ["flight_only", "custom"].includes(type);
+  }
+
+
+  const updateQuotationType = value => {
+    setQuotationData(prev => {
+      const next = {
+        ...prev,
+        quotationType: value,
+        packageDetails: {
+          ...(prev.packageDetails || {}),
+          hotelPart: {
+            ...(prev.packageDetails?.hotelPart || {}),
+            enabled:
+              value === "package" ||
+              value === "hotel_only" ||
+              value === "custom"
+          },
+          landPart: {
+            ...(prev.packageDetails?.landPart || {}),
+            enabled:
+              value === "package" ||
+              value === "land_only" ||
+              value === "custom"
+          }
+        }
+      };
+
+      return next;
+    });
   };
 
-  const executeEditorCommand = (command, value = null) => {
-    const editor = editorRef.current;
-    if (!editor) return;
 
-    editor.focus();
-
-    try {
-      document.execCommand(command, false, value);
-    } catch (error) {
-      console.warn("Editor command failed:", error);
-    }
-
-    syncEditorHtml();
+  const addServiceItem = () => {
+    setQuotationData(prev => ({
+      ...prev,
+      serviceItems: [
+        ...safeArray(prev.serviceItems),
+        {
+          serviceType: "visa",
+          title: "",
+          description: "",
+          currency: "INR",
+          amount: "",
+          remarks: ""
+        }
+      ]
+    }));
   };
 
-  const insertHtmlAtCursor = insertHtml => {
-    const editor = editorRef.current;
-    if (!editor) return;
-
-    editor.focus();
-
-    const selection = window.getSelection();
-
-    if (!selection || !selection.rangeCount) {
-      editor.insertAdjacentHTML("beforeend", insertHtml);
-      syncEditorHtml();
-      return;
-    }
-
-    const range = selection.getRangeAt(0);
-
-    if (!editor.contains(range.commonAncestorContainer)) {
-      editor.insertAdjacentHTML("beforeend", insertHtml);
-      syncEditorHtml();
-      return;
-    }
-
-    range.deleteContents();
-
-    const template = document.createElement("template");
-    template.innerHTML = insertHtml;
-
-    const fragment = template.content;
-    const lastNode = fragment.lastChild;
-
-    range.insertNode(fragment);
-
-    if (lastNode) {
-      const nextRange = document.createRange();
-      nextRange.setStartAfter(lastNode);
-      nextRange.collapse(true);
-
-      selection.removeAllRanges();
-      selection.addRange(nextRange);
-    }
-
-    syncEditorHtml();
+  const updateServiceItem = (index, key, value) => {
+    setQuotationData(prev => ({
+      ...prev,
+      serviceItems: safeArray(prev.serviceItems).map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+            ...row,
+            [key]: value
+          }
+          : row
+      )
+    }));
   };
 
-  const handlePaste = event => {
-    event.preventDefault();
+  const removeServiceItem = index => {
+    setQuotationData(prev => ({
+      ...prev,
+      serviceItems: safeArray(prev.serviceItems).filter(
+        (_, rowIndex) => rowIndex !== index
+      )
+    }));
+  };
 
-    const clipboardHtml = event.clipboardData.getData("text/html");
-    const clipboardText = event.clipboardData.getData("text/plain");
+  /* =========================
+     STRUCTURED FIELD UPDATERS
+  ========================== */
 
-    if (clipboardHtml) {
-      insertHtmlAtCursor(sanitizeHtml(clipboardHtml));
-      return;
+  const updateTravelDetail = (key, value) => {
+    setQuotationData(prev => ({
+      ...prev,
+      travelDetails: {
+        ...(prev.travelDetails || {}),
+        [key]: value
+      },
+      ...(key === "destinationName"
+        ? {
+          destinationTemplateId: "",
+          destinationTemplateSnapshot: null,
+          selectedAutoSections: {}
+        }
+        : {})
+    }));
+  };
+
+  const updatePackageCurrency = value => {
+    setQuotationData(prev => ({
+      ...prev,
+      packageDetails: {
+        ...(prev.packageDetails || {}),
+        currency: value
+      }
+    }));
+  };
+
+  const togglePackagePart = partKey => {
+    setQuotationData(prev => ({
+      ...prev,
+      packageDetails: {
+        ...(prev.packageDetails || {}),
+        [partKey]: {
+          ...(prev.packageDetails?.[partKey] || {}),
+          enabled: !prev.packageDetails?.[partKey]?.enabled
+        }
+      }
+    }));
+  };
+
+  const updatePackagePart = (partKey, key, value) => {
+    setQuotationData(prev => ({
+      ...prev,
+      packageDetails: {
+        ...(prev.packageDetails || {}),
+        [partKey]: {
+          ...(prev.packageDetails?.[partKey] || {}),
+          [key]: value
+        }
+      }
+    }));
+  };
+
+  const addHotelRow = () => {
+    setQuotationData(prev => ({
+      ...prev,
+      hotelInclusions: [
+        ...safeArray(prev.hotelInclusions),
+        {
+          nights: "",
+          hotelName: "",
+          roomCategory: "",
+          mealPlan: "Breakfast",
+          location: ""
+        }
+      ]
+    }));
+  };
+
+  const updateHotelRow = (index, key, value) => {
+    setQuotationData(prev => ({
+      ...prev,
+      hotelInclusions: safeArray(prev.hotelInclusions).map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+            ...row,
+            [key]: value
+          }
+          : row
+      )
+    }));
+  };
+
+  const removeHotelRow = index => {
+    setQuotationData(prev => ({
+      ...prev,
+      hotelInclusions: safeArray(prev.hotelInclusions).filter(
+        (_, rowIndex) => rowIndex !== index
+      )
+    }));
+  };
+
+  const addTransferRow = () => {
+    setQuotationData(prev => ({
+      ...prev,
+      transferInclusions: [...safeArray(prev.transferInclusions), ""]
+    }));
+  };
+
+  const updateTransferRow = (index, value) => {
+    setQuotationData(prev => ({
+      ...prev,
+      transferInclusions: safeArray(prev.transferInclusions).map(
+        (row, rowIndex) => (rowIndex === index ? value : row)
+      )
+    }));
+  };
+
+  const removeTransferRow = index => {
+    setQuotationData(prev => ({
+      ...prev,
+      transferInclusions: safeArray(prev.transferInclusions).filter(
+        (_, rowIndex) => rowIndex !== index
+      )
+    }));
+  };
+
+  const addItineraryDay = () => {
+    setQuotationData(prev => {
+      const rows = safeArray(prev.itineraryDays);
+
+      return {
+        ...prev,
+        itineraryDays: [
+          ...rows,
+          {
+            day: rows.length + 1,
+            title: "",
+            description: "",
+            meals: "",
+            meetingPoint: "",
+            timing: "",
+            includes: ""
+          }
+        ]
+      };
+    });
+  };
+
+  const updateItineraryDay = (index, key, value) => {
+    setQuotationData(prev => ({
+      ...prev,
+      itineraryDays: safeArray(prev.itineraryDays).map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+            ...row,
+            [key]: value
+          }
+          : row
+      )
+    }));
+  };
+
+  const removeItineraryDay = index => {
+    setQuotationData(prev => ({
+      ...prev,
+      itineraryDays: safeArray(prev.itineraryDays).filter(
+        (_, rowIndex) => rowIndex !== index
+      )
+    }));
+  };
+
+  const toggleAutoSection = key => {
+    setQuotationData(prev => ({
+      ...prev,
+      selectedAutoSections: {
+        ...(prev.selectedAutoSections || {}),
+        [key]: !prev.selectedAutoSections?.[key]
+      }
+    }));
+  };
+
+
+
+  const addFlightRow = () => {
+    setQuotationData(prev => ({
+      ...prev,
+      flightDetails: [
+        ...safeArray(prev.flightDetails),
+        {
+          airline: "",
+          route: "",
+          departureDate: "",
+          returnDate: "",
+          baggage: "",
+          currency: "INR",
+          fare: "",
+          remarks: ""
+        }
+      ]
+    }));
+  };
+
+  const updateFlightRow = (index, key, value) => {
+    setQuotationData(prev => ({
+      ...prev,
+      flightDetails: safeArray(prev.flightDetails).map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+            ...row,
+            [key]: value
+          }
+          : row
+      )
+    }));
+  };
+
+  const removeFlightRow = index => {
+    setQuotationData(prev => ({
+      ...prev,
+      flightDetails: safeArray(prev.flightDetails).filter(
+        (_, rowIndex) => rowIndex !== index
+      )
+    }));
+  };
+
+  /* =========================
+     VALIDATION
+  ========================== */
+
+  const validateStructuredQuotation = () => {
+    if (isLegacyQuotation) {
+      if (!stripHtml(legacyHtml)) {
+        alert("Quotation content is required");
+        return false;
+      }
+
+      return true;
     }
 
-    if (clipboardText) {
-      insertHtmlAtCursor(convertPlainTextToHtml(clipboardText));
+    const cleanData = cleanPreviewQuotationData;
+    const destinationName = cleanData.travelDetails?.destinationName;
+
+    if (!destinationName) {
+      alert("Destination is required");
+      return false;
     }
+
+    const quotationType = cleanData.quotationType || "package";
+
+    const hotelPart = cleanData.packageDetails?.hotelPart;
+    const landPart = cleanData.packageDetails?.landPart;
+
+    if (["package", "hotel_only", "land_only"].includes(quotationType)) {
+      if (!hotelPart?.enabled && !landPart?.enabled) {
+        alert("Select at least one quotation component");
+        return false;
+      }
+
+      if (hotelPart?.enabled && !hotelPart?.amount) {
+        alert("Hotel Part amount is required");
+        return false;
+      }
+
+      if (landPart?.enabled && !landPart?.amount) {
+        alert("Land Part amount is required");
+        return false;
+      }
+    }
+
+    if (
+      shouldShowHotelSection(quotationType) &&
+      hotelPart?.enabled &&
+      !cleanData.hotelInclusions?.length
+    ) {
+      alert("At least one hotel detail is required");
+      return false;
+    }
+
+    if (
+      shouldShowItinerarySection(quotationType) &&
+      quotationType !== "hotel_only" &&
+      !cleanData.itineraryDays?.length
+    ) {
+      alert("At least one itinerary day is required");
+      return false;
+    }
+
+    if (
+      shouldShowServiceSection(quotationType) &&
+      !cleanData.serviceItems?.length
+    ) {
+      alert("At least one service item is required");
+      return false;
+    }
+
+    if (
+      shouldShowFlightSection(quotationType) &&
+      !cleanData.flightDetails?.length
+    ) {
+      alert("At least one flight detail is required");
+      return false;
+    }
+
+    if (quotationType === "custom") {
+      const hasAnyCustomContent =
+        cleanData.hotelInclusions?.length ||
+        cleanData.transferInclusions?.length ||
+        cleanData.itineraryDays?.length ||
+        cleanData.serviceItems?.length ||
+        cleanData.flightDetails?.length;
+
+      if (!hasAnyCustomContent) {
+        alert("Please add at least one custom quotation detail");
+        return false;
+      }
+    }
+
+    return true;
   };
 
   const validateBeforeSend = () => {
-    const rawEditorHtml = editorRef.current?.innerHTML || html;
-    const cleanText = stripHtml(rawEditorHtml);
-
-    if (!cleanText) {
-      alert("Itinerary is required");
-      return false;
-    }
+    if (!validateStructuredQuotation()) return false;
 
     if (
       !customerQuotedAmount ||
@@ -1489,16 +2068,39 @@ export default function QuotationEditor({
     return true;
   };
 
+  const getFinalQuotationDataAndHtml = () => {
+    if (isLegacyQuotation) {
+      return {
+        finalQuotationData: null,
+        finalItineraryHtml: legacyHtml || ""
+      };
+    }
+
+    const finalQuotationData = buildCleanQuotationData({
+      lead,
+      quotationData,
+      destinationTemplate: activeDestinationTemplate
+    });
+
+    const finalItineraryHtml = buildStructuredQuotationHtml({
+      lead,
+      quotationData: finalQuotationData,
+      destinationTemplate: activeDestinationTemplate
+    });
+
+    return {
+      finalQuotationData,
+      finalItineraryHtml
+    };
+  };
+
+  /* =========================
+     SAVE DRAFT
+  ========================== */
+
   const saveDraft = async () => {
     if (saving || savingDraft) return;
-
-    const rawEditorHtml = editorRef.current?.innerHTML || html;
-    const cleanText = stripHtml(rawEditorHtml);
-
-    if (!cleanText) {
-      alert("Add itinerary or quotation content before saving draft");
-      return;
-    }
+    if (!validateStructuredQuotation()) return;
 
     const selectedSignatureBaseUser =
       selectedSignatureUser || currentUserOption;
@@ -1537,7 +2139,8 @@ export default function QuotationEditor({
         ...branding
       };
 
-      const itineraryHtml = prepareQuotationHtmlForEmail(rawEditorHtml);
+      const { finalQuotationData, finalItineraryHtml } =
+        getFinalQuotationDataAndHtml();
 
       const emailSignatureHtml =
         buildEmailSignatureHtml(signatureUserWithBranding);
@@ -1551,7 +2154,8 @@ export default function QuotationEditor({
         quotationId: draftQuotationId,
         revision: draftRevision,
 
-        itineraryHtml,
+        itineraryHtml: finalItineraryHtml,
+        quotationData: finalQuotationData,
 
         customerQuotedAmount: customerAmountNumber || 0,
         customerQuoteAmount: customerAmountNumber || 0,
@@ -1618,10 +2222,15 @@ export default function QuotationEditor({
     }
   };
 
+  /* =========================
+     UPDATE EXISTING DRAFT AS SENT
+  ========================== */
+
   const updateExistingDraftAsSent = async ({
     quotationId,
     revision,
     itineraryHtml,
+    quotationData,
     sendVia,
     signatureUser,
     emailSignatureHtml,
@@ -1671,6 +2280,7 @@ export default function QuotationEditor({
         isFinalQuotation: Boolean(isFinalQuotation),
 
         itineraryHtml,
+        quotationData: quotationData || null,
 
         totalPrice: customerAmountNumber,
         totalAmount: customerAmountNumber,
@@ -1769,11 +2379,13 @@ export default function QuotationEditor({
     setConfirmOpen(true);
   };
 
+  /* =========================
+     SEND QUOTATION
+  ========================== */
+
   const submit = async () => {
     if (saving) return;
     if (!validateBeforeSend()) return;
-
-    const rawEditorHtml = editorRef.current?.innerHTML || html;
 
     const selectedSignatureBaseUser =
       selectedSignatureUser || currentUserOption;
@@ -1823,7 +2435,8 @@ export default function QuotationEditor({
         return;
       }
 
-      const itineraryHtml = prepareQuotationHtmlForEmail(rawEditorHtml);
+      const { finalQuotationData, finalItineraryHtml } =
+        getFinalQuotationDataAndHtml();
 
       const emailSignatureHtml =
         buildEmailSignatureHtml(signatureUserWithBranding);
@@ -1842,7 +2455,8 @@ export default function QuotationEditor({
         quotationResult = await updateExistingDraftAsSent({
           quotationId: draftQuotationId,
           revision: draftRevision,
-          itineraryHtml,
+          itineraryHtml: finalItineraryHtml,
+          quotationData: finalQuotationData,
           sendVia,
           signatureUser,
           emailSignatureHtml,
@@ -1852,7 +2466,8 @@ export default function QuotationEditor({
       } else {
         quotationResult = await createQuotationRevision({
           leadId: lead.id,
-          itineraryHtml,
+          itineraryHtml: finalItineraryHtml,
+          quotationData: finalQuotationData,
 
           totalPrice: customerAmountNumber,
           totalAmount: customerAmountNumber,
@@ -1922,52 +2537,21 @@ export default function QuotationEditor({
           ? quotationResult?.quotationId || quotationResult?.id || ""
           : "";
 
-      const subject = `Quotation ${lead.leadCode || ""}${revision ? ` (Rev ${revision})` : ""
-        }`;
+      const subject = `Your Travel Quotation Is Ready - ${lead.leadCode || ""
+        }${revision ? ` / Rev ${revision}` : ""}`;
 
       const itineraryAlreadyHasGreeting =
-        htmlContainsGreeting(itineraryHtml);
+        htmlContainsGreeting(finalItineraryHtml);
 
-      const emailHtml = itineraryAlreadyHasGreeting
-        ? `
-          <div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.5;">
-            <div style="margin: 0 0 16px;">
-              ${itineraryHtml}
-            </div>
-
-            ${emailSignatureHtml}
-          </div>
-        `
-        : `
-          <div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.5;">
-            <p style="margin: 0 0 12px;">
-              Dear ${escapeHtml(recipient.name || "Guest")},
-            </p>
-
-            <p style="margin: 0 0 16px;">
-              Thank you for choosing DreamTrawell Destination.
-            </p>
-
-            <p style="margin: 0 0 16px;">
-              Please find below the quotation details for your travel enquiry.
-            </p>
-
-            <div style="margin: 16px 0;">
-              ${itineraryHtml}
-            </div>
-
-            ${branding.quotationClosingLine
-          ? `
-                  <p style="margin: 16px 0;">
-                    ${escapeHtml(branding.quotationClosingLine)}
-                  </p>
-                `
-          : ""
-        }
-
-            ${emailSignatureHtml}
-          </div>
-        `;
+      const emailHtml = buildQuotationTravelAgentEmailHtml({
+        recipient,
+        lead,
+        revision,
+        itineraryHtml: finalItineraryHtml,
+        branding,
+        emailSignatureHtml,
+        itineraryAlreadyHasGreeting
+      });
 
       let communicationSettings = {
         quotationManagementBcc: [],
@@ -2094,7 +2678,8 @@ export default function QuotationEditor({
           vendorCostNumber,
           grossProfit,
           marginPercent,
-          itineraryHtml,
+          itineraryHtml: finalItineraryHtml,
+          quotationData: finalQuotationData,
           isFinalQuotation,
           quotationPricingMode,
           vendorQuoteFinalized,
@@ -2115,7 +2700,10 @@ export default function QuotationEditor({
     }
   };
 
-  const previewItineraryHtml = prepareQuotationHtmlForEmail(html);
+  /* =========================
+     PREVIEW VALUES
+  ========================== */
+
   const previewSignature =
     previewSignatureUser || selectedSignatureUser || currentUserOption;
 
@@ -2130,45 +2718,16 @@ export default function QuotationEditor({
   const previewAlreadyHasGreeting =
     htmlContainsGreeting(previewItineraryHtml);
 
-  const previewEmailHtml = previewAlreadyHasGreeting
-    ? `
-      <div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.5;">
-        <div style="margin: 0 0 16px;">
-          ${previewItineraryHtml || "<p>No quotation content added yet.</p>"}
-        </div>
-        ${previewEmailSignatureHtml}
-      </div>
-    `
-    : `
-      <div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.5;">
-        <p style="margin: 0 0 12px;">
-          Dear ${escapeHtml(recipient.name || "Guest")},
-        </p>
-
-        <p style="margin: 0 0 16px;">
-          Thank you for choosing DreamTrawell Destination.
-        </p>
-
-        <p style="margin: 0 0 16px;">
-          Please find below the quotation details for your travel enquiry.
-        </p>
-
-        <div style="margin: 16px 0;">
-          ${previewItineraryHtml || "<p>No quotation content added yet.</p>"}
-        </div>
-
-        ${previewSignature?.quotationClosingLine
-      ? `
-              <p style="margin: 16px 0;">
-                ${escapeHtml(previewSignature.quotationClosingLine)}
-              </p>
-            `
-      : ""
-    }
-
-        ${previewEmailSignatureHtml}
-      </div>
-    `;
+  const previewEmailHtml = buildQuotationTravelAgentEmailHtml({
+    recipient,
+    lead,
+    revision: draftRevision,
+    itineraryHtml:
+      previewItineraryHtml || "<p>No quotation content added yet.</p>",
+    branding: previewSignature || {},
+    emailSignatureHtml: previewEmailSignatureHtml,
+    itineraryAlreadyHasGreeting: previewAlreadyHasGreeting
+  });
 
   const previewWhatsappMessage = [
     `Dear ${recipient.name || "Guest"},`,
@@ -2191,6 +2750,35 @@ export default function QuotationEditor({
     getMemberName(selectedSignatureUser) ||
     "Not selected";
 
+  const templateSections =
+    activeDestinationTemplate?.sections || {};
+
+  const currentQuotationType = quotationData.quotationType || "package";
+
+  const showPackageDetails =
+    shouldShowPackageDetails(currentQuotationType);
+
+  const showHotelSection =
+    shouldShowHotelSection(currentQuotationType) &&
+    quotationData.packageDetails?.hotelPart?.enabled;
+
+  const showTransferSection =
+    shouldShowTransferSection(currentQuotationType) &&
+    quotationData.packageDetails?.landPart?.enabled;
+
+  const showItinerarySection =
+    shouldShowItinerarySection(currentQuotationType);
+
+  const showServiceSection =
+    shouldShowServiceSection(currentQuotationType);
+
+  const showFlightSection =
+    shouldShowFlightSection(currentQuotationType);
+
+  /* =========================
+     RENDER
+  ========================== */
+
   return (
     <>
       <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -2210,7 +2798,7 @@ export default function QuotationEditor({
 
             <div className="hidden md:flex items-center gap-2 text-xs">
               <span className="bg-green-50 text-green-700 border border-green-100 px-2 py-1 rounded-full">
-                Customer visible editor
+                Structured quotation
               </span>
 
               <span className="bg-orange-50 text-orange-700 border border-orange-100 px-2 py-1 rounded-full">
@@ -2226,7 +2814,14 @@ export default function QuotationEditor({
                   active={activeTab === "edit"}
                   onClick={() => setActiveTab("edit")}
                 >
-                  Edit Quotation
+                  Build Quotation
+                </TabButton>
+
+                <TabButton
+                  active={activeTab === "auto"}
+                  onClick={() => setActiveTab("auto")}
+                >
+                  Auto Notes
                 </TabButton>
 
                 <TabButton
@@ -2251,93 +2846,960 @@ export default function QuotationEditor({
                 </div>
               )}
 
-              {activeTab === "edit" && (
-                <div className="border border-gray-200 rounded-lg overflow-hidden bg-white">
-                  <div className="border-b border-gray-100 bg-gray-50">
-                    <div className="px-4 py-2 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <ToolbarButton
-                          title="Bold"
-                          onClick={() => executeEditorCommand("bold")}
-                        >
-                          <span className="font-bold">B</span>
-                        </ToolbarButton>
-
-                        <ToolbarButton
-                          title="Italic"
-                          onClick={() => executeEditorCommand("italic")}
-                        >
-                          <span className="italic">I</span>
-                        </ToolbarButton>
-
-                        <ToolbarButton
-                          title="Underline"
-                          onClick={() => executeEditorCommand("underline")}
-                        >
-                          <span className="underline">U</span>
-                        </ToolbarButton>
-
-                        <span className="h-6 w-px bg-gray-200 mx-1" />
-
-                        <ToolbarButton
-                          title="Bullet List"
-                          onClick={() => executeEditorCommand("insertUnorderedList")}
-                        >
-                          • List
-                        </ToolbarButton>
-
-                        <ToolbarButton
-                          title="Numbered List"
-                          onClick={() => executeEditorCommand("insertOrderedList")}
-                        >
-                          1. List
-                        </ToolbarButton>
-
-                        <span className="h-6 w-px bg-gray-200 mx-1" />
-
-                        <ToolbarButton
-                          title="Remove Formatting"
-                          onClick={() => executeEditorCommand("removeFormat")}
-                        >
-                          Clear
-                        </ToolbarButton>
-                      </div>
-
-                      <span className="text-[11px] bg-green-50 text-green-700 border border-green-100 px-2 py-1 rounded-full w-fit">
-                        Customer Visible
-                      </span>
-                    </div>
-
-                    <div className="px-4 pb-2">
-                      <p className="text-xs text-gray-500">
-                        Paste from Word, Google Docs, Excel or Sheets. Bold, italic, underline,
-                        bullets, numbering, tables and colors will be preserved where possible.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div
-                    ref={editorRef}
-                    contentEditable
-                    suppressContentEditableWarning
-                    role="textbox"
-                    aria-multiline="true"
-                    data-empty={isEditorEmpty ? "true" : "false"}
-                    data-placeholder="Write itinerary, inclusions, exclusions, hotel details, payment terms..."
-                    onInput={syncEditorHtml}
-                    onPaste={handlePaste}
-                    onFocus={() => {
-                      if (
-                        pendingEditorHydrateRef.current &&
-                        editorRef.current
-                      ) {
-                        editorRef.current.innerHTML = html || "";
-                        pendingEditorHydrateRef.current = false;
-                      }
-                    }}
-                    className="quotation-html-editor min-h-[420px] p-4 text-sm outline-none overflow-x-auto"
-                  />
+              {isLegacyQuotation && (
+                <div className="bg-amber-50 border border-amber-100 rounded-lg p-3 text-xs text-amber-700">
+                  This is an older quotation without structured data. You can
+                  edit the saved HTML content below, or create a new quotation
+                  to use the structured builder.
                 </div>
+              )}
+
+              {activeTab === "edit" && (
+                <>
+                  {isLegacyQuotation ? (
+                    <FormSection
+                      title="Legacy Quotation HTML"
+                      description="Existing old quotation content. This keeps previous drafts usable."
+                    >
+                      <textarea
+                        className={textareaClass}
+                        rows={18}
+                        value={legacyHtml}
+                        onChange={e => setLegacyHtml(e.target.value)}
+                      />
+                    </FormSection>
+                  ) : (
+                    <>
+                      <FormSection
+                        title="Travel Details"
+                        description="These details appear at the top of the quotation."
+                      >
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-xs text-gray-500">
+                              Quotation Type
+                            </label>
+
+                            <select
+                              className={inputClass}
+                              value={quotationData.quotationType || "package"}
+                              onChange={e => updateQuotationType(e.target.value)}
+                            >
+                              {QUOTATION_TYPES.map(type => (
+                                <option key={type.value} value={type.value}>
+                                  {type.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500">
+                              Destination
+                            </label>
+                            <input
+                              className={inputClass}
+                              value={
+                                quotationData.travelDetails?.destinationName ||
+                                ""
+                              }
+                              onChange={e =>
+                                updateTravelDetail(
+                                  "destinationName",
+                                  e.target.value
+                                )
+                              }
+                              placeholder="Bali, Indonesia"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-xs text-gray-500">
+                              Travel Month
+                            </label>
+                            <input
+                              type="month"
+                              className={inputClass}
+                              value={quotationData.travelDetails?.travelMonth || ""}
+                              onChange={e =>
+                                updateTravelDetail(
+                                  "travelMonth",
+                                  e.target.value
+                                )
+                              }
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-xs text-gray-500">
+                              Check-in
+                            </label>
+                            <input
+                              type="date"
+                              className={inputClass}
+                              value={quotationData.travelDetails?.checkIn || ""}
+                              onChange={e =>
+                                updateTravelDetail("checkIn", e.target.value)
+                              }
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-xs text-gray-500">
+                              Check-out
+                            </label>
+                            <input
+                              type="date"
+                              className={inputClass}
+                              value={quotationData.travelDetails?.checkOut || ""}
+                              onChange={e =>
+                                updateTravelDetail("checkOut", e.target.value)
+                              }
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-xs text-gray-500">
+                              No. of Pax
+                            </label>
+                            <input
+                              className={inputClass}
+                              value={quotationData.travelDetails?.paxText || ""}
+                              onChange={e =>
+                                updateTravelDetail("paxText", e.target.value)
+                              }
+                              placeholder="4 Adults"
+                            />
+                          </div>
+                        </div>
+                      </FormSection>
+                      {showPackageDetails && (
+                        <FormSection
+                          title="Package Details"
+                          description="Select Hotel Part, Land Part or both."
+                        >
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <div>
+                              <label className="text-xs text-gray-500">
+                                Currency
+                              </label>
+                              <select
+                                className={inputClass}
+                                value={quotationData.packageDetails?.currency || "USD"}
+                                onChange={e => updatePackageCurrency(e.target.value)}
+                              >
+                                {CURRENCY_OPTIONS.map(currency => (
+                                  <option key={currency.value} value={currency.value}>
+                                    {currency.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                            {[
+                              ["hotelPart", "Hotel Part"],
+                              ["landPart", "Land Part"]
+                            ].map(([partKey, label]) => {
+                              const part =
+                                quotationData.packageDetails?.[partKey] || {};
+
+                              return (
+                                <div
+                                  key={partKey}
+                                  className={`rounded-2xl border p-4 space-y-3 ${part.enabled
+                                    ? "border-blue-200 bg-blue-50/40"
+                                    : "border-gray-200 bg-gray-50"
+                                    }`}
+                                >
+                                  <label className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(part.enabled)}
+                                      onChange={() =>
+                                        togglePackagePart(partKey)
+                                      }
+                                      className="rounded border-gray-300"
+                                    />
+                                    {label}
+                                  </label>
+
+                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                    <div>
+                                      <label className="text-xs text-gray-500">
+                                        Amount
+                                      </label>
+                                      <input
+                                        className={inputClass}
+                                        value={part.amount || ""}
+                                        disabled={!part.enabled}
+                                        onChange={e =>
+                                          updatePackagePart(
+                                            partKey,
+                                            "amount",
+                                            e.target.value
+                                          )
+                                        }
+                                        placeholder="256"
+                                      />
+                                    </div>
+
+                                    <div>
+                                      <label className="text-xs text-gray-500">
+                                        Unit
+                                      </label>
+                                      <input
+                                        className={inputClass}
+                                        value={part.unit || ""}
+                                        disabled={!part.enabled}
+                                        onChange={e =>
+                                          updatePackagePart(
+                                            partKey,
+                                            "unit",
+                                            e.target.value
+                                          )
+                                        }
+                                        placeholder="Per Person"
+                                      />
+                                    </div>
+
+                                    <div>
+                                      <label className="text-xs text-gray-500">
+                                        Basis
+                                      </label>
+                                      <input
+                                        className={inputClass}
+                                        value={part.basis || ""}
+                                        disabled={!part.enabled}
+                                        onChange={e =>
+                                          updatePackagePart(
+                                            partKey,
+                                            "basis",
+                                            e.target.value
+                                          )
+                                        }
+                                        placeholder="DBL/Twin Sharing"
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </FormSection>
+                      )}
+
+                      {showHotelSection && (
+                        <FormSection
+                          title="Hotel Inclusions"
+                          description="Add hotel-wise stay details."
+                          right={<AddButton onClick={addHotelRow}>+ Add Hotel</AddButton>}
+                        >
+                          {safeArray(quotationData.hotelInclusions).map(
+                            (row, index) => (
+                              <div
+                                key={index}
+                                className="rounded-2xl border border-gray-100 bg-gray-50 p-4 space-y-3"
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <p className="text-xs font-semibold text-gray-500">
+                                    Hotel {index + 1}
+                                  </p>
+
+                                  <RemoveButton
+                                    onClick={() => removeHotelRow(index)}
+                                  />
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                                  <div>
+                                    <label className="text-xs text-gray-500">
+                                      Nights
+                                    </label>
+                                    <input
+                                      className={inputClass}
+                                      value={row.nights || ""}
+                                      onChange={e =>
+                                        updateHotelRow(
+                                          index,
+                                          "nights",
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="03 Nights"
+                                    />
+                                  </div>
+
+                                  <div className="md:col-span-2">
+                                    <label className="text-xs text-gray-500">
+                                      Hotel Name
+                                    </label>
+                                    <input
+                                      className={inputClass}
+                                      value={row.hotelName || ""}
+                                      onChange={e =>
+                                        updateHotelRow(
+                                          index,
+                                          "hotelName",
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="Risata Bali Resort & Spa"
+                                    />
+                                  </div>
+
+                                  <div>
+                                    <label className="text-xs text-gray-500">
+                                      Room
+                                    </label>
+                                    <input
+                                      className={inputClass}
+                                      value={row.roomCategory || ""}
+                                      onChange={e =>
+                                        updateHotelRow(
+                                          index,
+                                          "roomCategory",
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="Superior Room"
+                                    />
+                                  </div>
+
+                                  <div>
+                                    <label className="text-xs text-gray-500">
+                                      Meal
+                                    </label>
+                                    <input
+                                      className={inputClass}
+                                      value={row.mealPlan || ""}
+                                      onChange={e =>
+                                        updateHotelRow(
+                                          index,
+                                          "mealPlan",
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="Breakfast"
+                                    />
+                                  </div>
+
+                                  <div className="md:col-span-2">
+                                    <label className="text-xs text-gray-500">
+                                      Location
+                                    </label>
+                                    <input
+                                      className={inputClass}
+                                      value={row.location || ""}
+                                      onChange={e =>
+                                        updateHotelRow(
+                                          index,
+                                          "location",
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="Bali / Gili / Ubud"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          )}
+
+                          {!safeArray(quotationData.hotelInclusions).length && (
+                            <p className="text-sm text-gray-400">
+                              No hotel rows added.
+                            </p>
+                          )}
+                        </FormSection>
+                      )}
+
+                      {showServiceSection && (
+                        <FormSection
+                          title="Service Details"
+                          description="Use this for visa assistance, insurance, documentation or any custom service quotation."
+                          right={
+                            <AddButton onClick={addServiceItem}>
+                              + Add Service
+                            </AddButton>
+                          }
+                        >
+                          {safeArray(quotationData.serviceItems).map((row, index) => (
+                            <div
+                              key={index}
+                              className="rounded-2xl border border-gray-100 bg-gray-50 p-4 space-y-3"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="text-xs font-semibold text-gray-500">
+                                  Service {index + 1}
+                                </p>
+
+                                <RemoveButton onClick={() => removeServiceItem(index)} />
+                              </div>
+
+                              <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+                                <div>
+                                  <label className="text-xs text-gray-500">Type</label>
+
+                                  <select
+                                    className={inputClass}
+                                    value={row.serviceType || "visa"}
+                                    onChange={e =>
+                                      updateServiceItem(index, "serviceType", e.target.value)
+                                    }
+                                  >
+                                    <option value="visa">Visa</option>
+                                    <option value="insurance">Insurance</option>
+                                    <option value="documentation">Documentation</option>
+                                    <option value="ticketing">Ticketing</option>
+                                    <option value="other">Other</option>
+                                  </select>
+                                </div>
+
+                                <div className="md:col-span-3">
+                                  <label className="text-xs text-gray-500">
+                                    Service Title
+                                  </label>
+
+                                  <input
+                                    className={inputClass}
+                                    value={row.title || ""}
+                                    onChange={e =>
+                                      updateServiceItem(index, "title", e.target.value)
+                                    }
+                                    placeholder="Indonesia Visa Assistance"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="text-xs text-gray-500">
+                                    Currency
+                                  </label>
+
+                                  <select
+                                    className={inputClass}
+                                    value={row.currency || "INR"}
+                                    onChange={e =>
+                                      updateServiceItem(index, "currency", e.target.value)
+                                    }
+                                  >
+                                    {CURRENCY_OPTIONS.map(currency => (
+                                      <option key={currency.value} value={currency.value}>
+                                        {currency.value}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+
+                                <div>
+                                  <label className="text-xs text-gray-500">
+                                    Amount
+                                  </label>
+
+                                  <input
+                                    className={inputClass}
+                                    value={row.amount || ""}
+                                    onChange={e =>
+                                      updateServiceItem(index, "amount", e.target.value)
+                                    }
+                                    placeholder="2500"
+                                  />
+                                </div>
+
+                                <div className="md:col-span-6">
+                                  <label className="text-xs text-gray-500">
+                                    Description
+                                  </label>
+
+                                  <textarea
+                                    className={textareaClass}
+                                    rows={3}
+                                    value={row.description || ""}
+                                    onChange={e =>
+                                      updateServiceItem(index, "description", e.target.value)
+                                    }
+                                    placeholder="Visa documentation and assistance service."
+                                  />
+                                </div>
+
+                                <div className="md:col-span-6">
+                                  <label className="text-xs text-gray-500">
+                                    Remarks
+                                  </label>
+
+                                  <input
+                                    className={inputClass}
+                                    value={row.remarks || ""}
+                                    onChange={e =>
+                                      updateServiceItem(index, "remarks", e.target.value)
+                                    }
+                                    placeholder="Subject to embassy / immigration approval."
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </FormSection>
+                      )}
+
+                      {showFlightSection && (
+                        <FormSection
+                          title="Flight / Air Ticket Details"
+                          description="Use this for flight-only or custom ticket quotation."
+                          right={
+                            <AddButton onClick={addFlightRow}>
+                              + Add Flight
+                            </AddButton>
+                          }
+                        >
+                          {safeArray(quotationData.flightDetails).map((row, index) => (
+                            <div
+                              key={index}
+                              className="rounded-2xl border border-gray-100 bg-gray-50 p-4 space-y-3"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="text-xs font-semibold text-gray-500">
+                                  Flight {index + 1}
+                                </p>
+
+                                <RemoveButton onClick={() => removeFlightRow(index)} />
+                              </div>
+
+                              <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+                                <div className="md:col-span-2">
+                                  <label className="text-xs text-gray-500">
+                                    Airline
+                                  </label>
+
+                                  <input
+                                    className={inputClass}
+                                    value={row.airline || ""}
+                                    onChange={e =>
+                                      updateFlightRow(index, "airline", e.target.value)
+                                    }
+                                    placeholder="IndiGo / Air India / Singapore Airlines"
+                                  />
+                                </div>
+
+                                <div className="md:col-span-4">
+                                  <label className="text-xs text-gray-500">
+                                    Route
+                                  </label>
+
+                                  <input
+                                    className={inputClass}
+                                    value={row.route || ""}
+                                    onChange={e =>
+                                      updateFlightRow(index, "route", e.target.value)
+                                    }
+                                    placeholder="Mumbai - Singapore - Bali"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="text-xs text-gray-500">
+                                    Departure Date
+                                  </label>
+
+                                  <input
+                                    type="date"
+                                    className={inputClass}
+                                    value={row.departureDate || ""}
+                                    onChange={e =>
+                                      updateFlightRow(index, "departureDate", e.target.value)
+                                    }
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="text-xs text-gray-500">
+                                    Return Date
+                                  </label>
+
+                                  <input
+                                    type="date"
+                                    className={inputClass}
+                                    value={row.returnDate || ""}
+                                    onChange={e =>
+                                      updateFlightRow(index, "returnDate", e.target.value)
+                                    }
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="text-xs text-gray-500">
+                                    Baggage
+                                  </label>
+
+                                  <input
+                                    className={inputClass}
+                                    value={row.baggage || ""}
+                                    onChange={e =>
+                                      updateFlightRow(index, "baggage", e.target.value)
+                                    }
+                                    placeholder="15 KG check-in + 7 KG cabin"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="text-xs text-gray-500">
+                                    Currency
+                                  </label>
+
+                                  <select
+                                    className={inputClass}
+                                    value={row.currency || "INR"}
+                                    onChange={e =>
+                                      updateFlightRow(index, "currency", e.target.value)
+                                    }
+                                  >
+                                    {CURRENCY_OPTIONS.map(currency => (
+                                      <option key={currency.value} value={currency.value}>
+                                        {currency.value}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+
+                                <div>
+                                  <label className="text-xs text-gray-500">
+                                    Fare
+                                  </label>
+
+                                  <input
+                                    className={inputClass}
+                                    value={row.fare || ""}
+                                    onChange={e =>
+                                      updateFlightRow(index, "fare", e.target.value)
+                                    }
+                                    placeholder="42500"
+                                  />
+                                </div>
+
+                                <div className="md:col-span-6">
+                                  <label className="text-xs text-gray-500">
+                                    Remarks
+                                  </label>
+
+                                  <input
+                                    className={inputClass}
+                                    value={row.remarks || ""}
+                                    onChange={e =>
+                                      updateFlightRow(index, "remarks", e.target.value)
+                                    }
+                                    placeholder="Fare subject to availability at the time of booking."
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </FormSection>
+                      )}
+
+                      {showTransferSection && (
+                        <FormSection
+                          title="Transfer & Service Inclusions"
+                          description="Add services that should be visible to the travel agent."
+                          right={
+                            <AddButton onClick={addTransferRow}>
+                              + Add Inclusion
+                            </AddButton>
+                          }
+                        >
+                          {safeArray(quotationData.transferInclusions).map(
+                            (item, index) => (
+                              <div
+                                key={index}
+                                className="flex gap-2 items-start"
+                              >
+                                <textarea
+                                  className={textareaClass}
+                                  rows={2}
+                                  value={item || ""}
+                                  onChange={e =>
+                                    updateTransferRow(index, e.target.value)
+                                  }
+                                  placeholder="Return airport and inter-hotel transfer by private basis."
+                                />
+
+                                <RemoveButton
+                                  onClick={() => removeTransferRow(index)}
+                                />
+                              </div>
+                            )
+                          )}
+                        </FormSection>
+                      )}
+                      {showItinerarySection && (
+                        <FormSection
+                          title="Itinerary"
+                          description="Add day-wise itinerary details."
+                          right={<AddButton onClick={addItineraryDay}>+ Add Day</AddButton>}
+                        >
+                          {safeArray(quotationData.itineraryDays).map(
+                            (day, index) => (
+                              <div
+                                key={index}
+                                className="rounded-2xl border border-gray-100 bg-gray-50 p-4 space-y-3"
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <p className="text-xs font-semibold text-gray-500">
+                                    Day {day.day || index + 1}
+                                  </p>
+
+                                  <RemoveButton
+                                    onClick={() => removeItineraryDay(index)}
+                                  />
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+                                  <div>
+                                    <label className="text-xs text-gray-500">
+                                      Day
+                                    </label>
+                                    <input
+                                      className={inputClass}
+                                      value={day.day || ""}
+                                      onChange={e =>
+                                        updateItineraryDay(
+                                          index,
+                                          "day",
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="1"
+                                    />
+                                  </div>
+
+                                  <div className="md:col-span-5">
+                                    <label className="text-xs text-gray-500">
+                                      Title
+                                    </label>
+                                    <input
+                                      className={inputClass}
+                                      value={day.title || ""}
+                                      onChange={e =>
+                                        updateItineraryDay(
+                                          index,
+                                          "title",
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="Arrival in Bali"
+                                    />
+                                  </div>
+
+                                  <div className="md:col-span-6">
+                                    <label className="text-xs text-gray-500">
+                                      Description
+                                    </label>
+                                    <textarea
+                                      className={textareaClass}
+                                      rows={3}
+                                      value={day.description || ""}
+                                      onChange={e =>
+                                        updateItineraryDay(
+                                          index,
+                                          "description",
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="Arrival at airport followed by transfer to hotel."
+                                    />
+                                  </div>
+
+                                  <div className="md:col-span-3">
+                                    <label className="text-xs text-gray-500">
+                                      Meals / Lunch
+                                    </label>
+                                    <input
+                                      className={inputClass}
+                                      value={day.meals || ""}
+                                      onChange={e =>
+                                        updateItineraryDay(
+                                          index,
+                                          "meals",
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="Indian menu lunch..."
+                                    />
+                                  </div>
+
+                                  <div className="md:col-span-3">
+                                    <label className="text-xs text-gray-500">
+                                      Meeting Point
+                                    </label>
+                                    <input
+                                      className={inputClass}
+                                      value={day.meetingPoint || ""}
+                                      onChange={e =>
+                                        updateItineraryDay(
+                                          index,
+                                          "meetingPoint",
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="Pelabuhan Sanur"
+                                    />
+                                  </div>
+
+                                  <div className="md:col-span-3">
+                                    <label className="text-xs text-gray-500">
+                                      Timing
+                                    </label>
+                                    <input
+                                      className={inputClass}
+                                      value={day.timing || ""}
+                                      onChange={e =>
+                                        updateItineraryDay(
+                                          index,
+                                          "timing",
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="Boat starts at 08:00 AM..."
+                                    />
+                                  </div>
+
+                                  <div className="md:col-span-3">
+                                    <label className="text-xs text-gray-500">
+                                      Includes
+                                    </label>
+                                    <input
+                                      className={inputClass}
+                                      value={day.includes || ""}
+                                      onChange={e =>
+                                        updateItineraryDay(
+                                          index,
+                                          "includes",
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="Car, guide, entrance fees..."
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          )}
+                        </FormSection>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+
+              {activeTab === "auto" && (
+                <FormSection
+                  title="Destination-wise Auto Notes"
+                  description="These sections come from predefined admin destination templates."
+                >
+                  {templateLoading && (
+                    <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-700">
+                      Loading destination template...
+                    </div>
+                  )}
+
+                  {templateError && (
+                    <div className="rounded-xl border border-red-100 bg-red-50 p-3 text-sm text-red-700">
+                      {templateError}
+                    </div>
+                  )}
+
+                  {!templateLoading && !activeDestinationTemplate && (
+                    <div className="rounded-xl border border-amber-100 bg-amber-50 p-3 text-sm text-amber-700">
+                      No predefined quotation template found for this
+                      destination. You can still create the quotation, but
+                      auto notes will not be added.
+                    </div>
+                  )}
+
+                  {activeDestinationTemplate && (
+                    <div className="rounded-xl border border-green-100 bg-green-50 p-3 text-sm text-green-700">
+                      Template loaded for{" "}
+                      <b>{activeDestinationTemplate.destinationName}</b>.
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 gap-3">
+                    {QUOTATION_AUTO_SECTION_KEYS.map(key => {
+                      const section = templateSections?.[key];
+                      const enabled = Boolean(section?.enabled);
+                      const selected = Boolean(
+                        quotationData.selectedAutoSections?.[key]
+                      );
+
+                      return (
+                        <div
+                          key={key}
+                          className={`rounded-2xl border p-4 ${selected
+                            ? "bg-blue-50 border-blue-200"
+                            : "bg-white border-gray-200"
+                            } ${!enabled ? "opacity-60" : ""}`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <label className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+                                <input
+                                  type="checkbox"
+                                  checked={selected}
+                                  disabled={!enabled}
+                                  onChange={() => toggleAutoSection(key)}
+                                  className="rounded border-gray-300"
+                                />
+                                {section?.title ||
+                                  QUOTATION_SECTION_LABELS[key]}
+                              </label>
+
+                              <p className="text-xs text-gray-500 mt-1">
+                                Type: {section?.type || "—"} · Default:{" "}
+                                {section?.defaultIncluded ? "Yes" : "No"} ·{" "}
+                                Status: {enabled ? "Enabled" : "Disabled"}
+                              </p>
+                            </div>
+
+                            <span className="text-[11px] rounded-full bg-white border border-gray-200 px-2 py-1 text-gray-500">
+                              {key}
+                            </span>
+                          </div>
+
+                          {enabled && (
+                            <div className="mt-3 rounded-xl bg-white border border-gray-100 p-3 text-xs text-gray-600">
+                              {section?.type === "bullets" && (
+                                <ul className="list-disc pl-4 space-y-1">
+                                  {safeArray(section.items)
+                                    .slice(0, 4)
+                                    .map((item, itemIndex) => (
+                                      <li key={itemIndex}>{item}</li>
+                                    ))}
+                                </ul>
+                              )}
+
+                              {section?.type === "table" && (
+                                <p>
+                                  {safeArray(section.columns).length} columns ·{" "}
+                                  {safeArray(section.rows).length} rows
+                                </p>
+                              )}
+
+                              {section?.type === "html" && (
+                                <p>
+                                  {stripHtml(section.html || "").slice(0, 180) ||
+                                    "HTML content added"}
+                                </p>
+                              )}
+
+                              {section?.type === "text" && (
+                                <p>{section.text || "Text content added"}</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </FormSection>
               )}
 
               {activeTab === "email" && (
@@ -2719,47 +4181,6 @@ export default function QuotationEditor({
             </div>
           </div>
         </div>
-
-        <style jsx global>{`
-          .quotation-html-editor:focus {
-            box-shadow: inset 0 0 0 2px rgba(59, 130, 246, 0.12);
-          }
-
-          .quotation-html-editor[data-empty="true"]::before {
-            content: attr(data-placeholder);
-            color: #9ca3af;
-            pointer-events: none;
-            display: block;
-          }
-
-          .quotation-html-editor table {
-            border-collapse: collapse;
-            max-width: 100%;
-            margin: 8px 0;
-          }
-
-          .quotation-html-editor td,
-          .quotation-html-editor th {
-            border: 1px solid #d1d5db;
-            padding: 6px 8px;
-            min-width: 80px;
-            vertical-align: top;
-          }
-
-          .quotation-html-editor th {
-            font-weight: 600;
-          }
-
-          .quotation-html-editor p {
-            margin: 6px 0;
-          }
-
-          .quotation-html-editor ul,
-          .quotation-html-editor ol {
-            padding-left: 20px;
-            margin: 6px 0;
-          }
-        `}</style>
       </div>
 
       <ConfirmSendModal

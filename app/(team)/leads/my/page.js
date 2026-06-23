@@ -6,7 +6,6 @@ import {
   collection,
   query,
   where,
-  orderBy,
   onSnapshot
 } from "firebase/firestore";
 import {
@@ -82,6 +81,9 @@ const normalize = value =>
     .trim()
     .toLowerCase();
 
+const normalizeKey = value =>
+  normalize(value).replaceAll(" ", "_").replaceAll("-", "_");
+
 const formatStage = value => {
   if (!value) return "Not Set";
 
@@ -89,6 +91,22 @@ const formatStage = value => {
     .replaceAll("_", " ")
     .replace(/\b\w/g, char => char.toUpperCase());
 };
+
+/* =========================
+   DELETED LEAD CHECK
+========================= */
+function isDeletedLead(lead) {
+  const stage = normalizeKey(lead?.stage);
+  const status = normalizeKey(lead?.status);
+
+  return (
+    lead?.isDeleted === true ||
+    Boolean(lead?.deletedAt) ||
+    stage === "deleted" ||
+    status === "deleted" ||
+    status === "archived"
+  );
+}
 
 /* =========================
    LEAD HEALTH LOGIC
@@ -109,26 +127,88 @@ function getLeadHealth(lead) {
   return "healthy";
 }
 
+function isWonLead(lead) {
+  const stage = normalizeKey(lead?.stage);
+  const status = normalizeKey(lead?.status);
+
+  return [stage, status].some(value =>
+    [
+      "won",
+      "deal_won",
+      "converted",
+      "confirmed",
+      "closed_won"
+    ].includes(value)
+  );
+}
+
+function isLostLead(lead) {
+  const stage = normalizeKey(lead?.stage);
+  const status = normalizeKey(lead?.status);
+
+  return [stage, status].some(value =>
+    [
+      "lost",
+      "deal_lost",
+      "closed_lost",
+      "cancelled",
+      "rejected"
+    ].includes(value)
+  );
+}
+
 const HEALTH_META = {
   healthy: {
     label: "Healthy",
     icon: CheckCircle2,
-    className:
-      "bg-emerald-50 text-emerald-700 border-emerald-100"
+    className: "bg-emerald-50 text-emerald-700 border-emerald-100"
   },
   at_risk: {
     label: "Needs Attention",
     icon: Clock3,
-    className:
-      "bg-amber-50 text-amber-700 border-amber-100"
+    className: "bg-amber-50 text-amber-700 border-amber-100"
   },
   overdue: {
     label: "Overdue",
     icon: AlertTriangle,
-    className:
-      "bg-red-50 text-red-700 border-red-100"
+    className: "bg-red-50 text-red-700 border-red-100"
   }
 };
+
+function getOwnershipMeta(lead, user) {
+  const assignedToMe = lead?.assignedToUid === user?.uid;
+  const createdByMe = lead?.createdByUid === user?.uid;
+
+  if (assignedToMe && createdByMe) {
+    return {
+      label: "Assigned + Created",
+      icon: UserRound,
+      className: "bg-blue-50 text-blue-700 border-blue-100"
+    };
+  }
+
+  if (assignedToMe) {
+    return {
+      label: "Assigned to Me",
+      icon: UserRound,
+      className: "bg-indigo-50 text-indigo-700 border-indigo-100"
+    };
+  }
+
+  if (createdByMe) {
+    return {
+      label: "Created by Me",
+      icon: Eye,
+      className: "bg-amber-50 text-amber-700 border-amber-100"
+    };
+  }
+
+  return {
+    label: "View Only",
+    icon: Eye,
+    className: "bg-gray-50 text-gray-600 border-gray-200"
+  };
+}
 
 /* =========================
    SMALL UI COMPONENTS
@@ -153,41 +233,81 @@ function LeadInfoPill({ icon: Icon, label, value }) {
   return (
     <div className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs text-gray-600">
       <Icon size={13} className="text-gray-400" />
+
       <span className="font-medium text-gray-500">
         {label}:
       </span>
-      <span className="font-semibold text-gray-800 truncate max-w-[180px]">
+
+      <span className="max-w-[180px] truncate font-semibold text-gray-800">
         {value}
       </span>
     </div>
   );
 }
 
-function LeadCard({ lead, user }) {
-  const health = getLeadHealth(lead);
-  const viewOnly = lead.assignedToUid !== user?.uid;
+function MetricCard({ label, value, helper, icon: Icon, tone = "blue" }) {
+  const toneClass = {
+    blue: "bg-blue-50 text-blue-700 border-blue-100",
+    emerald: "bg-emerald-50 text-emerald-700 border-emerald-100",
+    amber: "bg-amber-50 text-amber-700 border-amber-100",
+    red: "bg-red-50 text-red-700 border-red-100",
+    gray: "bg-gray-50 text-gray-700 border-gray-200"
+  };
 
   return (
-    <Link
-      href={`/leads/${lead.id}`}
-      className="block group"
-    >
-      <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm hover:shadow-md hover:border-blue-200 transition-all">
+    <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-medium text-gray-500">
+            {label}
+          </p>
+
+          <p className="mt-1 text-2xl font-semibold tracking-tight text-gray-950">
+            {value}
+          </p>
+
+          {helper && (
+            <p className="mt-1 text-xs text-gray-400">
+              {helper}
+            </p>
+          )}
+        </div>
+
+        <div
+          className={`flex h-10 w-10 items-center justify-center rounded-2xl border ${
+            toneClass[tone] || toneClass.blue
+          }`}
+        >
+          <Icon size={18} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LeadCard({ lead, user }) {
+  const health = getLeadHealth(lead);
+  const ownership = getOwnershipMeta(lead, user);
+  const OwnershipIcon = ownership.icon;
+
+  return (
+    <Link href={`/leads/${lead.id}`} className="block group">
+      <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm transition-all hover:border-blue-200 hover:shadow-md">
 
         {/* TOP */}
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-sm font-semibold text-gray-950">
                 {lead.leadCode || "Lead"}
               </p>
 
-              {viewOnly && (
-                <span className="inline-flex items-center gap-1 rounded-full border border-amber-100 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
-                  <Eye size={12} />
-                  View only
-                </span>
-              )}
+              <span
+                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${ownership.className}`}
+              >
+                <OwnershipIcon size={12} />
+                {ownership.label}
+              </span>
             </div>
 
             <p className="mt-1 text-xs text-gray-500">
@@ -198,7 +318,7 @@ function LeadCard({ lead, user }) {
           <div className="flex items-center gap-2">
             <LeadHealthBadge health={health} />
 
-            <div className="h-8 w-8 rounded-full border border-gray-200 bg-gray-50 text-gray-400 flex items-center justify-center group-hover:bg-blue-50 group-hover:text-blue-700 group-hover:border-blue-100 transition">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 bg-gray-50 text-gray-400 transition group-hover:border-blue-100 group-hover:bg-blue-50 group-hover:text-blue-700">
               <ChevronRight size={16} />
             </div>
           </div>
@@ -234,21 +354,19 @@ function LeadCard({ lead, user }) {
         </div>
 
         {/* FOOTER */}
-        {(lead.nextActionDueAt || lead.createdByName) && (
-          <div className="mt-4 border-t border-gray-100 pt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-            <p className="text-xs text-gray-500">
-              {lead.nextActionDueAt
-                ? `Next action due: ${formatDate(lead.nextActionDueAt)}`
-                : "No next action due date"}
-            </p>
+        <div className="mt-4 flex flex-col gap-2 border-t border-gray-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-gray-500">
+            {lead.nextActionDueAt
+              ? `Next action due: ${formatDate(lead.nextActionDueAt)}`
+              : "No next action due date"}
+          </p>
 
-            {lead.createdByName && (
-              <p className="text-xs text-gray-400">
-                Created by {lead.createdByName}
-              </p>
-            )}
-          </div>
-        )}
+          {lead.createdByName && (
+            <p className="text-xs text-gray-400">
+              Created by {lead.createdByName}
+            </p>
+          )}
+        </div>
       </div>
     </Link>
   );
@@ -265,6 +383,10 @@ export default function TeamLeadsPage() {
 
   /* =========================
      LOAD LEADS
+
+     Important:
+     No orderBy here to avoid Firestore composite index issue.
+     Sorting is handled locally.
   ========================== */
   useEffect(() => {
     if (authLoading) return;
@@ -281,6 +403,9 @@ export default function TeamLeadsPage() {
     let assignedRows = new Map();
     let createdRows = new Map();
 
+    let assignedLoaded = false;
+    let createdLoaded = false;
+
     const mergeRows = () => {
       const merged = new Map();
 
@@ -292,31 +417,36 @@ export default function TeamLeadsPage() {
         merged.set(key, value);
       });
 
-      const rows = Array.from(merged.values()).sort((a, b) => {
-        const aTime = getValidDate(a.createdAt)?.getTime?.() || 0;
-        const bTime = getValidDate(b.createdAt)?.getTime?.() || 0;
-        return bTime - aTime;
-      });
+      const rows = Array.from(merged.values())
+        .filter(lead => !isDeletedLead(lead))
+        .sort((a, b) => {
+          const aTime = getValidDate(a.createdAt)?.getTime?.() || 0;
+          const bTime = getValidDate(b.createdAt)?.getTime?.() || 0;
+          return bTime - aTime;
+        });
 
       setLeads(rows);
-      setLoading(false);
+
+      if (assignedLoaded && createdLoaded) {
+        setLoading(false);
+      }
     };
 
     const assignedQuery = query(
       collection(db, "leads"),
-      where("assignedToUid", "==", user.uid),
-      orderBy("createdAt", "desc")
+      where("assignedToUid", "==", user.uid)
     );
 
     const createdQuery = query(
       collection(db, "leads"),
-      where("createdByUid", "==", user.uid),
-      orderBy("createdAt", "desc")
+      where("createdByUid", "==", user.uid)
     );
 
     const unsubAssigned = onSnapshot(
       assignedQuery,
       snap => {
+        assignedLoaded = true;
+
         assignedRows = new Map(
           snap.docs.map(d => [
             d.id,
@@ -330,17 +460,23 @@ export default function TeamLeadsPage() {
         mergeRows();
       },
       err => {
+        assignedLoaded = true;
+
         console.error("Failed to load assigned leads:", err);
+
         setError(
-          "Unable to load assigned leads. Please check Firestore permissions or required index."
+          "Unable to load assigned leads. Please check Firestore rules for assignedToUid."
         );
-        setLoading(false);
+
+        mergeRows();
       }
     );
 
     const unsubCreated = onSnapshot(
       createdQuery,
       snap => {
+        createdLoaded = true;
+
         createdRows = new Map(
           snap.docs.map(d => [
             d.id,
@@ -354,11 +490,15 @@ export default function TeamLeadsPage() {
         mergeRows();
       },
       err => {
+        createdLoaded = true;
+
         console.error("Failed to load created leads:", err);
+
         setError(
-          "Unable to load created leads. Please check Firestore permissions or required index."
+          "Unable to load created leads. Please check Firestore rules for createdByUid."
         );
-        setLoading(false);
+
+        mergeRows();
       }
     );
 
@@ -373,9 +513,50 @@ export default function TeamLeadsPage() {
   ========================== */
   const stageOptions = useMemo(() => {
     return Array.from(
-      new Set(leads.map(lead => lead.stage).filter(Boolean))
+      new Set(
+        leads
+          .filter(lead => !isDeletedLead(lead))
+          .map(lead => lead.stage)
+          .filter(Boolean)
+      )
     ).sort();
   }, [leads]);
+
+  /* =========================
+     SUMMARY
+  ========================== */
+  const summary = useMemo(() => {
+    const activeLeads = leads.filter(lead => !isDeletedLead(lead));
+
+    const assignedToMe = activeLeads.filter(
+      lead => lead.assignedToUid === user?.uid
+    ).length;
+
+    const createdByMe = activeLeads.filter(
+      lead => lead.createdByUid === user?.uid
+    ).length;
+
+    const overdue = activeLeads.filter(
+      lead => getLeadHealth(lead) === "overdue"
+    ).length;
+
+    const attention = activeLeads.filter(
+      lead => getLeadHealth(lead) === "at_risk"
+    ).length;
+
+    const won = activeLeads.filter(isWonLead).length;
+    const lost = activeLeads.filter(isLostLead).length;
+
+    return {
+      total: activeLeads.length,
+      assignedToMe,
+      createdByMe,
+      overdue,
+      attention,
+      won,
+      lost
+    };
+  }, [leads, user?.uid]);
 
   /* =========================
      ACTIVE FILTER COUNT
@@ -414,6 +595,8 @@ export default function TeamLeadsPage() {
     const toDate = getEndOfDay(filters.dateTo);
 
     const rows = leads.filter(lead => {
+      if (isDeletedLead(lead)) return false;
+
       const health = getLeadHealth(lead);
       const createdDate = getValidDate(lead.createdAt);
 
@@ -429,6 +612,7 @@ export default function TeamLeadsPage() {
           lead.assignedToName,
           lead.createdByName,
           lead.stage,
+          lead.status,
           lead.nextActionType,
           lead.travelAgentName,
           lead.agentName,
@@ -436,9 +620,7 @@ export default function TeamLeadsPage() {
           lead.source
         ]
           .filter(Boolean)
-          .some(value =>
-            normalize(value).includes(searchText)
-          );
+          .some(value => normalize(value).includes(searchText));
 
       const matchesStage =
         !filters.stage || lead.stage === filters.stage;
@@ -475,9 +657,7 @@ export default function TeamLeadsPage() {
           healthy: 2
         };
 
-        return (
-          order[getLeadHealth(a)] - order[getLeadHealth(b)]
-        );
+        return order[getLeadHealth(a)] - order[getLeadHealth(b)];
       }
 
       const aTime = getValidDate(a.createdAt)?.getTime?.() || 0;
@@ -492,7 +672,7 @@ export default function TeamLeadsPage() {
   if (authLoading || loading) {
     return (
       <main className="min-h-screen bg-gray-50">
-        <div className="max-w-7xl mx-auto px-4 py-6 space-y-4">
+        <div className="mx-auto max-w-7xl space-y-4 px-4 py-6">
           <CardSkeleton />
           <CardSkeleton />
           <CardSkeleton />
@@ -503,27 +683,27 @@ export default function TeamLeadsPage() {
 
   return (
     <main className="min-h-screen bg-gray-50">
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+      <div className="mx-auto max-w-7xl space-y-6 px-4 py-6">
 
         {/* ================= BANNER ================= */}
-        <section className="rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 shadow-sm overflow-hidden">
+        <section className="overflow-hidden rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 shadow-sm">
           <div className="p-5 md:p-6">
             <div className="flex items-start gap-4">
-              <div className="h-12 w-12 rounded-2xl bg-white/15 text-white flex items-center justify-center shrink-0">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/15 text-white">
                 <Activity size={24} />
               </div>
 
               <div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white/90 mb-3">
+                <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white/90">
                   <Activity size={14} />
-                  Team Lead Workspace
+                  Lead Workspace
                 </div>
 
                 <h1 className="text-2xl font-semibold tracking-tight text-white">
                   My Leads
                 </h1>
 
-                <p className="mt-1 text-sm text-blue-100 max-w-2xl leading-6">
+                <p className="mt-1 max-w-2xl text-sm leading-6 text-blue-100">
                   View, manage and follow up on leads assigned to you or created by you.
                 </p>
               </div>
@@ -531,19 +711,71 @@ export default function TeamLeadsPage() {
           </div>
         </section>
 
+        {/* ================= SUMMARY ================= */}
+        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <MetricCard
+            label="Total Leads"
+            value={summary.total}
+            helper="Assigned or created"
+            icon={Activity}
+            tone="blue"
+          />
+
+          <MetricCard
+            label="Assigned to Me"
+            value={summary.assignedToMe}
+            helper="Owner responsibility"
+            icon={UserRound}
+            tone="emerald"
+          />
+
+          <MetricCard
+            label="Created by Me"
+            value={summary.createdByMe}
+            helper="Generated records"
+            icon={Eye}
+            tone="gray"
+          />
+
+          <MetricCard
+            label="Needs Attention"
+            value={summary.attention}
+            helper="Due today"
+            icon={Clock3}
+            tone="amber"
+          />
+
+          <MetricCard
+            label="Overdue"
+            value={summary.overdue}
+            helper="Past due follow-up"
+            icon={AlertTriangle}
+            tone="red"
+          />
+
+          <MetricCard
+            label="Won / Lost"
+            value={`${summary.won} / ${summary.lost}`}
+            helper="Closed outcomes"
+            icon={CheckCircle2}
+            tone="blue"
+          />
+        </section>
+
         {/* ================= MAIN GRID ================= */}
-        <section className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+        <section className="grid grid-cols-1 gap-5 xl:grid-cols-12">
 
           {/* LEFT LIST */}
-          <div className="xl:col-span-8 2xl:col-span-9 space-y-5">
+          <div className="space-y-5 xl:col-span-8 2xl:col-span-9">
 
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-sm font-semibold text-gray-900">
                   Lead Timeline
                 </p>
+
                 <p className="text-xs text-gray-500">
-                  Showing {filtered.length} of {leads.length} leads
+                  Showing {filtered.length} of {summary.total} leads
                 </p>
               </div>
 
@@ -570,21 +802,19 @@ export default function TeamLeadsPage() {
               </div>
             )}
 
-            {!error && filtered.length === 0 ? (
+            {filtered.length === 0 ? (
               <div className="rounded-3xl border border-gray-200 bg-white p-10 shadow-sm">
                 <EmptyState
                   icon="📭"
                   title="No leads found"
                   description={
-                    leads.length === 0
-                      ? "No leads are assigned to you or created by you yet."
+                    summary.total === 0
+                      ? "No active leads are assigned to you or created by you yet."
                       : "Try changing your search, date range, stage or health filter."
                   }
                 />
               </div>
-            ) : null}
-
-            {!error && filtered.length > 0 && (
+            ) : (
               <div className="space-y-3">
                 {filtered.map(lead => (
                   <LeadCard

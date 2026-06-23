@@ -19,6 +19,7 @@ import {
   Bold,
   Building2,
   CheckCircle2,
+  Eye,
   FileText,
   ImageIcon,
   Italic,
@@ -32,6 +33,7 @@ import {
   Phone,
   Quote,
   Search,
+  Send,
   Trash2,
   UploadCloud,
   UserRound,
@@ -90,6 +92,13 @@ function getDisplayName(user) {
     user?.displayName ||
     user?.email ||
     "Unnamed User"
+  );
+}
+
+function getReferenceSourceLabel(value) {
+  return (
+    referenceSources.find(source => source.value === value)?.label ||
+    "Not specified"
   );
 }
 
@@ -461,6 +470,23 @@ export default function ManualLeadCreatePage() {
     Boolean(clientReferenceText) ||
     referenceFiles.length > 0;
 
+  const referenceSourceLabel = getReferenceSourceLabel(clientReferenceSource);
+
+  const mailSubject =
+    destination && agent
+      ? `New Lead Created - ${destination.name || "Destination"} | ${
+          agent.agencyName || "Travel Agent"
+        }`
+      : "New Lead Created - Lead Details Pending";
+
+  const mailToName = getDisplayName(assignedUser);
+
+  const mailPreviewDate = new Date().toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric"
+  });
+
   const canCreate =
     Boolean(destination) &&
     Boolean(agent) &&
@@ -664,7 +690,7 @@ export default function ManualLeadCreatePage() {
 
   return (
     <main className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-5xl mx-auto space-y-6">
+      <div className="max-w-6xl mx-auto space-y-6">
         {/* HEADER */}
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -1233,13 +1259,13 @@ export default function ManualLeadCreatePage() {
           </form>
 
           {/* SUMMARY */}
-          <aside className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 space-y-5 h-fit">
+          <aside className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 space-y-5 h-fit lg:sticky lg:top-6">
             <div>
               <h2 className="text-sm font-semibold text-gray-900">
                 Lead Summary
               </h2>
               <p className="text-xs text-gray-500 mt-1">
-                Preview of selected lead details.
+                Preview of selected lead details and email notification.
               </p>
             </div>
 
@@ -1374,7 +1400,7 @@ export default function ManualLeadCreatePage() {
                           [&_a]:text-blue-600 [&_a]:underline
                         "
                         dangerouslySetInnerHTML={{
-                          __html: clientReferenceHtml
+                          __html: cleanRichHtml(clientReferenceHtml)
                         }}
                       />
                     )}
@@ -1391,6 +1417,209 @@ export default function ManualLeadCreatePage() {
                     No reference added
                   </p>
                 )}
+              </div>
+
+              {/* MAIL PREVIEW */}
+              <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+                <div className="bg-[#1d4e89] px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <Eye size={16} className="text-white" />
+                      <p className="text-sm font-semibold text-white">
+                        Mail Preview
+                      </p>
+                    </div>
+
+                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/15 text-white">
+                      Live
+                    </span>
+                  </div>
+                </div>
+
+                <div className="p-4 space-y-3 bg-gray-50">
+                  {/* EMAIL META */}
+                  <div className="bg-white rounded-lg border border-gray-100 p-3 space-y-2">
+                    <div className="flex items-start gap-2">
+                      <Mail
+                        size={14}
+                        className="text-[#1d4e89] mt-0.5 shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <p className="text-[11px] uppercase tracking-wide text-gray-400">
+                          Subject
+                        </p>
+                        <p className="text-xs font-medium text-gray-800 leading-relaxed">
+                          {mailSubject}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-2">
+                      <Send
+                        size={14}
+                        className="text-[#9b0112] mt-0.5 shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <p className="text-[11px] uppercase tracking-wide text-gray-400">
+                          To
+                        </p>
+                        <p className="text-xs text-gray-700 truncate">
+                          {mailToName}
+                          {assignedUser?.email
+                            ? ` <${assignedUser.email}>`
+                            : ""}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* EMAIL BODY PREVIEW */}
+                  <div className="bg-white rounded-lg border border-gray-100 overflow-hidden">
+                    <div className="px-4 py-3 border-b border-gray-100">
+                      <p className="text-xs text-gray-500">
+                        Hello {mailToName},
+                      </p>
+
+                      <p className="text-xs text-gray-600 mt-2 leading-relaxed">
+                        A new lead has been created and assigned for your
+                        follow-up. Please review the details below.
+                      </p>
+                    </div>
+
+                    <div className="p-4 space-y-3">
+                      <div className="grid grid-cols-1 gap-2">
+                        <div className="rounded-lg bg-[#1d4e89]/5 border border-[#1d4e89]/10 p-3">
+                          <p className="text-[11px] text-gray-500">
+                            Destination
+                          </p>
+                          <p className="text-sm font-semibold text-gray-900">
+                            {destination?.name || "Not selected"}
+                          </p>
+                          {destination?.country && (
+                            <p className="text-xs text-gray-500 mt-0.5">
+                              {destination.country}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="rounded-lg bg-gray-50 border border-gray-100 p-3">
+                          <p className="text-[11px] text-gray-500">
+                            Travel Agent
+                          </p>
+                          <p className="text-sm font-semibold text-gray-900">
+                            {agent?.agencyName || "Not selected"}
+                          </p>
+                          {agent?.agentCode && (
+                            <p className="text-xs text-gray-500 mt-0.5">
+                              Code: {agent.agentCode}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="rounded-lg bg-gray-50 border border-gray-100 p-3">
+                          <p className="text-[11px] text-gray-500">
+                            SPOC / Contact Person
+                          </p>
+
+                          {spoc ? (
+                            <>
+                              <p className="text-sm font-semibold text-gray-900">
+                                {spoc.name || "Unnamed SPOC"}
+                              </p>
+
+                              {spoc.email && (
+                                <p className="text-xs text-gray-500 mt-0.5">
+                                  {spoc.email}
+                                </p>
+                              )}
+
+                              {(spoc.phone || spoc.mobile || spoc.whatsapp) && (
+                                <p className="text-xs text-gray-500 mt-0.5">
+                                  {spoc.phone || spoc.mobile || spoc.whatsapp}
+                                </p>
+                              )}
+                            </>
+                          ) : (
+                            <p className="text-sm text-gray-500">
+                              Not selected
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="rounded-lg bg-gray-50 border border-gray-100 p-3">
+                          <p className="text-[11px] text-gray-500">
+                            Client Reference Source
+                          </p>
+                          <p className="text-sm font-semibold text-gray-900">
+                            {referenceSourceLabel}
+                          </p>
+                        </div>
+                      </div>
+
+                      {clientReferenceText && (
+                        <div className="rounded-lg border border-blue-100 bg-blue-50/40 p-3">
+                          <p className="text-[11px] font-medium text-gray-500 mb-2">
+                            Client Requirement
+                          </p>
+
+                          <div
+                            className="
+                              text-xs text-gray-700 leading-relaxed
+                              max-h-32 overflow-y-auto
+                              [&_ul]:list-disc [&_ul]:pl-4
+                              [&_ol]:list-decimal [&_ol]:pl-4
+                              [&_blockquote]:border-l-4
+                              [&_blockquote]:border-blue-200
+                              [&_blockquote]:pl-3
+                              [&_a]:text-blue-600
+                              [&_a]:underline
+                            "
+                            dangerouslySetInnerHTML={{
+                              __html: cleanRichHtml(clientReferenceHtml)
+                            }}
+                          />
+                        </div>
+                      )}
+
+                      {referenceFiles.length > 0 && (
+                        <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+                          <p className="text-[11px] font-medium text-gray-500 mb-2">
+                            Attachments
+                          </p>
+
+                          <div className="space-y-1.5">
+                            {referenceFiles.map(item => (
+                              <div
+                                key={`mail-preview-${item.id}`}
+                                className="flex items-center justify-between gap-2 text-xs text-gray-600"
+                              >
+                                <span className="truncate">
+                                  {item.file.name}
+                                </span>
+                                <span className="text-gray-400 shrink-0">
+                                  {formatFileSize(item.file.size)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="pt-2 border-t border-gray-100">
+                        <p className="text-[11px] text-gray-400">
+                          Created on {mailPreviewDate} by{" "}
+                          {getDisplayName(user)}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="bg-[#9b0112]/5 border-t border-[#9b0112]/10 px-4 py-3">
+                      <p className="text-[11px] text-gray-600 leading-relaxed">
+                        Dream Trawell · Realize the Experiance
+                      </p>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </aside>

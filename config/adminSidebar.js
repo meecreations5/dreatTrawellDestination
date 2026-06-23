@@ -251,7 +251,20 @@ export const adminSidebar = [
   {
     label: "Settings",
     icon: Settings,
-    href: "/admin/settings/branding",
-    permission: "settingsManagement"
+    permission: "settingsManagement",
+    children: [
+      {
+        label: "Branding",
+        icon: Building2,
+        href: "/admin/settings/branding",
+        permission: "settingsManagement"
+      },
+      {
+        label: "Quotation Templates",
+        icon: FileText,
+        href: "/admin/settings/quotation-templates",
+        permission: "settingsManagement"
+      }
+    ]
   }
 ];

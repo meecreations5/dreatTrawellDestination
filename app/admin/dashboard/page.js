@@ -40,6 +40,16 @@ function toDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function getLocalDateKey(value = new Date()) {
+  const d = toDate(value) || new Date();
+
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
 function normalize(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -51,6 +61,22 @@ function readableLabel(value) {
     .replaceAll("_", " ")
     .replaceAll("-", " ")
     .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function toAmount(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function pickAmount(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+
+  return null;
 }
 
 function getRangeWindow(range) {
@@ -111,17 +137,6 @@ function formatDateTime(value) {
   });
 }
 
-function formatDate(value) {
-  const d = toDate(value);
-  if (!d) return "—";
-
-  return d.toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric"
-  });
-}
-
 function formatNameFromEmail(email) {
   if (!email) return "Unassigned";
 
@@ -170,27 +185,63 @@ function countBy(rows, getter) {
     .sort((a, b) => b.count - a.count);
 }
 
+function sumBy(rows, keyGetter, valueGetter, formatter) {
+  const map = new Map();
+
+  rows.forEach(row => {
+    const key = keyGetter(row);
+    if (!key) return;
+
+    const value = Number(valueGetter(row) || 0);
+    if (!Number.isFinite(value)) return;
+
+    map.set(key, (map.get(key) || 0) + value);
+  });
+
+  return Array.from(map.entries())
+    .map(([name, count]) => ({
+      name,
+      count,
+      displayCount: formatter ? formatter(count) : count
+    }))
+    .sort((a, b) => b.count - a.count);
+}
+
 function getScoreLabel(score) {
-  if (score >= 80) return "Excellent";
-  if (score >= 40) return "Good";
-  if (score >= 15) return "Average";
+  if (score >= 120) return "Excellent";
+  if (score >= 60) return "Good";
+  if (score >= 20) return "Average";
   return "Needs Attention";
 }
 
 function getScoreClass(score) {
-  if (score >= 80) {
+  if (score >= 120) {
     return "bg-green-50 text-green-700 border-green-100";
   }
 
-  if (score >= 40) {
+  if (score >= 60) {
     return "bg-blue-50 text-blue-700 border-blue-100";
   }
 
-  if (score >= 15) {
+  if (score >= 20) {
     return "bg-yellow-50 text-yellow-700 border-yellow-100";
   }
 
   return "bg-red-50 text-red-700 border-red-100";
+}
+
+/* =========================
+   GLOBAL LEAD VISIBILITY
+   isDeleted === true is excluded everywhere
+========================== */
+
+function isDeletedLead(lead) {
+  return lead?.isDeleted === true;
+}
+
+function getActiveLeads(leads = []) {
+  if (!Array.isArray(leads)) return [];
+  return leads.filter(lead => !isDeletedLead(lead));
 }
 
 /* =========================
@@ -201,7 +252,17 @@ function getLeadDate(lead) {
   return (
     toDate(lead?.createdAt) ||
     toDate(lead?.assignedAt) ||
-    toDate(lead?.updatedAt)
+    toDate(lead?.updatedAt) ||
+    toDate(lead?.lastActivityAt)
+  );
+}
+
+function getLeadActivityDate(lead) {
+  return (
+    toDate(lead?.lastActivityAt) ||
+    toDate(lead?.updatedAt) ||
+    toDate(lead?.assignedAt) ||
+    toDate(lead?.createdAt)
   );
 }
 
@@ -258,6 +319,100 @@ function isActiveLead(lead) {
   return !isClosedLead(lead);
 }
 
+function getLeadQuotationAmount(lead) {
+  return (
+    pickAmount(
+      lead?.latestQuotationAmount,
+      lead?.latestCustomerQuoteAmount,
+      lead?.totalReceivableAmount,
+      lead?.customerQuoteAmount
+    ) || 0
+  );
+}
+
+function getLeadVendorCost(lead) {
+  return (
+    pickAmount(
+      lead?.latestVendorCost,
+      lead?.latestSelectedVendorCost,
+      lead?.totalVendorPayableAmount,
+      lead?.latestVendorQuoteCost
+    ) || 0
+  );
+}
+
+function getLeadGrossProfit(lead) {
+  const storedProfit = pickAmount(
+    lead?.actualGrossProfit,
+    lead?.latestGrossProfit,
+    lead?.expectedGrossProfit
+  );
+
+  if (storedProfit !== null) return storedProfit;
+
+  return getLeadQuotationAmount(lead) - getLeadVendorCost(lead);
+}
+
+function getLeadReceivedAmount(lead) {
+  return (
+    pickAmount(
+      lead?.totalPaymentReceived,
+      lead?.latestCustomerPaymentAmount
+    ) || 0
+  );
+}
+
+function getLeadVendorPaidAmount(lead) {
+  return (
+    pickAmount(
+      lead?.totalVendorPaid,
+      lead?.latestVendorPaymentAmount,
+      lead?.latestVendorPaymentEntryAmount
+    ) || 0
+  );
+}
+
+function hasQuotationSent(lead) {
+  return (
+    normalize(lead?.latestQuotationStatus) === "sent" ||
+    Boolean(lead?.latestQuotationSentAt) ||
+    Boolean(lead?.latestQuotationId)
+  );
+}
+
+function hasVendorRequest(lead) {
+  return (
+    Number(lead?.vendorRequestCount || 0) > 0 ||
+    Boolean(lead?.latestVendorRequestId) ||
+    Boolean(lead?.lastVendorCommunicationAt)
+  );
+}
+
+function hasVendorQuoteReceived(lead) {
+  const quoteStatus = normalize(lead?.latestVendorQuoteStatus);
+  const requestStatus = normalize(lead?.latestVendorRequestStatus);
+
+  return (
+    Number(lead?.vendorQuoteCount || 0) > 0 ||
+    quoteStatus === "received" ||
+    requestStatus === "quote_received" ||
+    Boolean(lead?.latestVendorQuoteId)
+  );
+}
+
+function isVendorQuotePending(lead) {
+  if (!hasVendorRequest(lead)) return false;
+  return !hasVendorQuoteReceived(lead);
+}
+
+function isVendorSelected(lead) {
+  return Boolean(
+    lead?.latestSelectedVendorName ||
+      lead?.latestSelectedVendorQuoteId ||
+      lead?.latestSelectedVendorRequestId
+  );
+}
+
 function getLeadOwner(lead, userMap) {
   const uid =
     lead?.assignedToUid ||
@@ -302,9 +457,7 @@ function getEngagementDate(item) {
 
 function getEngagementOwner(item, userMap) {
   const uid = item?.createdByUid || "";
-
   const userData = uid ? userMap.get(uid) : null;
-
   const email = userData?.email || item?.createdByEmail || "";
 
   const name =
@@ -357,19 +510,6 @@ function getAttendanceSessions(record) {
   return [];
 }
 
-function getAttendanceRecordDate(record) {
-  if (record?.date) return record.date;
-
-  const d =
-    toDate(record?.createdAt) ||
-    toDate(record?.updatedAt) ||
-    toDate(getFirstCheckIn(record));
-
-  if (!d) return "";
-
-  return d.toISOString().slice(0, 10);
-}
-
 function getFirstCheckIn(record) {
   const sessions = getAttendanceSessions(record);
 
@@ -392,6 +532,19 @@ function getLastCheckOut(record) {
   return dates[0] || null;
 }
 
+function getAttendanceRecordDate(record) {
+  if (record?.date) return record.date;
+
+  const d =
+    toDate(record?.createdAt) ||
+    toDate(record?.updatedAt) ||
+    toDate(getFirstCheckIn(record));
+
+  if (!d) return "";
+
+  return getLocalDateKey(d);
+}
+
 function getAttendanceStatus(record) {
   if (record?.status) return normalize(record.status);
 
@@ -401,7 +554,6 @@ function getAttendanceStatus(record) {
   );
 
   if (presentSession) return "present";
-
   if (sessions.some(session => session?.checkInAt)) return "present";
 
   return "unknown";
@@ -429,7 +581,6 @@ function getAttendanceMinutes(record) {
     if (!checkIn || !checkOut) return total;
 
     const diff = checkOut.getTime() - checkIn.getTime();
-
     if (diff <= 0) return total;
 
     return total + Math.round(diff / 60000);
@@ -482,7 +633,6 @@ function isAttendanceLate(record) {
 
 function isAttendanceLeave(record) {
   const status = getAttendanceStatus(record);
-
   return status === "leave" || status === "on_leave" || status === "paid_leave";
 }
 
@@ -620,18 +770,27 @@ export default function AdminDashboardGraph() {
     const unsubLeads = onSnapshot(
       collection(db, LEADS_COLLECTION),
       snap => {
-        const rows = snap.docs
-          .map(docSnap => ({
-            id: docSnap.id,
-            ...docSnap.data()
-          }))
-          .sort((a, b) => {
-            const ad = getLeadDate(a)?.getTime() || 0;
-            const bd = getLeadDate(b)?.getTime() || 0;
-            return bd - ad;
-          });
+        const allRows = snap.docs.map(docSnap => ({
+          id: docSnap.id,
+          ...docSnap.data()
+        }));
 
-        setLeads(rows);
+        const activeRows = getActiveLeads(allRows).sort((a, b) => {
+          const ad = getLeadDate(a)?.getTime() || 0;
+          const bd = getLeadDate(b)?.getTime() || 0;
+          return bd - ad;
+        });
+
+        console.log("[Management Dashboard Lead Filter]", {
+          firestoreTotal: allRows.length,
+          activeUsed: activeRows.length,
+          deletedExcluded: allRows.length - activeRows.length,
+          deletedLeadCodes: allRows
+            .filter(isDeletedLead)
+            .map(lead => lead.leadCode || lead.id)
+        });
+
+        setLeads(activeRows);
         markLoaded("leads");
       },
       err => handleError("Leads", err)
@@ -730,9 +889,15 @@ export default function AdminDashboardGraph() {
     return map;
   }, [users]);
 
+  const activeDashboardLeads = useMemo(() => {
+    return getActiveLeads(leads);
+  }, [leads]);
+
   const periodLeads = useMemo(() => {
-    return leads.filter(lead => isInRange(lead.createdAt, rangeWindow));
-  }, [leads, rangeWindow]);
+    return getActiveLeads(activeDashboardLeads).filter(lead =>
+      isInRange(getLeadDate(lead), rangeWindow)
+    );
+  }, [activeDashboardLeads, rangeWindow]);
 
   const periodEngagements = useMemo(() => {
     return engagements.filter(item =>
@@ -747,50 +912,357 @@ export default function AdminDashboardGraph() {
   }, [attendanceRecords, rangeWindow]);
 
   /* =========================
-     TOTALS
+     LEAD TOTALS
   ========================== */
 
   const leadTotals = useMemo(() => {
-    const assignedLeads = periodLeads.filter(hasLeadAssignee).length;
-    const openLeads = periodLeads.filter(
+    const leadRows = getActiveLeads(periodLeads);
+
+    const assignedLeads = leadRows.filter(hasLeadAssignee).length;
+    const openLeads = leadRows.filter(
       lead => normalize(lead.status) === "open"
     ).length;
 
-    const activeLeads = periodLeads.filter(isActiveLead).length;
-    const wonLeads = periodLeads.filter(isWonLead).length;
-    const lostLeads = periodLeads.filter(isLostLead).length;
+    const activeLeads = leadRows.filter(isActiveLead).length;
+    const wonLeads = leadRows.filter(isWonLead).length;
+    const lostLeads = leadRows.filter(isLostLead).length;
+    const quoteSentLeads = leadRows.filter(hasQuotationSent).length;
 
     const uniqueAgents = new Set(
-      periodLeads.map(item => item.agentId || item.agentName).filter(Boolean)
+      leadRows
+        .map(item => item.agentId || item.agentName || item.agencyName)
+        .filter(Boolean)
     ).size;
 
     const uniqueDestinations = new Set(
-      periodLeads.map(item => item.destinationName).filter(Boolean)
+      leadRows.map(item => item.destinationName).filter(Boolean)
     ).size;
 
     return {
-      total: periodLeads.length,
+      total: leadRows.length,
       openLeads,
       activeLeads,
       assignedLeads,
-      unassignedLeads: Math.max(periodLeads.length - assignedLeads, 0),
+      unassignedLeads: Math.max(leadRows.length - assignedLeads, 0),
       wonLeads,
       lostLeads,
+      quoteSentLeads,
       uniqueAgents,
       uniqueDestinations,
-      byStage: countBy(periodLeads, item => item.stage || "Unknown"),
-      byStatus: countBy(periodLeads, item => item.status || "Unknown"),
+      byStage: countBy(leadRows, item => item.stage || "Unknown"),
+      byStatus: countBy(leadRows, item => item.status || "Unknown"),
       byDestination: countBy(
-        periodLeads,
+        leadRows,
         item => item.destinationName || "Unknown Destination"
       ),
-      byAssignee: countBy(periodLeads, item => {
+      byAssignee: countBy(leadRows, item => {
         const owner = getLeadOwner(item, userMap);
         return owner.name || "Unassigned";
       }),
-      bySource: countBy(periodLeads, item => item.source || "Unknown Source")
+      bySource: countBy(leadRows, item => item.source || "Unknown Source"),
+      byAgent: countBy(
+        leadRows,
+        item =>
+          item.agentName ||
+          item.agencyName ||
+          item.travelAgentName ||
+          "Unknown Agent"
+      )
     };
   }, [periodLeads, userMap]);
+
+  /* =========================
+     FINANCE TOTALS
+  ========================== */
+
+  const financeTotals = useMemo(() => {
+    const financeLeads = getActiveLeads(periodLeads);
+
+    const quotationValue = financeLeads.reduce((sum, lead) => {
+      return sum + getLeadQuotationAmount(lead);
+    }, 0);
+
+    const vendorCost = financeLeads.reduce((sum, lead) => {
+      return sum + getLeadVendorCost(lead);
+    }, 0);
+
+    const grossProfit = financeLeads.reduce((sum, lead) => {
+      return sum + getLeadGrossProfit(lead);
+    }, 0);
+
+    const receivableAmount = financeLeads.reduce((sum, lead) => {
+      return sum + toAmount(lead?.totalReceivableAmount);
+    }, 0);
+
+    const receivedAmount = financeLeads.reduce((sum, lead) => {
+      return sum + getLeadReceivedAmount(lead);
+    }, 0);
+
+    const pendingReceivable = financeLeads.reduce((sum, lead) => {
+      return sum + toAmount(lead?.paymentBalance);
+    }, 0);
+
+    const vendorPayable = financeLeads.reduce((sum, lead) => {
+      return sum + toAmount(lead?.totalVendorPayableAmount);
+    }, 0);
+
+    const vendorPaid = financeLeads.reduce((sum, lead) => {
+      return sum + getLeadVendorPaidAmount(lead);
+    }, 0);
+
+    const vendorBalance = financeLeads.reduce((sum, lead) => {
+      return sum + toAmount(lead?.vendorPaymentBalance);
+    }, 0);
+
+    const quotationSent = financeLeads.filter(lead => {
+      return normalize(lead?.latestQuotationStatus) === "sent";
+    }).length;
+
+    const customerFullyPaid = financeLeads.filter(lead => {
+      return normalize(lead?.customerPaymentStatus) === "fully_paid";
+    }).length;
+
+    const vendorFullyPaid = financeLeads.filter(lead => {
+      return normalize(lead?.vendorPaymentStatus) === "fully_paid";
+    }).length;
+
+    const marginPercent = quotationValue
+      ? Number(((grossProfit / quotationValue) * 100).toFixed(2))
+      : 0;
+
+    return {
+      quotationValue,
+      vendorCost,
+      grossProfit,
+      receivableAmount,
+      receivedAmount,
+      pendingReceivable,
+      vendorPayable,
+      vendorPaid,
+      vendorBalance,
+      quotationSent,
+      customerFullyPaid,
+      vendorFullyPaid,
+      marginPercent,
+      cashInHand: receivedAmount - vendorPaid,
+      byDestinationRevenue: sumBy(
+        financeLeads,
+        lead => lead.destinationName || "Unknown Destination",
+        getLeadQuotationAmount,
+        formatCurrency
+      ),
+      byDestinationProfit: sumBy(
+        financeLeads,
+        lead => lead.destinationName || "Unknown Destination",
+        getLeadGrossProfit,
+        formatCurrency
+      ),
+      byAgentRevenue: sumBy(
+        financeLeads,
+        lead =>
+          lead.agentName ||
+          lead.agencyName ||
+          lead.travelAgentName ||
+          "Unknown Agent",
+        getLeadQuotationAmount,
+        formatCurrency
+      ),
+      byAssigneeRevenue: sumBy(
+        financeLeads,
+        lead => {
+          const owner = getLeadOwner(lead, userMap);
+          return owner.name || "Unassigned";
+        },
+        getLeadQuotationAmount,
+        formatCurrency
+      ),
+      byPaymentStatus: countBy(
+        financeLeads,
+        lead => lead.customerPaymentStatus || "Not Updated"
+      ),
+      byVendorPaymentStatus: countBy(
+        financeLeads,
+        lead => lead.vendorPaymentStatus || "Not Updated"
+      )
+    };
+  }, [periodLeads, userMap]);
+
+  /* =========================
+     VENDOR TOTALS
+  ========================== */
+
+  const vendorTotals = useMemo(() => {
+    const vendorLeads = getActiveLeads(periodLeads);
+
+    const requestedLeads = vendorLeads.filter(hasVendorRequest);
+    const quoteReceivedLeads = vendorLeads.filter(hasVendorQuoteReceived);
+    const pendingQuoteLeads = vendorLeads.filter(isVendorQuotePending);
+    const selectedVendorLeads = vendorLeads.filter(isVendorSelected);
+
+    const totalVendorRequests = vendorLeads.reduce((sum, lead) => {
+      return sum + Number(lead?.vendorRequestCount || 0);
+    }, 0);
+
+    const totalVendorQuotes = vendorLeads.reduce((sum, lead) => {
+      return sum + Number(lead?.vendorQuoteCount || 0);
+    }, 0);
+
+    const lastVendorActivity = vendorLeads.reduce((latest, lead) => {
+      const d =
+        toDate(lead?.lastVendorQuoteAt) ||
+        toDate(lead?.lastVendorCommunicationAt);
+
+      if (!d) return latest;
+      if (!latest || d > latest) return d;
+
+      return latest;
+    }, null);
+
+    return {
+      requestedLeads: requestedLeads.length,
+      quoteReceivedLeads: quoteReceivedLeads.length,
+      pendingQuoteLeads: pendingQuoteLeads.length,
+      selectedVendorLeads: selectedVendorLeads.length,
+      totalVendorRequests,
+      totalVendorQuotes,
+      lastVendorActivity,
+      byVendor: countBy(
+        vendorLeads.filter(lead => lead?.latestVendorName),
+        lead => lead.latestVendorName
+      ),
+      byVendorCost: sumBy(
+        vendorLeads.filter(lead => lead?.latestVendorName),
+        lead => lead.latestVendorName,
+        getLeadVendorCost,
+        formatCurrency
+      ),
+      byVendorStatus: countBy(
+        vendorLeads.filter(hasVendorRequest),
+        lead => lead.latestVendorRequestStatus || "Unknown"
+      ),
+      byVendorQuoteStatus: countBy(
+        vendorLeads.filter(hasVendorRequest),
+        lead => lead.latestVendorQuoteStatus || "Pending"
+      )
+    };
+  }, [periodLeads]);
+
+  /* =========================
+     ATTENTION REQUIRED
+  ========================== */
+
+  const attentionSummary = useMemo(() => {
+    const attentionLeads = getActiveLeads(periodLeads);
+
+    const now = new Date();
+    const staleLimit = new Date(now);
+    staleLimit.setDate(staleLimit.getDate() - 3);
+
+    const rows = [];
+
+    const pushItem = (lead, type, severity, reason) => {
+      if (isDeletedLead(lead)) return;
+
+      rows.push({
+        id: `${lead.id}-${type}`,
+        leadId: lead.id,
+        leadCode: lead.leadCode || lead.id,
+        customerName: lead.customerName || lead.agentName || "Unknown Client",
+        agentName:
+          lead.agentName ||
+          lead.agencyName ||
+          lead.travelAgentName ||
+          "Unknown Agent",
+        destinationName: lead.destinationName || "Unknown Destination",
+        assignedToName: lead.assignedToName || "Unassigned",
+        stage: lead.stage || lead.status || "Unknown",
+        type,
+        severity,
+        reason,
+        amount: getLeadQuotationAmount(lead),
+        lastActivityAt: getLeadActivityDate(lead)
+      });
+    };
+
+    attentionLeads.forEach(lead => {
+      if (!hasLeadAssignee(lead)) {
+        pushItem(lead, "unassigned", "high", "Lead is not assigned to any team member.");
+      }
+
+      if (isActiveLead(lead) && !hasVendorRequest(lead)) {
+        pushItem(lead, "vendor_request_missing", "medium", "Vendor request has not been sent.");
+      }
+
+      if (isVendorQuotePending(lead)) {
+        pushItem(lead, "vendor_quote_pending", "high", "Vendor quotation is pending.");
+      }
+
+      if (hasVendorQuoteReceived(lead) && !hasQuotationSent(lead)) {
+        pushItem(lead, "quotation_pending", "high", "Vendor quote received but quotation not sent to customer.");
+      }
+
+      if (toAmount(lead?.paymentBalance) > 0) {
+        pushItem(lead, "customer_payment_pending", "high", "Customer payment balance is pending.");
+      }
+
+      if (toAmount(lead?.vendorPaymentBalance) > 0) {
+        pushItem(lead, "vendor_payment_pending", "medium", "Vendor payment balance is pending.");
+      }
+
+      if (getLeadGrossProfit(lead) < 0) {
+        pushItem(lead, "negative_profit", "critical", "Gross profit is negative.");
+      }
+
+      if (
+        getLeadQuotationAmount(lead) > 0 &&
+        Number(lead?.latestMarginPercent || 0) > 0 &&
+        Number(lead?.latestMarginPercent || 0) < 8
+      ) {
+        pushItem(lead, "low_margin", "medium", "Margin is below recommended level.");
+      }
+
+      const nextDue = toDate(lead?.nextActionDueAt);
+      if (isActiveLead(lead) && nextDue && nextDue < now) {
+        pushItem(lead, "overdue_followup", "high", "Next action / follow-up is overdue.");
+      }
+
+      const lastActivity = getLeadActivityDate(lead);
+      if (isActiveLead(lead) && lastActivity && lastActivity < staleLimit) {
+        pushItem(lead, "stale_lead", "medium", "No recent activity in the last 3 days.");
+      }
+    });
+
+    const byType = countBy(rows, item => item.type);
+    const critical = rows.filter(item => item.severity === "critical").length;
+    const high = rows.filter(item => item.severity === "high").length;
+    const medium = rows.filter(item => item.severity === "medium").length;
+
+    return {
+      rows: rows.sort((a, b) => {
+        const severityRank = {
+          critical: 4,
+          high: 3,
+          medium: 2,
+          low: 1
+        };
+
+        return (
+          (severityRank[b.severity] || 0) -
+            (severityRank[a.severity] || 0) ||
+          (b.amount || 0) - (a.amount || 0)
+        );
+      }),
+      byType,
+      critical,
+      high,
+      medium,
+      total: rows.length
+    };
+  }, [periodLeads]);
+
+  /* =========================
+     ENGAGEMENT TOTALS
+  ========================== */
 
   const engagementTotals = useMemo(() => {
     const completed = periodEngagements.filter(
@@ -843,8 +1315,12 @@ export default function AdminDashboardGraph() {
     };
   }, [periodEngagements, userMap]);
 
+  /* =========================
+     ATTENDANCE TOTALS
+  ========================== */
+
   const attendanceTotals = useMemo(() => {
-    const todayIso = new Date().toISOString().slice(0, 10);
+    const todayIso = getLocalDateKey();
 
     const todayAttendanceRows = attendanceRecords.filter(
       record => getAttendanceRecordDate(record) === todayIso
@@ -895,16 +1371,18 @@ export default function AdminDashboardGraph() {
     };
   }, [attendanceRecords, periodAttendance, activeUsers]);
 
+  /* =========================
+     USER TOTALS
+  ========================== */
+
   const userTotals = useMemo(() => {
     const adminUsers = activeUsers.filter(item => {
       const role = normalize(item.role);
-
       return item.isAdmin === true || role === "admin" || role === "super_admin";
     }).length;
 
     const employeeUsers = activeUsers.filter(item => {
       const role = normalize(item.role);
-
       return role === "employee";
     }).length;
 
@@ -915,7 +1393,10 @@ export default function AdminDashboardGraph() {
       departments: new Set(
         activeUsers.map(item => item.department).filter(Boolean)
       ).size,
-      byDepartment: countBy(activeUsers, item => item.department || "No Department"),
+      byDepartment: countBy(
+        activeUsers,
+        item => item.department || "No Department"
+      ),
       byRole: countBy(
         activeUsers,
         item => item.role || item.designation || "Unknown Role"
@@ -928,6 +1409,7 @@ export default function AdminDashboardGraph() {
   ========================== */
 
   const teamRows = useMemo(() => {
+    const teamLeads = getActiveLeads(periodLeads);
     const map = new Map();
 
     const ensureMember = member => {
@@ -950,6 +1432,12 @@ export default function AdminDashboardGraph() {
           wonLeads: 0,
           lostLeads: 0,
           assignedLeads: 0,
+          quoteSentLeads: 0,
+
+          quotationValue: 0,
+          receivedAmount: 0,
+          vendorPaid: 0,
+          grossProfit: 0,
 
           engagements: 0,
           completedEngagements: 0,
@@ -1019,29 +1507,27 @@ export default function AdminDashboardGraph() {
       });
     });
 
-    periodLeads.forEach(lead => {
+    teamLeads.forEach(lead => {
       const owner = getLeadOwner(lead, userMap);
       const row = ensureMember(owner);
 
       row.newLeads += 1;
 
-      if (hasLeadAssignee(lead)) {
-        row.assignedLeads += 1;
-      }
+      if (hasLeadAssignee(lead)) row.assignedLeads += 1;
+      if (isActiveLead(lead)) row.activeLeads += 1;
+      if (isWonLead(lead)) row.wonLeads += 1;
+      if (isLostLead(lead)) row.lostLeads += 1;
+      if (hasQuotationSent(lead)) row.quoteSentLeads += 1;
 
-      if (isActiveLead(lead)) {
-        row.activeLeads += 1;
-      }
+      row.quotationValue += getLeadQuotationAmount(lead);
+      row.receivedAmount += getLeadReceivedAmount(lead);
+      row.vendorPaid += getLeadVendorPaidAmount(lead);
+      row.grossProfit += getLeadGrossProfit(lead);
 
-      if (isWonLead(lead)) {
-        row.wonLeads += 1;
-      }
-
-      if (isLostLead(lead)) {
-        row.lostLeads += 1;
-      }
-
-      updateLastActivity(row, lead.updatedAt || lead.assignedAt || lead.createdAt);
+      updateLastActivity(
+        row,
+        lead.lastActivityAt || lead.updatedAt || lead.assignedAt || lead.createdAt
+      );
     });
 
     periodEngagements.forEach(item => {
@@ -1076,17 +1562,9 @@ export default function AdminDashboardGraph() {
       row.checkIns += checkInCount || (getFirstCheckIn(record) ? 1 : 0);
       row.totalMinutes += getAttendanceMinutes(record);
 
-      if (isAttendanceActive(record)) {
-        row.activeSessions += 1;
-      }
-
-      if (isAttendanceLate(record)) {
-        row.late += 1;
-      }
-
-      if (isAttendanceLeave(record)) {
-        row.leave += 1;
-      }
+      if (isAttendanceActive(record)) row.activeSessions += 1;
+      if (isAttendanceLate(record)) row.late += 1;
+      if (isAttendanceLeave(record)) row.leave += 1;
 
       updateFirstCheckIn(row, getFirstCheckIn(record));
       updateLastCheckOut(row, getLastCheckOut(record));
@@ -1094,16 +1572,20 @@ export default function AdminDashboardGraph() {
 
     return Array.from(map.values())
       .map(row => {
+        const profitScore = Math.max(Math.floor(row.grossProfit / 1000), 0);
+
         const score =
-          row.newLeads * 3 +
-          row.activeLeads +
+          row.wonLeads * 15 +
+          row.quoteSentLeads * 5 +
           row.completedEngagements * 3 +
           row.calls * 2 +
           row.whatsapp * 2 +
           row.emails * 2 +
           row.meetings * 3 +
-          row.wonLeads * 10 +
-          row.attendanceDays;
+          row.activeLeads +
+          row.attendanceDays +
+          profitScore -
+          row.lostLeads * 5;
 
         return {
           ...row,
@@ -1123,6 +1605,10 @@ export default function AdminDashboardGraph() {
           return b.totalMinutes - a.totalMinutes || b.checkIns - a.checkIns;
         }
 
+        if (activeTab === "finance") {
+          return b.grossProfit - a.grossProfit || b.quotationValue - a.quotationValue;
+        }
+
         return b.score - a.score;
       });
   }, [
@@ -1133,19 +1619,6 @@ export default function AdminDashboardGraph() {
     userMap,
     activeTab
   ]);
-
-  const managementSummary = useMemo(() => {
-    const totalWorkloadScore = teamRows.reduce((sum, row) => sum + row.score, 0);
-
-    return {
-      workloadScore: totalWorkloadScore,
-      lastActivity: teamRows.reduce((latest, row) => {
-        if (!row.lastActivityAt) return latest;
-        if (!latest || row.lastActivityAt > latest) return row.lastActivityAt;
-        return latest;
-      }, null)
-    };
-  }, [teamRows]);
 
   /* =========================
      RENDER GUARDS
@@ -1159,13 +1632,8 @@ export default function AdminDashboardGraph() {
     return <p className="p-6 text-red-600">Access denied</p>;
   }
 
-  /* =========================
-     UI
-  ========================== */
-
   return (
     <main className="p-4 md:p-6 space-y-6 w-full">
-      {/* HEADER */}
       <section className="space-y-4">
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
           <div>
@@ -1173,7 +1641,7 @@ export default function AdminDashboardGraph() {
               Management Dashboard
             </h1>
             <p className="text-sm text-gray-500">
-              Business performance, lead pipeline, engagement activity, employee workload and attendance overview.
+              Executive overview of active leads, finance, vendor operations, team workload and attendance.
             </p>
           </div>
 
@@ -1215,63 +1683,34 @@ export default function AdminDashboardGraph() {
           </div>
         ) : null}
 
-        {/* TOP MANAGEMENT PULSE */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <DashboardKpiCard
-            label="Total Leads"
-            value={leadTotals.total}
-          />
-
-          <DashboardKpiCard
-            label="Open Leads"
-            value={leadTotals.openLeads}
-            color="blue"
-          />
-
-          <DashboardKpiCard
-            label="Total Engagements"
-            value={engagementTotals.total}
-            color="green"
-          />
-
-          <DashboardKpiCard
-            label="Present Today"
-            value={attendanceTotals.presentToday}
-            color="green"
-          />
+          <DashboardKpiCard label="Active Leads" value={leadTotals.activeLeads} color="blue" />
+          <DashboardKpiCard label="Converted Leads" value={leadTotals.wonLeads} color="green" />
+          <DashboardKpiCard label="Quotation Value" value={formatCurrency(financeTotals.quotationValue)} color="purple" />
+          <DashboardKpiCard label="Gross Profit" value={formatCurrency(financeTotals.grossProfit)} color="green" />
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <DashboardKpiCard
-            label="Assigned Leads"
-            value={leadTotals.assignedLeads}
-            color="blue"
-          />
-
-          <DashboardKpiCard
-            label="Unassigned Leads"
-            value={leadTotals.unassignedLeads}
-            color={leadTotals.unassignedLeads ? "red" : "gray"}
-          />
-
-          <DashboardKpiCard
-            label="Active Employees"
-            value={userTotals.activeUsers}
-            color="purple"
-          />
-
-          <DashboardKpiCard
-            label="Attendance Hours"
-            value={formatDuration(attendanceTotals.totalMinutes)}
-            color="purple"
-          />
+          <DashboardKpiCard label="Customer Received" value={formatCurrency(financeTotals.receivedAmount)} color="green" />
+          <DashboardKpiCard label="Pending Receivable" value={formatCurrency(financeTotals.pendingReceivable)} color={financeTotals.pendingReceivable ? "amber" : "gray"} />
+          <DashboardKpiCard label="Vendor Paid" value={formatCurrency(financeTotals.vendorPaid)} color="blue" />
+          <DashboardKpiCard label="Cash Position" value={formatCurrency(financeTotals.cashInHand)} color={financeTotals.cashInHand >= 0 ? "green" : "red"} />
         </div>
 
-        {/* TABS */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <DashboardKpiCard label="Unassigned Leads" value={leadTotals.unassignedLeads} color={leadTotals.unassignedLeads ? "red" : "gray"} />
+          <DashboardKpiCard label="Pending Vendor Quotes" value={vendorTotals.pendingQuoteLeads} color={vendorTotals.pendingQuoteLeads ? "amber" : "gray"} />
+          <DashboardKpiCard label="Attention Items" value={attentionSummary.total} color={attentionSummary.total ? "red" : "gray"} />
+          <DashboardKpiCard label="Present Today" value={attendanceTotals.presentToday} color="green" />
+        </div>
+
         <div className="bg-white border border-gray-200 rounded-xl p-1 shadow-sm flex gap-1 overflow-x-auto">
           {[
             { key: "overview", label: "Overview" },
-            { key: "leads", label: "Leads" },
+            { key: "finance", label: "Finance" },
+            { key: "leads", label: "Pipeline" },
+            { key: "vendor", label: "Vendor Ops" },
+            { key: "attention", label: "Attention Required" },
             { key: "engagement", label: "Engagement" },
             { key: "attendance", label: "Attendance" },
             { key: "team", label: "Team" }
@@ -1295,33 +1734,13 @@ export default function AdminDashboardGraph() {
         </div>
       </section>
 
-      {/* OVERVIEW */}
       {activeTab === "overview" && (
         <section className="space-y-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <DashboardKpiCard
-              label="Active Leads"
-              value={leadTotals.activeLeads}
-              color="blue"
-            />
-
-            <DashboardKpiCard
-              label="Won Leads"
-              value={leadTotals.wonLeads}
-              color="green"
-            />
-
-            <DashboardKpiCard
-              label="Engagement Completion"
-              value={`${engagementTotals.completionRate}%`}
-              color="green"
-            />
-
-            <DashboardKpiCard
-              label="Absent / Not Checked In"
-              value={attendanceTotals.absentToday}
-              color={attendanceTotals.absentToday ? "red" : "gray"}
-            />
+            <DashboardKpiCard label="Total Leads" value={leadTotals.total} />
+            <DashboardKpiCard label="Quote Sent" value={leadTotals.quoteSentLeads} color="blue" />
+            <DashboardKpiCard label="Margin" value={`${financeTotals.marginPercent}%`} color="purple" />
+            <DashboardKpiCard label="Vendor Balance" value={formatCurrency(financeTotals.vendorBalance)} color={financeTotals.vendorBalance ? "amber" : "gray"} />
           </div>
 
           <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -1330,52 +1749,68 @@ export default function AdminDashboardGraph() {
           </section>
 
           <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            <MiniBarList
-              title="Leads by Destination"
-              rows={leadTotals.byDestination}
-            />
-
-            <MiniBarList
-              title="Engagement by Channel"
-              rows={engagementTotals.byChannel}
-            />
-
-            <MiniBarList
-              title="Users by Department"
-              rows={userTotals.byDepartment}
-            />
+            <MiniBarList title="Revenue by Destination" rows={financeTotals.byDestinationRevenue} />
+            <MiniBarList title="Gross Profit by Destination" rows={financeTotals.byDestinationProfit} />
+            <MiniBarList title="Top Travel Agents" rows={leadTotals.byAgent} />
           </section>
 
+          <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            <MiniBarList title="Vendor Requests by Status" rows={vendorTotals.byVendorStatus} />
+            <MiniBarList title="Vendor Quotes by Status" rows={vendorTotals.byVendorQuoteStatus} />
+            <MiniBarList title="Attention by Type" rows={attentionSummary.byType} />
+          </section>
+
+          <AttentionRequiredPanel rows={attentionSummary.rows.slice(0, 8)} compact />
           <ManagementOverviewTable rows={teamRows} />
         </section>
       )}
 
-      {/* LEADS */}
+      {activeTab === "finance" && (
+        <section className="space-y-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <DashboardKpiCard label="Quotation Value" value={formatCurrency(financeTotals.quotationValue)} color="purple" />
+            <DashboardKpiCard label="Total Receivable" value={formatCurrency(financeTotals.receivableAmount)} color="blue" />
+            <DashboardKpiCard label="Customer Received" value={formatCurrency(financeTotals.receivedAmount)} color="green" />
+            <DashboardKpiCard label="Pending Receivable" value={formatCurrency(financeTotals.pendingReceivable)} color={financeTotals.pendingReceivable ? "amber" : "gray"} />
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <DashboardKpiCard label="Vendor Payable" value={formatCurrency(financeTotals.vendorPayable)} color="blue" />
+            <DashboardKpiCard label="Vendor Paid" value={formatCurrency(financeTotals.vendorPaid)} color="green" />
+            <DashboardKpiCard label="Vendor Balance" value={formatCurrency(financeTotals.vendorBalance)} color={financeTotals.vendorBalance ? "amber" : "gray"} />
+            <DashboardKpiCard label="Margin" value={`${financeTotals.marginPercent}%`} color="purple" />
+          </div>
+
+          <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            <MiniBarList title="Revenue by Destination" rows={financeTotals.byDestinationRevenue} />
+            <MiniBarList title="Gross Profit by Destination" rows={financeTotals.byDestinationProfit} />
+            <MiniBarList title="Revenue by Travel Agent" rows={financeTotals.byAgentRevenue} />
+          </section>
+
+          <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            <MiniBarList title="Revenue by Team Member" rows={financeTotals.byAssigneeRevenue} />
+            <MiniBarList title="Customer Payment Status" rows={financeTotals.byPaymentStatus} />
+            <MiniBarList title="Vendor Payment Status" rows={financeTotals.byVendorPaymentStatus} />
+          </section>
+
+          <ManagementFinanceTable rows={teamRows} />
+        </section>
+      )}
+
       {activeTab === "leads" && (
         <section className="space-y-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <DashboardKpiCard
-              label="New Leads"
-              value={leadTotals.total}
-            />
+            <DashboardKpiCard label="New Leads" value={leadTotals.total} />
+            <DashboardKpiCard label="Active Leads" value={leadTotals.activeLeads} color="blue" />
+            <DashboardKpiCard label="Quote Sent" value={leadTotals.quoteSentLeads} color="purple" />
+            <DashboardKpiCard label="Converted" value={leadTotals.wonLeads} color="green" />
+          </div>
 
-            <DashboardKpiCard
-              label="Active Leads"
-              value={leadTotals.activeLeads}
-              color="blue"
-            />
-
-            <DashboardKpiCard
-              label="Assigned"
-              value={leadTotals.assignedLeads}
-              color="blue"
-            />
-
-            <DashboardKpiCard
-              label="Unassigned"
-              value={leadTotals.unassignedLeads}
-              color={leadTotals.unassignedLeads ? "red" : "gray"}
-            />
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <DashboardKpiCard label="Assigned" value={leadTotals.assignedLeads} color="blue" />
+            <DashboardKpiCard label="Unassigned" value={leadTotals.unassignedLeads} color={leadTotals.unassignedLeads ? "red" : "gray"} />
+            <DashboardKpiCard label="Lost" value={leadTotals.lostLeads} color={leadTotals.lostLeads ? "red" : "gray"} />
+            <DashboardKpiCard label="Destinations" value={leadTotals.uniqueDestinations} color="purple" />
           </div>
 
           <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -1384,108 +1819,106 @@ export default function AdminDashboardGraph() {
           </section>
 
           <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            <MiniBarList
-              title="Leads by Stage"
-              rows={leadTotals.byStage}
-            />
-
-            <MiniBarList
-              title="Leads by Status"
-              rows={leadTotals.byStatus}
-            />
-
-            <MiniBarList
-              title="Leads by Source"
-              rows={leadTotals.bySource}
-            />
+            <MiniBarList title="Leads by Stage" rows={leadTotals.byStage} />
+            <MiniBarList title="Leads by Status" rows={leadTotals.byStatus} />
+            <MiniBarList title="Leads by Source" rows={leadTotals.bySource} />
           </section>
 
           <ManagementLeadsTable rows={teamRows} />
         </section>
       )}
 
-      {/* ENGAGEMENT */}
+      {activeTab === "vendor" && (
+        <section className="space-y-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <DashboardKpiCard label="Vendor Requests" value={vendorTotals.totalVendorRequests} color="blue" />
+            <DashboardKpiCard label="Vendor Quotes" value={vendorTotals.totalVendorQuotes} color="green" />
+            <DashboardKpiCard label="Pending Quotes" value={vendorTotals.pendingQuoteLeads} color={vendorTotals.pendingQuoteLeads ? "amber" : "gray"} />
+            <DashboardKpiCard label="Vendors Selected" value={vendorTotals.selectedVendorLeads} color="purple" />
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <DashboardKpiCard label="Vendor Cost" value={formatCurrency(financeTotals.vendorCost)} color="blue" />
+            <DashboardKpiCard label="Vendor Paid" value={formatCurrency(financeTotals.vendorPaid)} color="green" />
+            <DashboardKpiCard label="Vendor Balance" value={formatCurrency(financeTotals.vendorBalance)} color={financeTotals.vendorBalance ? "amber" : "gray"} />
+            <DashboardKpiCard label="Last Vendor Activity" value={formatDateTime(vendorTotals.lastVendorActivity)} color="purple" />
+          </div>
+
+          <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            <MiniBarList title="Vendor Requests by Status" rows={vendorTotals.byVendorStatus} />
+            <MiniBarList title="Vendor Quotes by Status" rows={vendorTotals.byVendorQuoteStatus} />
+            <MiniBarList title="Top Vendors by Count" rows={vendorTotals.byVendor} />
+          </section>
+
+          <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <MiniBarList title="Top Vendors by Cost" rows={vendorTotals.byVendorCost} />
+            <MiniBarList title="Vendor Payment Status" rows={financeTotals.byVendorPaymentStatus} />
+          </section>
+
+          <ManagementVendorTable rows={periodLeads} />
+        </section>
+      )}
+
+      {activeTab === "attention" && (
+        <section className="space-y-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <DashboardKpiCard label="Total Attention Items" value={attentionSummary.total} color={attentionSummary.total ? "red" : "gray"} />
+            <DashboardKpiCard label="Critical" value={attentionSummary.critical} color={attentionSummary.critical ? "red" : "gray"} />
+            <DashboardKpiCard label="High Priority" value={attentionSummary.high} color={attentionSummary.high ? "amber" : "gray"} />
+            <DashboardKpiCard label="Medium Priority" value={attentionSummary.medium} color={attentionSummary.medium ? "blue" : "gray"} />
+          </div>
+
+          <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <MiniBarList title="Attention by Type" rows={attentionSummary.byType} />
+            <MiniBarList
+              title="High Value Attention Leads"
+              rows={attentionSummary.rows
+                .filter(item => item.amount > 0)
+                .slice(0, 8)
+                .map(item => ({
+                  name: item.leadCode,
+                  count: item.amount,
+                  displayCount: formatCurrency(item.amount)
+                }))}
+            />
+          </section>
+
+          <AttentionRequiredPanel rows={attentionSummary.rows} />
+        </section>
+      )}
+
       {activeTab === "engagement" && (
         <section className="space-y-6">
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <EngagementKpiCard
-              label="Calls"
-              value={engagementTotals.calls}
-            />
-
-            <EngagementKpiCard
-              label="WhatsApp"
-              value={engagementTotals.whatsapp}
-            />
-
-            <EngagementKpiCard
-              label="Emails"
-              value={engagementTotals.emails}
-            />
-
-            <EngagementKpiCard
-              label="Meetings"
-              value={engagementTotals.meetings}
-            />
-
-            <EngagementKpiCard
-              label="Last Activity"
-              value={formatDateTime(engagementTotals.lastActivity)}
-            />
+            <EngagementKpiCard label="Calls" value={engagementTotals.calls} />
+            <EngagementKpiCard label="WhatsApp" value={engagementTotals.whatsapp} />
+            <EngagementKpiCard label="Emails" value={engagementTotals.emails} />
+            <EngagementKpiCard label="Meetings" value={engagementTotals.meetings} />
+            <EngagementKpiCard label="Last Activity" value={formatDateTime(engagementTotals.lastActivity)} />
           </div>
 
           <EngagementByChannelChart engagements={periodEngagements} />
 
           <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <MiniBarList
-              title="Engagement by Employee"
-              rows={engagementTotals.byCreator}
-            />
-
-            <MiniBarList
-              title="Engagement by Destination"
-              rows={engagementTotals.byDestination}
-            />
+            <MiniBarList title="Engagement by Employee" rows={engagementTotals.byCreator} />
+            <MiniBarList title="Engagement by Destination" rows={engagementTotals.byDestination} />
           </section>
 
           <ManagementEngagementTable rows={teamRows} />
         </section>
       )}
 
-      {/* ATTENDANCE */}
       {activeTab === "attendance" && (
         <section className="space-y-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <DashboardKpiCard
-              label="Present Today"
-              value={attendanceTotals.presentToday}
-              color="green"
-            />
-
-            <DashboardKpiCard
-              label="Active Now"
-              value={attendanceTotals.activeNow}
-              color="green"
-            />
-
-            <DashboardKpiCard
-              label="Late"
-              value={attendanceTotals.late}
-              color={attendanceTotals.late ? "amber" : "gray"}
-            />
-
-            <DashboardKpiCard
-              label="Total Hours"
-              value={formatDuration(attendanceTotals.totalMinutes)}
-              color="purple"
-            />
+            <DashboardKpiCard label="Present Today" value={attendanceTotals.presentToday} color="green" />
+            <DashboardKpiCard label="Active Now" value={attendanceTotals.activeNow} color="green" />
+            <DashboardKpiCard label="Late" value={attendanceTotals.late} color={attendanceTotals.late ? "amber" : "gray"} />
+            <DashboardKpiCard label="Total Hours" value={formatDuration(attendanceTotals.totalMinutes)} color="purple" />
           </div>
 
           <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <MiniBarList
-              title="Attendance by Status"
-              rows={attendanceTotals.byStatus}
-            />
+            <MiniBarList title="Attendance by Status" rows={attendanceTotals.byStatus} />
 
             <MiniBarList
               title="Working Hours by Employee"
@@ -1504,45 +1937,18 @@ export default function AdminDashboardGraph() {
         </section>
       )}
 
-      {/* TEAM */}
       {activeTab === "team" && (
         <section className="space-y-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <DashboardKpiCard
-              label="Active Users"
-              value={userTotals.activeUsers}
-              color="blue"
-            />
-
-            <DashboardKpiCard
-              label="Employee Users"
-              value={userTotals.employeeUsers}
-              color="green"
-            />
-
-            <DashboardKpiCard
-              label="Admin Users"
-              value={userTotals.adminUsers}
-              color="purple"
-            />
-
-            <DashboardKpiCard
-              label="Departments"
-              value={userTotals.departments}
-              color="blue"
-            />
+            <DashboardKpiCard label="Active Users" value={userTotals.activeUsers} color="blue" />
+            <DashboardKpiCard label="Employee Users" value={userTotals.employeeUsers} color="green" />
+            <DashboardKpiCard label="Admin Users" value={userTotals.adminUsers} color="purple" />
+            <DashboardKpiCard label="Departments" value={userTotals.departments} color="blue" />
           </div>
 
           <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <MiniBarList
-              title="Users by Department"
-              rows={userTotals.byDepartment}
-            />
-
-            <MiniBarList
-              title="Users by Role"
-              rows={userTotals.byRole}
-            />
+            <MiniBarList title="Users by Department" rows={userTotals.byDepartment} />
+            <MiniBarList title="Users by Role" rows={userTotals.byRole} />
           </section>
 
           <ManagementTeamTable rows={teamRows} />
@@ -1603,352 +2009,398 @@ function MiniBarList({ title, rows }) {
 }
 
 /* =========================
-   OVERVIEW TABLE
+   ATTENTION PANEL
+========================== */
+
+function getSeverityClass(severity) {
+  if (severity === "critical") {
+    return "bg-red-50 text-red-700 border-red-100";
+  }
+
+  if (severity === "high") {
+    return "bg-orange-50 text-orange-700 border-orange-100";
+  }
+
+  if (severity === "medium") {
+    return "bg-yellow-50 text-yellow-700 border-yellow-100";
+  }
+
+  return "bg-gray-50 text-gray-700 border-gray-100";
+}
+
+function AttentionRequiredPanel({ rows, compact = false }) {
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-100">
+        <h2 className="text-sm font-semibold text-gray-900">
+          Attention Required
+        </h2>
+        <p className="text-xs text-gray-500 mt-0.5">
+          Leads that need management or operations action.
+        </p>
+      </div>
+
+      {!rows.length ? (
+        <div className="px-4 py-8 text-center text-sm text-gray-500">
+          No attention items found.
+        </div>
+      ) : (
+        <div className="divide-y divide-gray-100">
+          {rows.slice(0, compact ? 8 : 50).map(item => (
+            <div
+              key={item.id}
+              className="px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3"
+            >
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="font-medium text-sm text-gray-900">
+                    {item.leadCode}
+                  </p>
+                  <span
+                    className={`
+                      inline-flex items-center px-2 py-0.5 rounded-full text-xs border
+                      ${getSeverityClass(item.severity)}
+                    `}
+                  >
+                    {readableLabel(item.severity)}
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    {readableLabel(item.type)}
+                  </span>
+                </div>
+
+                <p className="text-sm text-gray-700 mt-1">
+                  {item.reason}
+                </p>
+
+                <p className="text-xs text-gray-500 mt-1">
+                  {item.customerName} • {item.destinationName} • Assigned: {item.assignedToName}
+                </p>
+              </div>
+
+              <div className="text-left md:text-right shrink-0">
+                <p className="text-sm font-semibold text-gray-900">
+                  {formatCurrency(item.amount)}
+                </p>
+                <p className="text-xs text-gray-500">
+                  Last: {formatDateTime(item.lastActivityAt)}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =========================
+   TABLES
 ========================== */
 
 function ManagementOverviewTable({ rows }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-100">
-        <h2 className="text-sm font-semibold text-gray-900">
-          Team Member Management Overview
-        </h2>
-        <p className="text-xs text-gray-500 mt-0.5">
-          Combined lead, engagement and attendance performance.
-        </p>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-xs text-gray-500">
-            <tr>
-              <th className="text-left px-4 py-3 font-medium">Team Member</th>
-              <th className="text-right px-4 py-3 font-medium">Leads</th>
-              <th className="text-right px-4 py-3 font-medium">Active</th>
-              <th className="text-right px-4 py-3 font-medium">Won</th>
-              <th className="text-right px-4 py-3 font-medium">Engagements</th>
-              <th className="text-right px-4 py-3 font-medium">Attendance</th>
-              <th className="text-right px-4 py-3 font-medium">Hours</th>
-              <th className="text-left px-4 py-3 font-medium">Last Activity</th>
-              <th className="text-left px-4 py-3 font-medium">Status</th>
-            </tr>
-          </thead>
-
-          <tbody className="divide-y divide-gray-100">
-            {rows.map(row => (
-              <tr key={row.uid || row.email || row.name}>
-                <td className="px-4 py-3">
-                  <div className="font-medium text-gray-900">
-                    {row.name}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {row.department || row.email || "—"}
-                  </div>
-                </td>
-
-                <td className="px-4 py-3 text-right">{row.newLeads}</td>
-                <td className="px-4 py-3 text-right">{row.activeLeads}</td>
-                <td className="px-4 py-3 text-right text-green-700 font-medium">
-                  {row.wonLeads}
-                </td>
-                <td className="px-4 py-3 text-right">{row.engagements}</td>
-                <td className="px-4 py-3 text-right">{row.attendanceDays}</td>
-                <td className="px-4 py-3 text-right font-medium">
-                  {formatDuration(row.totalMinutes)}
-                </td>
-                <td className="px-4 py-3 text-gray-600">
-                  {formatDateTime(row.lastActivityAt)}
-                </td>
-                <td className="px-4 py-3">
-                  <span
-                    className={`
-                      inline-flex items-center px-2 py-1 rounded-full text-xs border
-                      ${getScoreClass(row.score)}
-                    `}
-                  >
-                    {getScoreLabel(row.score)}
-                  </span>
-                </td>
-              </tr>
-            ))}
-
-            {!rows.length && (
-              <tr>
-                <td
-                  colSpan={9}
-                  className="px-4 py-8 text-center text-sm text-gray-500"
-                >
-                  No management data found.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
+    <DashboardTable
+      title="Team Member Management Overview"
+      description="Combined lead, revenue, engagement and attendance performance."
+      headers={[
+        "Team Member",
+        "Leads",
+        "Won",
+        "Quotation",
+        "GP",
+        "Engagements",
+        "Hours",
+        "Last Activity",
+        "Status"
+      ]}
+      emptyText="No management data found."
+      colSpan={9}
+    >
+      {rows.map(row => (
+        <tr key={row.uid || row.email || row.name}>
+          <td className="px-4 py-3">
+            <div className="font-medium text-gray-900">{row.name}</div>
+            <div className="text-xs text-gray-500">
+              {row.department || row.email || "—"}
+            </div>
+          </td>
+          <td className="px-4 py-3 text-right">{row.newLeads}</td>
+          <td className="px-4 py-3 text-right text-green-700 font-medium">{row.wonLeads}</td>
+          <td className="px-4 py-3 text-right">{formatCurrency(row.quotationValue)}</td>
+          <td className="px-4 py-3 text-right font-medium">{formatCurrency(row.grossProfit)}</td>
+          <td className="px-4 py-3 text-right">{row.engagements}</td>
+          <td className="px-4 py-3 text-right font-medium">{formatDuration(row.totalMinutes)}</td>
+          <td className="px-4 py-3 text-gray-600">{formatDateTime(row.lastActivityAt)}</td>
+          <td className="px-4 py-3">
+            <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs border ${getScoreClass(row.score)}`}>
+              {getScoreLabel(row.score)}
+            </span>
+          </td>
+        </tr>
+      ))}
+    </DashboardTable>
   );
 }
 
-/* =========================
-   LEADS TABLE
-========================== */
+function ManagementFinanceTable({ rows }) {
+  return (
+    <DashboardTable
+      title="Team Finance Overview"
+      description="Revenue, collection, vendor payout and gross profit by team member."
+      headers={[
+        "Team Member",
+        "Quotation Value",
+        "Customer Received",
+        "Vendor Paid",
+        "Gross Profit",
+        "Won Leads",
+        "Score"
+      ]}
+      emptyText="No finance data found."
+      colSpan={7}
+    >
+      {rows.map(row => (
+        <tr key={row.uid || row.email || row.name}>
+          <td className="px-4 py-3">
+            <div className="font-medium text-gray-900">{row.name}</div>
+            <div className="text-xs text-gray-500">{row.email || "—"}</div>
+          </td>
+          <td className="px-4 py-3 text-right">{formatCurrency(row.quotationValue)}</td>
+          <td className="px-4 py-3 text-right text-green-700 font-medium">{formatCurrency(row.receivedAmount)}</td>
+          <td className="px-4 py-3 text-right">{formatCurrency(row.vendorPaid)}</td>
+          <td className="px-4 py-3 text-right font-semibold">{formatCurrency(row.grossProfit)}</td>
+          <td className="px-4 py-3 text-right">{row.wonLeads}</td>
+          <td className="px-4 py-3 text-right font-semibold">{row.score}</td>
+        </tr>
+      ))}
+    </DashboardTable>
+  );
+}
+
+function ManagementVendorTable({ rows }) {
+  const activeRows = getActiveLeads(rows);
+
+  return (
+    <DashboardTable
+      title="Vendor Operations Overview"
+      description="Vendor request, quote and payment status by active lead."
+      headers={[
+        "Lead",
+        "Destination",
+        "Vendor",
+        "Requests",
+        "Quotes",
+        "Vendor Cost",
+        "Vendor Paid",
+        "Balance",
+        "Status"
+      ]}
+      emptyText="No vendor data found."
+      colSpan={9}
+    >
+      {activeRows.map(row => (
+        <tr key={row.id}>
+          <td className="px-4 py-3">
+            <div className="font-medium text-gray-900">{row.leadCode || row.id}</div>
+            <div className="text-xs text-gray-500">{row.agentName || row.agencyName || "—"}</div>
+          </td>
+          <td className="px-4 py-3 text-gray-600">{row.destinationName || "—"}</td>
+          <td className="px-4 py-3 text-gray-600">{row.latestVendorName || row.latestSelectedVendorName || "—"}</td>
+          <td className="px-4 py-3 text-right">{Number(row.vendorRequestCount || 0)}</td>
+          <td className="px-4 py-3 text-right">{Number(row.vendorQuoteCount || 0)}</td>
+          <td className="px-4 py-3 text-right">{formatCurrency(getLeadVendorCost(row))}</td>
+          <td className="px-4 py-3 text-right">{formatCurrency(getLeadVendorPaidAmount(row))}</td>
+          <td className="px-4 py-3 text-right font-medium">{formatCurrency(row.vendorPaymentBalance)}</td>
+          <td className="px-4 py-3 text-gray-600">
+            {readableLabel(row.latestVendorQuoteStatus || row.latestVendorRequestStatus || "Pending")}
+          </td>
+        </tr>
+      ))}
+    </DashboardTable>
+  );
+}
 
 function ManagementLeadsTable({ rows }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-100">
-        <h2 className="text-sm font-semibold text-gray-900">
-          Team Member Lead Overview
-        </h2>
-        <p className="text-xs text-gray-500 mt-0.5">
-          Lead assignment and pipeline movement for the selected period.
-        </p>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-xs text-gray-500">
-            <tr>
-              <th className="text-left px-4 py-3 font-medium">Team Member</th>
-              <th className="text-right px-4 py-3 font-medium">New</th>
-              <th className="text-right px-4 py-3 font-medium">Assigned</th>
-              <th className="text-right px-4 py-3 font-medium">Active</th>
-              <th className="text-right px-4 py-3 font-medium">Won</th>
-              <th className="text-right px-4 py-3 font-medium">Lost</th>
-            </tr>
-          </thead>
-
-          <tbody className="divide-y divide-gray-100">
-            {rows.map(row => (
-              <tr key={row.uid || row.email || row.name}>
-                <td className="px-4 py-3">
-                  <div className="font-medium text-gray-900">
-                    {row.name}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {row.email || "—"}
-                  </div>
-                </td>
-
-                <td className="px-4 py-3 text-right">{row.newLeads}</td>
-                <td className="px-4 py-3 text-right">{row.assignedLeads}</td>
-                <td className="px-4 py-3 text-right">{row.activeLeads}</td>
-                <td className="px-4 py-3 text-right text-green-700 font-medium">
-                  {row.wonLeads}
-                </td>
-                <td className="px-4 py-3 text-right">{row.lostLeads}</td>
-              </tr>
-            ))}
-
-            {!rows.length && (
-              <tr>
-                <td
-                  colSpan={6}
-                  className="px-4 py-8 text-center text-sm text-gray-500"
-                >
-                  No lead data found.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
+    <DashboardTable
+      title="Team Member Lead Overview"
+      description="Lead assignment, quotation and pipeline movement for the selected period."
+      headers={[
+        "Team Member",
+        "New",
+        "Assigned",
+        "Active",
+        "Quote Sent",
+        "Won",
+        "Lost"
+      ]}
+      emptyText="No lead data found."
+      colSpan={7}
+    >
+      {rows.map(row => (
+        <tr key={row.uid || row.email || row.name}>
+          <td className="px-4 py-3">
+            <div className="font-medium text-gray-900">{row.name}</div>
+            <div className="text-xs text-gray-500">{row.email || "—"}</div>
+          </td>
+          <td className="px-4 py-3 text-right">{row.newLeads}</td>
+          <td className="px-4 py-3 text-right">{row.assignedLeads}</td>
+          <td className="px-4 py-3 text-right">{row.activeLeads}</td>
+          <td className="px-4 py-3 text-right">{row.quoteSentLeads}</td>
+          <td className="px-4 py-3 text-right text-green-700 font-medium">{row.wonLeads}</td>
+          <td className="px-4 py-3 text-right">{row.lostLeads}</td>
+        </tr>
+      ))}
+    </DashboardTable>
   );
 }
-
-/* =========================
-   ENGAGEMENT TABLE
-========================== */
 
 function ManagementEngagementTable({ rows }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-100">
-        <h2 className="text-sm font-semibold text-gray-900">
-          Team Member Engagement Overview
-        </h2>
-        <p className="text-xs text-gray-500 mt-0.5">
-          WhatsApp, call, email and meeting activity for the selected period.
-        </p>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-xs text-gray-500">
-            <tr>
-              <th className="text-left px-4 py-3 font-medium">Team Member</th>
-              <th className="text-right px-4 py-3 font-medium">Total</th>
-              <th className="text-right px-4 py-3 font-medium">Calls</th>
-              <th className="text-right px-4 py-3 font-medium">WhatsApp</th>
-              <th className="text-right px-4 py-3 font-medium">Emails</th>
-              <th className="text-right px-4 py-3 font-medium">Meetings</th>
-              <th className="text-right px-4 py-3 font-medium">Completed</th>
-              <th className="text-left px-4 py-3 font-medium">Last Activity</th>
-            </tr>
-          </thead>
-
-          <tbody className="divide-y divide-gray-100">
-            {rows.map(row => (
-              <tr key={row.uid || row.email || row.name}>
-                <td className="px-4 py-3">
-                  <div className="font-medium text-gray-900">
-                    {row.name}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {row.email || "—"}
-                  </div>
-                </td>
-
-                <td className="px-4 py-3 text-right">{row.engagements}</td>
-                <td className="px-4 py-3 text-right">{row.calls}</td>
-                <td className="px-4 py-3 text-right">{row.whatsapp}</td>
-                <td className="px-4 py-3 text-right">{row.emails}</td>
-                <td className="px-4 py-3 text-right">{row.meetings}</td>
-                <td className="px-4 py-3 text-right text-green-700 font-medium">
-                  {row.completedEngagements}
-                </td>
-                <td className="px-4 py-3 text-gray-600">
-                  {formatDateTime(row.lastActivityAt)}
-                </td>
-              </tr>
-            ))}
-
-            {!rows.length && (
-              <tr>
-                <td
-                  colSpan={8}
-                  className="px-4 py-8 text-center text-sm text-gray-500"
-                >
-                  No engagement data found.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
+    <DashboardTable
+      title="Team Member Engagement Overview"
+      description="WhatsApp, call, email and meeting activity for the selected period."
+      headers={[
+        "Team Member",
+        "Total",
+        "Calls",
+        "WhatsApp",
+        "Emails",
+        "Meetings",
+        "Completed",
+        "Last Activity"
+      ]}
+      emptyText="No engagement data found."
+      colSpan={8}
+    >
+      {rows.map(row => (
+        <tr key={row.uid || row.email || row.name}>
+          <td className="px-4 py-3">
+            <div className="font-medium text-gray-900">{row.name}</div>
+            <div className="text-xs text-gray-500">{row.email || "—"}</div>
+          </td>
+          <td className="px-4 py-3 text-right">{row.engagements}</td>
+          <td className="px-4 py-3 text-right">{row.calls}</td>
+          <td className="px-4 py-3 text-right">{row.whatsapp}</td>
+          <td className="px-4 py-3 text-right">{row.emails}</td>
+          <td className="px-4 py-3 text-right">{row.meetings}</td>
+          <td className="px-4 py-3 text-right text-green-700 font-medium">{row.completedEngagements}</td>
+          <td className="px-4 py-3 text-gray-600">{formatDateTime(row.lastActivityAt)}</td>
+        </tr>
+      ))}
+    </DashboardTable>
   );
 }
-
-/* =========================
-   ATTENDANCE TABLE
-========================== */
 
 function ManagementAttendanceTable({ rows }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-100">
-        <h2 className="text-sm font-semibold text-gray-900">
-          Team Member Attendance Overview
-        </h2>
-        <p className="text-xs text-gray-500 mt-0.5">
-          Attendance days, active sessions, late marks and working hours.
-        </p>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-xs text-gray-500">
-            <tr>
-              <th className="text-left px-4 py-3 font-medium">Team Member</th>
-              <th className="text-right px-4 py-3 font-medium">Days</th>
-              <th className="text-right px-4 py-3 font-medium">Check-ins</th>
-              <th className="text-right px-4 py-3 font-medium">Active</th>
-              <th className="text-right px-4 py-3 font-medium">Late</th>
-              <th className="text-right px-4 py-3 font-medium">Leave</th>
-              <th className="text-left px-4 py-3 font-medium">First Check-in</th>
-              <th className="text-left px-4 py-3 font-medium">Last Check-out</th>
-              <th className="text-right px-4 py-3 font-medium">Hours</th>
-            </tr>
-          </thead>
-
-          <tbody className="divide-y divide-gray-100">
-            {rows.map(row => (
-              <tr key={row.uid || row.email || row.name}>
-                <td className="px-4 py-3">
-                  <div className="font-medium text-gray-900">
-                    {row.name}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {row.department || row.email || "—"}
-                  </div>
-                </td>
-
-                <td className="px-4 py-3 text-right">
-                  {row.attendanceDays}
-                </td>
-
-                <td className="px-4 py-3 text-right">
-                  {row.checkIns}
-                </td>
-
-                <td
-                  className={`
-                    px-4 py-3 text-right font-medium
-                    ${row.activeSessions ? "text-green-700" : "text-gray-700"}
-                  `}
-                >
-                  {row.activeSessions}
-                </td>
-
-                <td
-                  className={`
-                    px-4 py-3 text-right font-medium
-                    ${row.late ? "text-amber-600" : "text-gray-700"}
-                  `}
-                >
-                  {row.late}
-                </td>
-
-                <td className="px-4 py-3 text-right">
-                  {row.leave}
-                </td>
-
-                <td className="px-4 py-3 text-gray-600">
-                  {formatDateTime(row.firstCheckIn)}
-                </td>
-
-                <td className="px-4 py-3 text-gray-600">
-                  {formatDateTime(row.lastCheckOut)}
-                </td>
-
-                <td className="px-4 py-3 text-right font-medium">
-                  {formatDuration(row.totalMinutes)}
-                </td>
-              </tr>
-            ))}
-
-            {!rows.length && (
-              <tr>
-                <td
-                  colSpan={9}
-                  className="px-4 py-8 text-center text-sm text-gray-500"
-                >
-                  No attendance data found.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
+    <DashboardTable
+      title="Team Member Attendance Overview"
+      description="Attendance days, active sessions, late marks and working hours."
+      headers={[
+        "Team Member",
+        "Days",
+        "Check-ins",
+        "Active",
+        "Late",
+        "Leave",
+        "First Check-in",
+        "Last Check-out",
+        "Hours"
+      ]}
+      emptyText="No attendance data found."
+      colSpan={9}
+    >
+      {rows.map(row => (
+        <tr key={row.uid || row.email || row.name}>
+          <td className="px-4 py-3">
+            <div className="font-medium text-gray-900">{row.name}</div>
+            <div className="text-xs text-gray-500">{row.department || row.email || "—"}</div>
+          </td>
+          <td className="px-4 py-3 text-right">{row.attendanceDays}</td>
+          <td className="px-4 py-3 text-right">{row.checkIns}</td>
+          <td className={`px-4 py-3 text-right font-medium ${row.activeSessions ? "text-green-700" : "text-gray-700"}`}>
+            {row.activeSessions}
+          </td>
+          <td className={`px-4 py-3 text-right font-medium ${row.late ? "text-amber-600" : "text-gray-700"}`}>
+            {row.late}
+          </td>
+          <td className="px-4 py-3 text-right">{row.leave}</td>
+          <td className="px-4 py-3 text-gray-600">{formatDateTime(row.firstCheckIn)}</td>
+          <td className="px-4 py-3 text-gray-600">{formatDateTime(row.lastCheckOut)}</td>
+          <td className="px-4 py-3 text-right font-medium">{formatDuration(row.totalMinutes)}</td>
+        </tr>
+      ))}
+    </DashboardTable>
   );
 }
 
-/* =========================
-   TEAM TABLE
-========================== */
-
 function ManagementTeamTable({ rows }) {
+  return (
+    <DashboardTable
+      title="Team Workload Overview"
+      description="Combined score based on leads, conversion, quotations, gross profit, engagements and attendance."
+      headers={[
+        "Team Member",
+        "Department",
+        "Role",
+        "Leads",
+        "Won",
+        "GP",
+        "Engagements",
+        "Hours",
+        "Score",
+        "Rating"
+      ]}
+      emptyText="No team data found."
+      colSpan={10}
+    >
+      {rows.map(row => (
+        <tr key={row.uid || row.email || row.name}>
+          <td className="px-4 py-3">
+            <div className="font-medium text-gray-900">{row.name}</div>
+            <div className="text-xs text-gray-500">{row.email || "—"}</div>
+          </td>
+          <td className="px-4 py-3 text-gray-600">{row.department || "—"}</td>
+          <td className="px-4 py-3 text-gray-600">{readableLabel(row.role)}</td>
+          <td className="px-4 py-3 text-right">{row.newLeads}</td>
+          <td className="px-4 py-3 text-right text-green-700 font-medium">{row.wonLeads}</td>
+          <td className="px-4 py-3 text-right font-medium">{formatCurrency(row.grossProfit)}</td>
+          <td className="px-4 py-3 text-right">{row.engagements}</td>
+          <td className="px-4 py-3 text-right font-medium">{formatDuration(row.totalMinutes)}</td>
+          <td className="px-4 py-3 text-right font-semibold">{row.score}</td>
+          <td className="px-4 py-3">
+            <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs border ${getScoreClass(row.score)}`}>
+              {getScoreLabel(row.score)}
+            </span>
+          </td>
+        </tr>
+      ))}
+    </DashboardTable>
+  );
+}
+
+function DashboardTable({
+  title,
+  description,
+  headers,
+  children,
+  emptyText,
+  colSpan
+}) {
+  const hasRows = Array.isArray(children)
+    ? children.length > 0
+    : Boolean(children);
+
   return (
     <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100">
         <h2 className="text-sm font-semibold text-gray-900">
-          Team Workload Overview
+          {title}
         </h2>
         <p className="text-xs text-gray-500 mt-0.5">
-          Combined workload score based on leads, engagements, wins and attendance.
+          {description}
         </p>
       </div>
 
@@ -1956,78 +2408,30 @@ function ManagementTeamTable({ rows }) {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-xs text-gray-500">
             <tr>
-              <th className="text-left px-4 py-3 font-medium">Team Member</th>
-              <th className="text-left px-4 py-3 font-medium">Department</th>
-              <th className="text-left px-4 py-3 font-medium">Role</th>
-              <th className="text-right px-4 py-3 font-medium">Leads</th>
-              <th className="text-right px-4 py-3 font-medium">Engagements</th>
-              <th className="text-right px-4 py-3 font-medium">Attendance Days</th>
-              <th className="text-right px-4 py-3 font-medium">Hours</th>
-              <th className="text-right px-4 py-3 font-medium">Score</th>
-              <th className="text-left px-4 py-3 font-medium">Rating</th>
+              {headers.map((header, index) => (
+                <th
+                  key={header}
+                  className={`
+                    px-4 py-3 font-medium
+                    ${index === 0 ? "text-left" : "text-right"}
+                  `}
+                >
+                  {header}
+                </th>
+              ))}
             </tr>
           </thead>
 
           <tbody className="divide-y divide-gray-100">
-            {rows.map(row => (
-              <tr key={row.uid || row.email || row.name}>
-                <td className="px-4 py-3">
-                  <div className="font-medium text-gray-900">
-                    {row.name}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {row.email || "—"}
-                  </div>
-                </td>
-
-                <td className="px-4 py-3 text-gray-600">
-                  {row.department || "—"}
-                </td>
-
-                <td className="px-4 py-3 text-gray-600">
-                  {readableLabel(row.role)}
-                </td>
-
-                <td className="px-4 py-3 text-right">
-                  {row.newLeads}
-                </td>
-
-                <td className="px-4 py-3 text-right">
-                  {row.engagements}
-                </td>
-
-                <td className="px-4 py-3 text-right">
-                  {row.attendanceDays}
-                </td>
-
-                <td className="px-4 py-3 text-right font-medium">
-                  {formatDuration(row.totalMinutes)}
-                </td>
-
-                <td className="px-4 py-3 text-right font-semibold">
-                  {row.score}
-                </td>
-
-                <td className="px-4 py-3">
-                  <span
-                    className={`
-                      inline-flex items-center px-2 py-1 rounded-full text-xs border
-                      ${getScoreClass(row.score)}
-                    `}
-                  >
-                    {getScoreLabel(row.score)}
-                  </span>
-                </td>
-              </tr>
-            ))}
-
-            {!rows.length && (
+            {hasRows ? (
+              children
+            ) : (
               <tr>
                 <td
-                  colSpan={9}
+                  colSpan={colSpan}
                   className="px-4 py-8 text-center text-sm text-gray-500"
                 >
-                  No team data found.
+                  {emptyText}
                 </td>
               </tr>
             )}
