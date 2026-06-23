@@ -8,6 +8,23 @@ import {
   orderBy,
   query
 } from "firebase/firestore";
+import {
+  Activity,
+  ArrowUpRight,
+  BadgeCheck,
+  Building2,
+  Clock3,
+  Grid3X3,
+  List,
+  Mail,
+  MapPin,
+  MessageCircle,
+  Phone,
+  SearchX,
+  TrendingUp,
+  Users,
+  Zap
+} from "lucide-react";
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
@@ -32,6 +49,14 @@ const CHANNEL_ICON_MAP = {
 ========================= */
 function normalize(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function isDeletedLead(lead) {
+  return (
+    lead?.isDelete === true ||
+    lead?.deleted === true ||
+    lead?.isDeleted === true
+  );
 }
 
 function toMillis(value) {
@@ -216,7 +241,7 @@ function getPriority({ lastEngagement, leadCount }) {
 
   return {
     label: "Normal",
-    className: "bg-gray-50 text-gray-600 border-gray-100"
+    className: "bg-gray-50 text-gray-600 border-gray-200"
   };
 }
 
@@ -233,20 +258,45 @@ function getLatestEngagementText(lastEngagement) {
 /* =========================
    STAT CARD
 ========================= */
-function StatCard({ label, value, helper }) {
+function StatCard({ label, value, helper, icon: Icon, tone = "blue" }) {
+  const toneClass = {
+    blue: "bg-blue-50 text-blue-700 border-blue-100",
+    emerald: "bg-emerald-50 text-emerald-700 border-emerald-100",
+    amber: "bg-amber-50 text-amber-700 border-amber-100",
+    orange: "bg-orange-50 text-orange-700 border-orange-100",
+    purple: "bg-purple-50 text-purple-700 border-purple-100",
+    slate: "bg-slate-50 text-slate-700 border-slate-200"
+  };
+
   return (
-    <div className="rounded-2xl border border-gray-100 bg-white px-4 py-3 shadow-sm">
-      <p className="text-xs font-medium text-gray-500">{label}</p>
+    <div className="rounded-2xl border border-gray-200 bg-white px-4 py-4  transition hover:border-blue-100 hover:shadow-md">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-gray-500">
+            {label}
+          </p>
 
-      <p className="mt-1 text-xl font-semibold text-gray-950">
-        {value}
-      </p>
+          <p className="mt-1 text-2xl font-semibold text-gray-950">
+            {value}
+          </p>
 
-      {helper && (
-        <p className="mt-1 text-[11px] text-gray-400">
-          {helper}
-        </p>
-      )}
+          {helper && (
+            <p className="mt-1 text-[11px] text-gray-400">
+              {helper}
+            </p>
+          )}
+        </div>
+
+        {Icon && (
+          <div
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border ${
+              toneClass[tone] || toneClass.blue
+            }`}
+          >
+            <Icon size={18} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -259,22 +309,26 @@ function AgentTabs({ filters, setFilters, stats }) {
     {
       label: "All",
       value: "all",
-      count: stats.totalAgents
+      count: stats.totalAgents,
+      icon: Users
     },
     {
       label: "Engaged",
       value: "engaged",
-      count: stats.engaged
+      count: stats.engaged,
+      icon: MessageCircle
     },
     {
       label: "Needs Follow-up",
       value: "not_engaged",
-      count: stats.needsFollowUp
+      count: stats.needsFollowUp,
+      icon: Clock3
     },
     {
       label: "High Leads",
       value: "high_leads",
-      count: stats.highLeadAgents
+      count: stats.highLeadAgents,
+      icon: TrendingUp
     }
   ];
 
@@ -282,6 +336,7 @@ function AgentTabs({ filters, setFilters, stats }) {
     <div className="flex gap-2 overflow-x-auto pb-1">
       {tabs.map(tab => {
         const active = filters.engagement === tab.value;
+        const Icon = tab.icon;
 
         return (
           <button
@@ -293,17 +348,21 @@ function AgentTabs({ filters, setFilters, stats }) {
                 engagement: tab.value
               }))
             }
-            className={`shrink-0 rounded-full border px-4 py-2 text-xs font-medium transition ${
+            className={`inline-flex shrink-0 items-center gap-2 rounded-full border px-4 py-2 text-xs font-semibold transition ${
               active
-                ? "border-blue-600 bg-blue-600 text-white"
-                : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                ? "border-blue-600 bg-blue-600 text-white "
+                : "border-gray-200 bg-white text-gray-600 hover:border-blue-100 hover:bg-blue-50 hover:text-blue-700"
             }`}
           >
+            <Icon size={14} />
+
             {tab.label}
 
             <span
-              className={`ml-2 ${
-                active ? "text-blue-100" : "text-gray-400"
+              className={`rounded-full px-2 py-0.5 text-[11px] ${
+                active
+                  ? "bg-white/15 text-white"
+                  : "bg-gray-100 text-gray-500"
               }`}
             >
               {tab.count}
@@ -348,17 +407,23 @@ function AgentCard({ agent, lastEngagement, leadCount, city }) {
       : "neutral";
 
   return (
-    <div className="group flex h-full flex-col rounded-2xl border border-gray-100 bg-white p-4 shadow-sm transition hover:border-blue-100 hover:shadow-md">
+    <div className="group flex h-full flex-col rounded-2xl border border-gray-200 bg-white p-4  transition hover:border-blue-100 hover:shadow-md">
       {/* HEADER */}
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-gray-950">
-            {agent.agencyName || "Unnamed Agency"}
-          </p>
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
+            <Building2 size={18} />
+          </div>
 
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
-            {agent.agentCode && <span>{agent.agentCode}</span>}
-            {contactName && <span>• {contactName}</span>}
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-gray-950">
+              {agent.agencyName || "Unnamed Agency"}
+            </p>
+
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
+              {agent.agentCode && <span>{agent.agentCode}</span>}
+              {contactName && <span>• {contactName}</span>}
+            </div>
           </div>
         </div>
 
@@ -369,7 +434,8 @@ function AgentCard({ agent, lastEngagement, leadCount, city }) {
             {priority.label}
           </span>
 
-          <span className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] font-medium text-gray-600">
+          <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] font-medium text-gray-600">
+            <BadgeCheck size={12} />
             {agent.kycStatus || agent.status || "Active"}
           </span>
         </div>
@@ -407,14 +473,19 @@ function AgentCard({ agent, lastEngagement, leadCount, city }) {
       </div>
 
       {/* CONTACT DETAILS */}
-      <div className="mt-4 rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
-        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
-          Contact Details
-        </p>
+      <div className="mt-4 rounded-xl border border-gray-200 bg-slate-50 px-3 py-3">
+        <div className="mb-2 flex items-center justify-between">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+            Contact Details
+          </p>
 
-        <div className="space-y-1.5">
-          <div className="flex items-start justify-between gap-3">
-            <span className="shrink-0 text-xs font-medium text-gray-500">
+          <Activity size={13} className="text-gray-400" />
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-gray-500">
+              <Users size={13} />
               SPOC
             </span>
 
@@ -423,8 +494,9 @@ function AgentCard({ agent, lastEngagement, leadCount, city }) {
             </span>
           </div>
 
-          <div className="flex items-start justify-between gap-3">
-            <span className="shrink-0 text-xs font-medium text-gray-500">
+          <div className="flex items-center justify-between gap-3">
+            <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-gray-500">
+              <Phone size={13} />
               Phone
             </span>
 
@@ -433,8 +505,9 @@ function AgentCard({ agent, lastEngagement, leadCount, city }) {
             </span>
           </div>
 
-          <div className="flex items-start justify-between gap-3">
-            <span className="shrink-0 text-xs font-medium text-gray-500">
+          <div className="flex items-center justify-between gap-3">
+            <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-gray-500">
+              <Mail size={13} />
               Email
             </span>
 
@@ -456,7 +529,8 @@ function AgentCard({ agent, lastEngagement, leadCount, city }) {
             }`}
           >
             <div className="flex items-center justify-between gap-3">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+              <p className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                <MessageCircle size={13} />
                 Latest Engagement
               </p>
 
@@ -480,7 +554,8 @@ function AgentCard({ agent, lastEngagement, leadCount, city }) {
           </div>
         ) : (
           <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-3">
-            <p className="text-xs font-medium text-amber-700">
+            <p className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700">
+              <Clock3 size={13} />
               No engagement recorded yet
             </p>
 
@@ -491,20 +566,22 @@ function AgentCard({ agent, lastEngagement, leadCount, city }) {
         )}
       </div>
 
-      {/* ACTIONS - LIMITED CTA */}
-      <div className="mt-4 grid grid-cols-2 gap-2 border-t border-gray-100 pt-3">
+      {/* ACTIONS */}
+      <div className="mt-4 grid grid-cols-2 gap-2 border-t border-gray-200 pt-3">
         <Link
           href={`/travel-agents/${agent.id}`}
-          className="flex items-center justify-center rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+          className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
         >
           View Details
+          <ArrowUpRight size={14} />
         </Link>
 
         <Link
           href={`/engagements/travel-agent/${agent.id}`}
-          className="flex items-center justify-center rounded-xl bg-blue-600 px-3 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700"
+          className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700"
         >
-          View Engagements
+          Engagements
+          <ArrowUpRight size={14} />
         </Link>
       </div>
     </div>
@@ -522,10 +599,10 @@ function AgentTable({
   agentRefs
 }) {
   return (
-    <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
+    <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white ">
       <div className="overflow-x-auto">
         <table className="min-w-[1050px] w-full text-sm">
-          <thead className="border-b border-gray-100 bg-gray-50">
+          <thead className="border-b border-gray-200 bg-gray-50">
             <tr>
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
                 Agency
@@ -600,24 +677,30 @@ function AgentTable({
                   }
                 >
                   <td className="px-4 py-3 align-top">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="truncate font-medium text-gray-900">
-                          {agent.agencyName || "Unnamed Agency"}
-                        </p>
-
-                        {isLatestEngagement && (
-                          <span className="shrink-0 rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-medium text-white">
-                            Latest
-                          </span>
-                        )}
+                    <div className="flex min-w-0 items-start gap-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
+                        <Building2 size={16} />
                       </div>
 
-                      {agent.agentCode && (
-                        <p className="mt-1 text-xs text-gray-500">
-                          {agent.agentCode}
-                        </p>
-                      )}
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="truncate font-medium text-gray-900">
+                            {agent.agencyName || "Unnamed Agency"}
+                          </p>
+
+                          {isLatestEngagement && (
+                            <span className="shrink-0 rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-medium text-white">
+                              Latest
+                            </span>
+                          )}
+                        </div>
+
+                        {agent.agentCode && (
+                          <p className="mt-1 text-xs text-gray-500">
+                            {agent.agentCode}
+                          </p>
+                        )}
+                      </div>
                     </div>
                   </td>
 
@@ -628,7 +711,8 @@ function AgentTable({
                   </td>
 
                   <td className="px-4 py-3 align-top">
-                    <p className="text-sm text-gray-700">
+                    <p className="inline-flex items-center gap-1.5 text-sm text-gray-700">
+                      {city ? <MapPin size={13} /> : null}
                       {city || "—"}
                     </p>
                   </td>
@@ -641,12 +725,16 @@ function AgentTable({
 
                   <td className="px-4 py-3 align-top">
                     <div className="space-y-1">
-                      <p className="text-xs text-gray-700">
+                      <p className="inline-flex items-center gap-1.5 text-xs text-gray-700">
+                        <Phone size={12} />
                         {phone || "No phone"}
                       </p>
 
-                      <p className="max-w-[190px] truncate text-xs text-gray-500">
-                        {email || "No email"}
+                      <p className="flex max-w-[190px] items-center gap-1.5 truncate text-xs text-gray-500">
+                        <Mail size={12} className="shrink-0" />
+                        <span className="truncate">
+                          {email || "No email"}
+                        </span>
                       </p>
                     </div>
                   </td>
@@ -654,7 +742,8 @@ function AgentTable({
                   <td className="px-4 py-3 align-top">
                     {lastEngagement ? (
                       <div>
-                        <p className="text-xs font-medium text-gray-800">
+                        <p className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-800">
+                          <MessageCircle size={12} />
                           {formatChannel(lastEngagement.channel) ||
                             "Engagement"}
                         </p>
@@ -673,7 +762,8 @@ function AgentTable({
                         )}
                       </div>
                     ) : (
-                      <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
+                        <Clock3 size={12} />
                         No activity
                       </span>
                     )}
@@ -691,7 +781,8 @@ function AgentTable({
                         {health}
                       </p>
 
-                      <p className="text-xs text-gray-400">
+                      <p className="inline-flex items-center gap-1 text-xs text-gray-400">
+                        <BadgeCheck size={12} />
                         {agent.kycStatus || agent.status || "Active"}
                       </p>
                     </div>
@@ -701,16 +792,18 @@ function AgentTable({
                     <div className="flex justify-end gap-2">
                       <Link
                         href={`/travel-agents/${agent.id}`}
-                        className="inline-flex rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
                       >
                         View Details
+                        <ArrowUpRight size={13} />
                       </Link>
 
                       <Link
-                        href={`/travel-agents/${agent.id}/engagements`}
-                        className="inline-flex rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700"
+                        href={`/engagements/travel-agent/${agent.id}`}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700"
                       >
-                        View Engagements
+                        Engagements
+                        <ArrowUpRight size={13} />
                       </Link>
                     </div>
                   </td>
@@ -837,10 +930,12 @@ export default function UserTravelAgentsPage() {
       collection(db, "leads"),
       snap => {
         setLeads(
-          snap.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          }))
+          snap.docs
+            .map(doc => ({
+              id: doc.id,
+              ...doc.data()
+            }))
+            .filter(lead => !isDeletedLead(lead))
         );
 
         setLoadingLeads(false);
@@ -1183,7 +1278,7 @@ export default function UserTravelAgentsPage() {
   if (isPageLoading) {
     return (
       <main className="min-h-screen bg-gray-50">
-        <div className="mx-auto max-w-7xl space-y-4 px-4 py-6">
+        <div className="mx-auto max-w-9xl space-y-4 px-4 py-6">
           {Array.from({ length: 5 }).map((_, index) => (
             <CardSkeleton key={index} />
           ))}
@@ -1194,21 +1289,26 @@ export default function UserTravelAgentsPage() {
 
   return (
     <main className="min-h-screen bg-gray-50">
-      <div className="mx-auto max-w-7xl space-y-5 px-4 py-6">
+      <div className="mx-auto max-w-9xl space-y-5 px-4 py-6">
         {/* HEADER */}
-        <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
+        <div className="rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <h1 className="text-xl font-semibold text-gray-950">
+              <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white/90">
+                <Building2 size={14} />
+                Travel Agent Analytics
+              </div>
+
+              <h1 className="text-2xl font-semibold tracking-tight text-white">
                 Travel Agents
               </h1>
 
-              <p className="mt-1 text-sm text-gray-500">
-                Detailed agent engagement overview with leads, contact,
-                activity health, and latest follow-up status.
+              <p className="mt-1 max-w-3xl text-sm leading-6 text-blue-100">
+                Detailed agent engagement overview with leads, contact, activity
+                health, and latest follow-up status.
               </p>
 
-              <p className="mt-2 text-xs text-gray-400">
+              <p className="mt-2 text-xs text-blue-100/80">
                 Showing {paginationStart}-{paginationEnd} of{" "}
                 {sortedAgents.length} travel agents
               </p>
@@ -1219,8 +1319,9 @@ export default function UserTravelAgentsPage() {
                 <button
                   type="button"
                   onClick={jumpToLatestEngagement}
-                  className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs font-medium text-white hover:bg-white/20"
                 >
+                  <MessageCircle size={13} />
                   Jump to Latest Engagement
                 </button>
               )}
@@ -1228,36 +1329,46 @@ export default function UserTravelAgentsPage() {
               <select
                 value={String(pageSize)}
                 onChange={e => setPageSize(Number(e.target.value))}
-                className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 outline-none"
+                className="rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs font-medium text-white outline-none"
               >
-                <option value="6">6 / page</option>
-                <option value="12">12 / page</option>
-                <option value="24">24 / page</option>
-                <option value="48">48 / page</option>
+                <option className="text-gray-900" value="6">
+                  6 / page
+                </option>
+                <option className="text-gray-900" value="12">
+                  12 / page
+                </option>
+                <option className="text-gray-900" value="24">
+                  24 / page
+                </option>
+                <option className="text-gray-900" value="48">
+                  48 / page
+                </option>
               </select>
 
-              <div className="flex rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
+              <div className="flex rounded-lg border border-white/20 bg-white/10 p-1">
                 <button
                   type="button"
                   onClick={() => setView("grid")}
-                  className={`rounded-md px-3 py-1.5 text-xs font-medium ${
+                  className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium ${
                     view === "grid"
-                      ? "bg-blue-600 text-white"
-                      : "text-gray-600 hover:bg-gray-50"
+                      ? "bg-white text-blue-700"
+                      : "text-white hover:bg-white/10"
                   }`}
                 >
+                  <Grid3X3 size={13} />
                   Grid
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setView("list")}
-                  className={`rounded-md px-3 py-1.5 text-xs font-medium ${
+                  className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium ${
                     view === "list"
-                      ? "bg-blue-600 text-white"
-                      : "text-gray-600 hover:bg-gray-50"
+                      ? "bg-white text-blue-700"
+                      : "text-white hover:bg-white/10"
                   }`}
                 >
+                  <List size={13} />
                   List
                 </button>
               </div>
@@ -1268,39 +1379,51 @@ export default function UserTravelAgentsPage() {
         {/* STATS */}
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
           <StatCard
+            icon={Building2}
             label="Total Agents"
             value={stats.totalAgents}
             helper="All agents"
+            tone="blue"
           />
 
           <StatCard
+            icon={Zap}
             label="Total Leads"
             value={stats.totalLeads}
             helper="Linked leads"
+            tone="purple"
           />
 
           <StatCard
+            icon={MessageCircle}
             label="Engaged"
             value={stats.engaged}
             helper="Has activity"
+            tone="emerald"
           />
 
           <StatCard
+            icon={SearchX}
             label="No Activity"
             value={stats.noActivity}
             helper="No engagement"
+            tone="amber"
           />
 
           <StatCard
+            icon={Clock3}
             label="Stale"
             value={stats.staleFollowUps}
             helper="15+ days old"
+            tone="orange"
           />
 
           <StatCard
+            icon={TrendingUp}
             label="High Leads"
             value={stats.highLeadAgents}
             helper="5+ leads"
+            tone="slate"
           />
         </div>
 
@@ -1329,7 +1452,7 @@ export default function UserTravelAgentsPage() {
 
         {/* CONTENT */}
         {sortedAgents.length === 0 ? (
-          <div className="rounded-2xl border border-gray-100 bg-white p-8 shadow-sm">
+          <div className="rounded-2xl border border-gray-200 bg-white p-8 ">
             <EmptyState
               icon="🧳"
               title="No travel agents found"
@@ -1370,7 +1493,8 @@ export default function UserTravelAgentsPage() {
                       }
                     >
                       {isLatestEngagement && (
-                        <div className="mb-2 inline-flex rounded-full bg-blue-600 px-3 py-1 text-[11px] font-medium text-white">
+                        <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-blue-600 px-3 py-1 text-[11px] font-medium text-white">
+                          <MessageCircle size={12} />
                           Latest Engagement
                         </div>
                       )}
@@ -1396,7 +1520,7 @@ export default function UserTravelAgentsPage() {
             )}
 
             {/* PAGINATION */}
-            <div className="flex flex-col gap-3 border-t border-gray-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-3 border-t border-gray-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs text-gray-500">
                 Showing {paginationStart}-{paginationEnd} of{" "}
                 {sortedAgents.length}

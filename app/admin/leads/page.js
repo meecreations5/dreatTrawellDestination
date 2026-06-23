@@ -11,7 +11,12 @@ import {
   serverTimestamp,
   updateDoc
 } from "firebase/firestore";
-import { Loader2, ShieldAlert } from "lucide-react";
+import {
+  Clock3,
+  Loader2,
+  ShieldAlert,
+  Sparkles
+} from "lucide-react";
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
@@ -23,6 +28,17 @@ import AdminLeadCardSkeleton from "@/components/admin/AdminLeadCardSkeleton";
 import EmptyState from "@/components/ui/EmptyState";
 
 import { exportLeadsCsv } from "@/lib/exportLeadsCsv";
+
+/* =========================
+   BASIC HELPERS
+========================= */
+const getFirstValue = (...values) => {
+  return (
+    values.find(
+      value => typeof value === "string" && value.trim().length > 0
+    )?.trim() || ""
+  );
+};
 
 /* =========================
    ROLE HELPERS
@@ -61,12 +77,18 @@ const isUserSuperAdmin = user => {
 const toDate = value => {
   if (!value) return null;
 
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+
   if (typeof value?.toDate === "function") {
-    return value.toDate();
+    const parsed = value.toDate();
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
   if (typeof value === "number") {
-    return new Date(value);
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
   if (typeof value === "string") {
@@ -74,8 +96,9 @@ const toDate = value => {
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
-  if (value?.seconds) {
-    return new Date(value.seconds * 1000);
+  if (typeof value?.seconds === "number") {
+    const parsed = new Date(value.seconds * 1000);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
   return null;
@@ -91,9 +114,58 @@ const isSameDay = (a, b) => {
   );
 };
 
+const getYesterday = () => {
+  const date = new Date();
+  date.setDate(date.getDate() - 1);
+  return date;
+};
+
+const getLeadCreatedDate = lead => {
+  return (
+    toDate(lead?.createdAt) ||
+    toDate(lead?.createdOn) ||
+    toDate(lead?.created_at) ||
+    toDate(lead?.assignedAt) ||
+    null
+  );
+};
+
+const formatLeadDate = value => {
+  const date = toDate(value);
+
+  if (!date) return "Date not available";
+
+  const today = new Date();
+  const yesterday = getYesterday();
+
+  const time = date.toLocaleTimeString("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true
+  });
+
+  if (isSameDay(date, today)) {
+    return `Today, ${time}`;
+  }
+
+  if (isSameDay(date, yesterday)) {
+    return `Yesterday, ${time}`;
+  }
+
+  return `${date.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric"
+  })}, ${time}`;
+};
+
 /* =========================
    LEAD HELPERS
 ========================= */
+const isLeadDeleted = lead => {
+  return lead?.deleted === true || lead?.isDeleted === true;
+};
+
 const getLeadStatus = lead => {
   const status = String(lead?.status || "").toLowerCase();
 
@@ -145,12 +217,25 @@ const getCustomerName = lead => {
 };
 
 const getAssignedName = lead => {
-  return (
-    lead.assignedTo ||
-    lead.assignedToName ||
-    lead.assignedUserName ||
-    ""
+  return getFirstValue(
+    lead.assignedToName,
+    lead.assignedUserName,
+    lead.assignedTo,
+    lead.assignedToEmail,
+    lead.assignedToUid
   );
+};
+
+const getAssignedFilterValues = lead => {
+  return [
+    lead.assignedToUid,
+    lead.assignedToEmail,
+    lead.assignedTo,
+    lead.assignedToName,
+    lead.assignedUserName
+  ]
+    .filter(Boolean)
+    .map(value => String(value).trim());
 };
 
 const getDestinationName = lead => {
@@ -179,11 +264,66 @@ const getSearchText = lead => {
     .toLowerCase();
 };
 
+const getUserOption = user => {
+  const value = getFirstValue(
+    user.uid,
+    user.id,
+    user.userId,
+    user.email,
+    user.workEmail,
+    user.officialEmail
+  );
+
+  const label = getFirstValue(
+    user.displayName,
+    user.fullName,
+    user.name,
+    user.email,
+    user.workEmail,
+    user.officialEmail
+  );
+
+  if (!value || !label) return null;
+
+  return {
+    value,
+    label,
+    email: getFirstValue(user.email, user.workEmail, user.officialEmail)
+  };
+};
+
+const getLeadAssignedOption = lead => {
+  const value = getFirstValue(
+    lead.assignedToUid,
+    lead.assignedToEmail,
+    lead.assignedTo,
+    lead.assignedToName,
+    lead.assignedUserName
+  );
+
+  const label = getFirstValue(
+    lead.assignedToName,
+    lead.assignedUserName,
+    lead.assignedTo,
+    lead.assignedToEmail,
+    lead.assignedToUid
+  );
+
+  if (!value || !label) return null;
+
+  return {
+    value,
+    label,
+    email: getFirstValue(lead.assignedToEmail, lead.assignedTo)
+  };
+};
+
 export default function AdminLeadsPage() {
   const router = useRouter();
   const { user } = useAuth();
 
   const [leads, setLeads] = useState([]);
+  const [teamMembers, setTeamMembers] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const [view, setView] = useState("card");
@@ -197,12 +337,12 @@ export default function AdminLeadsPage() {
     stage: "all",
     assignedTo: "all",
     nextAction: "all",
-    status: "all",
     leadHealth: "all",
+    dateRange: "all",
     search: ""
   });
 
-  const [sort, setSort] = useState({
+  const [sort] = useState({
     key: "createdAt",
     direction: "desc"
   });
@@ -218,7 +358,7 @@ export default function AdminLeadsPage() {
     actionLoading[`${leadId}-${action}`] === true;
 
   /* =========================
-     REALTIME LOAD
+     REALTIME LOAD - LEADS
   ========================== */
   useEffect(() => {
     const q = query(
@@ -246,6 +386,58 @@ export default function AdminLeadsPage() {
 
     return () => unsub();
   }, []);
+
+  /* =========================
+     REALTIME LOAD - USERS / TEAM
+     This fills All Team dropdown.
+  ========================== */
+  useEffect(() => {
+    const unsub = onSnapshot(
+      collection(db, "users"),
+      snap => {
+        setTeamMembers(
+          snap.docs.map(d => ({
+            id: d.id,
+            ...d.data()
+          }))
+        );
+      },
+      error => {
+        console.warn("Unable to load users for team filter:", error);
+        setTeamMembers([]);
+      }
+    );
+
+    return () => unsub();
+  }, []);
+
+  const activeLeads = useMemo(() => {
+    return leads.filter(lead => !isLeadDeleted(lead));
+  }, [leads]);
+
+  const teamOptions = useMemo(() => {
+    const map = new Map();
+
+    teamMembers.forEach(member => {
+      const option = getUserOption(member);
+      if (!option) return;
+
+      map.set(option.value, option);
+    });
+
+    activeLeads.forEach(lead => {
+      const option = getLeadAssignedOption(lead);
+      if (!option) return;
+
+      if (!map.has(option.value)) {
+        map.set(option.value, option);
+      }
+    });
+
+    return Array.from(map.values()).sort((a, b) =>
+      String(a.label).localeCompare(String(b.label))
+    );
+  }, [teamMembers, activeLeads]);
 
   /* =========================
      SUPER ADMIN ACTIONS
@@ -302,9 +494,9 @@ export default function AdminLeadsPage() {
     setBusy(leadId, "delete", true);
 
     try {
-      // Soft delete for CRM safety
       await updateDoc(doc(db, "leads", leadId), {
         deleted: true,
+        isDeleted: true,
         deletedAt: serverTimestamp(),
         deletedByUid: user?.uid || "",
         deletedByName: user?.displayName || user?.email || "",
@@ -336,11 +528,7 @@ export default function AdminLeadsPage() {
      FILTERED LEADS
   ========================== */
   const filteredLeads = useMemo(() => {
-    return leads.filter(lead => {
-      if (lead.deleted === true) {
-        return false;
-      }
-
+    return activeLeads.filter(lead => {
       const search = filters.search.trim().toLowerCase();
 
       if (search && !getSearchText(lead).includes(search)) {
@@ -354,18 +542,12 @@ export default function AdminLeadsPage() {
         return false;
       }
 
-      if (
-        filters.assignedTo !== "all" &&
-        lead.assignedToUid !== filters.assignedTo
-      ) {
-        return false;
-      }
+      if (filters.assignedTo !== "all") {
+        const assignedValues = getAssignedFilterValues(lead);
 
-      if (
-        filters.status !== "all" &&
-        getLeadStatus(lead) !== filters.status
-      ) {
-        return false;
+        if (!assignedValues.includes(filters.assignedTo)) {
+          return false;
+        }
       }
 
       if (
@@ -373,6 +555,22 @@ export default function AdminLeadsPage() {
         getLeadHealth(lead) !== filters.leadHealth
       ) {
         return false;
+      }
+
+      const createdDate = getLeadCreatedDate(lead);
+      const today = new Date();
+      const yesterday = getYesterday();
+
+      if (filters.dateRange === "today") {
+        if (!createdDate || !isSameDay(createdDate, today)) {
+          return false;
+        }
+      }
+
+      if (filters.dateRange === "yesterday") {
+        if (!createdDate || !isSameDay(createdDate, yesterday)) {
+          return false;
+        }
       }
 
       const nextActionAt = toDate(lead.nextActionAt);
@@ -395,7 +593,7 @@ export default function AdminLeadsPage() {
 
       return true;
     });
-  }, [leads, filters]);
+  }, [activeLeads, filters]);
 
   /* =========================
      SORTED LEADS
@@ -404,7 +602,7 @@ export default function AdminLeadsPage() {
     const getSortValue = lead => {
       switch (sort.key) {
         case "createdAt":
-          return toDate(lead.createdAt)?.getTime() || 0;
+          return getLeadCreatedDate(lead)?.getTime() || 0;
 
         case "nextActionAt":
           return toDate(lead.nextActionAt)?.getTime() || 0;
@@ -419,7 +617,7 @@ export default function AdminLeadsPage() {
           return String(lead.stage || "").toLowerCase();
 
         default:
-          return toDate(lead.createdAt)?.getTime() || 0;
+          return getLeadCreatedDate(lead)?.getTime() || 0;
       }
     };
 
@@ -441,20 +639,31 @@ export default function AdminLeadsPage() {
      UI
   ========================== */
   return (
-    <main className="p-6 w-full mx-auto space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <main className="w-full mx-auto space-y-4 p-4 sm:p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">
+          <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-[11px] font-medium text-blue-700">
+            <Sparkles className="h-3.5 w-3.5" />
+            Lead Management
+          </div>
+
+          <h1 className="mt-2 text-xl font-semibold text-gray-900">
             Admin — Leads
           </h1>
+
           <p className="mt-1 text-xs text-gray-500">
-            Manage leads, assignments, follow-ups and admin controls
+            Manage leads, assignments, follow-ups and admin controls.
           </p>
         </div>
 
-        <div className="text-right">
-          <p className="text-xs text-gray-500">
-            {sortedLeads.length} of {leads.filter(l => !l.deleted).length} leads
+        <div className="rounded-2xl border border-gray-100 bg-white px-4 py-3 text-right shadow-sm">
+          <p className="text-xs text-gray-500">Showing</p>
+
+          <p className="text-lg font-semibold text-gray-900">
+            {sortedLeads.length}
+            <span className="text-xs font-medium text-gray-400">
+              {" "}of {activeLeads.length}
+            </span>
           </p>
 
           {isSuperAdmin && (
@@ -470,9 +679,8 @@ export default function AdminLeadsPage() {
         setView={setView}
         filters={filters}
         setFilters={setFilters}
-        sort={sort}
-        setSort={setSort}
-        totalCount={leads.filter(l => !l.deleted).length}
+        teamOptions={teamOptions}
+        totalCount={activeLeads.length}
         filteredCount={sortedLeads.length}
         isSuperAdmin={isSuperAdmin}
         onExport={() => {
@@ -496,23 +704,42 @@ export default function AdminLeadsPage() {
       {!loading && sortedLeads.length === 0 && (
         <EmptyState
           title="No leads found"
-          description="Try adjusting filters"
+          description="Try adjusting filters."
         />
       )}
 
       {!loading && view === "card" && sortedLeads.length > 0 && (
         <div className="space-y-3">
-          {sortedLeads.map(lead => (
-            <AdminLeadCard
-              key={lead.id}
-              lead={lead}
-              isSuperAdmin={isSuperAdmin}
-              onStatusChange={handleStatusChange}
-              onDelete={setDeleteTarget}
-              statusBusy={isBusy(lead.id, "status")}
-              deleteBusy={isBusy(lead.id, "delete")}
-            />
-          ))}
+          {sortedLeads.map(lead => {
+            const createdDate = getLeadCreatedDate(lead);
+
+            return (
+              <div
+                key={lead.id}
+                className="group overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm transition hover:border-blue-100 hover:shadow-md"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 bg-gradient-to-r from-blue-50 via-white to-white px-4 py-2">
+                  <div className="text-xs font-medium text-blue-700">
+                    {lead.leadCode || "Lead"}
+                  </div>
+
+                  <div className="inline-flex items-center gap-1.5 rounded-full border border-blue-100 bg-white px-2.5 py-1 text-[11px] font-medium text-blue-700 shadow-sm">
+                    <Clock3 className="h-3.5 w-3.5" />
+                    {formatLeadDate(createdDate)}
+                  </div>
+                </div>
+
+                <AdminLeadCard
+                  lead={lead}
+                  isSuperAdmin={isSuperAdmin}
+                  onStatusChange={handleStatusChange}
+                  onDelete={setDeleteTarget}
+                  statusBusy={isBusy(lead.id, "status")}
+                  deleteBusy={isBusy(lead.id, "delete")}
+                />
+              </div>
+            );
+          })}
         </div>
       )}
 

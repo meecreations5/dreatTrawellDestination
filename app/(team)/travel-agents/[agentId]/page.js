@@ -13,9 +13,11 @@ import {
   BadgeCheck,
   Briefcase,
   Building2,
+  CheckCircle2,
   ExternalLink,
   Globe2,
   Landmark,
+  Link2,
   Mail,
   MapPin,
   MessageCircle,
@@ -24,9 +26,7 @@ import {
   ShieldCheck,
   UserRound,
   Users,
-  AlertTriangle,
-  CheckCircle2,
-  Link2
+  AlertTriangle
 } from "lucide-react";
 
 import TravelChip from "@/components/ui/TravelChip";
@@ -357,14 +357,15 @@ function SummaryCard({
     violet: "border-violet-100 bg-violet-50 text-violet-700",
     rose: "border-rose-100 bg-rose-50 text-rose-700",
     green: "border-green-100 bg-green-50 text-green-700",
-    red: "border-red-100 bg-red-50 text-red-700"
+    red: "border-red-100 bg-red-50 text-red-700",
+    gray: "border-gray-200 bg-gray-50 text-gray-600"
   };
 
   return (
-    <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm transition hover:shadow-md">
+    <div className="rounded-2xl border border-gray-200 bg-white p-4  transition hover:border-blue-100 hover:shadow-md">
       <div className="flex items-start gap-3">
         <div
-          className={`rounded-xl border p-2 ${
+          className={`rounded-2xl border p-2 ${
             toneMap[tone] || toneMap.blue
           }`}
         >
@@ -405,25 +406,15 @@ function SectionCard({
     rose: "bg-rose-50 text-rose-700",
     slate: "bg-slate-50 text-slate-700",
     green: "bg-green-50 text-green-700",
-    red: "bg-red-50 text-red-700"
-  };
-
-  const lineMap = {
-    blue: "from-blue-500 to-indigo-500",
-    emerald: "from-emerald-500 to-teal-500",
-    amber: "from-amber-500 to-orange-500",
-    violet: "from-violet-500 to-purple-500",
-    rose: "from-rose-500 to-pink-500",
-    slate: "from-slate-500 to-gray-500",
-    green: "from-green-500 to-emerald-500",
-    red: "from-red-500 to-rose-500"
+    red: "bg-red-50 text-red-700",
+    gray: "bg-gray-50 text-gray-600"
   };
 
   return (
-    <section className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm transition hover:shadow-md">
+    <section className="rounded-2xl border border-gray-200 bg-white p-5  transition hover:border-blue-100 hover:shadow-md">
       <div className="mb-4 flex items-center gap-3">
         <div
-          className={`rounded-xl p-2 ${
+          className={`rounded-2xl p-2 ${
             toneMap[tone] || toneMap.blue
           }`}
         >
@@ -434,12 +425,6 @@ function SectionCard({
           <h2 className="text-sm font-semibold text-gray-950">
             {title}
           </h2>
-
-          <div
-            className={`mt-1 h-1 w-10 rounded-full bg-gradient-to-r ${
-              lineMap[tone] || lineMap.blue
-            }`}
-          />
         </div>
       </div>
 
@@ -482,7 +467,7 @@ function ProfileCompletionBadge({ completion }) {
     <span
       className={`
         inline-flex items-center gap-1.5 rounded-full border px-3 py-1
-        text-xs font-semibold backdrop-blur
+        text-xs font-semibold
         ${toneClasses[completion.tone] || toneClasses.gray}
       `}
     >
@@ -581,7 +566,7 @@ function ProfileCompletionPanel({ completion }) {
 
 function SpocCard({ spoc }) {
   return (
-    <div className="rounded-xl border border-blue-100 bg-gradient-to-br from-white to-blue-50/50 p-4 shadow-sm">
+    <div className="rounded-xl border border-gray-200 bg-white p-4  transition hover:border-blue-100 hover:shadow-md">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -602,13 +587,13 @@ function SpocCard({ spoc }) {
         </div>
 
         {spoc.status && (
-          <span className="rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600">
+          <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-medium text-gray-600">
             {formatLabel(spoc.status)}
           </span>
         )}
       </div>
 
-      <div className="mt-3 space-y-2">
+      <div className="mt-3 space-y-2 rounded-xl border border-gray-200 bg-slate-50 px-3 py-3">
         {spoc.mobile || spoc.phone ? (
           <a
             href={`tel:${spoc.mobile || spoc.phone}`}
@@ -750,171 +735,158 @@ export default function TravelAgentDetailPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-blue-50 via-gray-50 to-gray-50">
-      <div className="mx-auto max-w-7xl space-y-5 px-4 py-6">
-        {/* BACK */}
-        <Link
-          href="/travel-agents"
-          className="inline-flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-blue-700"
-        >
-          <ArrowLeft size={16} />
-          Back to Travel Agents
-        </Link>
+  <main className="min-h-screen">
+    <div className="mx-auto max-w-9xl space-y-5 px-4 py-6">
+      {/* BACK */}
+      <Link
+        href="/travel-agents"
+        className="inline-flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-blue-700"
+      >
+        <ArrowLeft size={16} />
+        Back to Travel Agents
+      </Link>
 
-        {/* HEADER */}
-        <section className="overflow-hidden rounded-3xl border border-blue-100 bg-white shadow-sm">
-          <div className="relative border-b border-blue-100 bg-gradient-to-br from-blue-600 via-indigo-600 to-violet-700 p-5 text-white sm:p-6">
-            <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-white/10 blur-2xl" />
-            <div className="absolute bottom-0 left-20 h-28 w-28 rounded-full bg-cyan-300/20 blur-2xl" />
+      {/* HEADER - SAME STYLE AS TRAVEL AGENT LISTING */}
+      <section className="rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 p-5 ">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+          <div className="min-w-0">
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white/90">
+              <Building2 size={14} />
+              Travel Agent Profile
+            </div>
 
-            <div className="relative flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  {agent.agentCode && (
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white backdrop-blur">
-                      <Building2 size={13} />
-                      {agent.agentCode}
-                    </span>
-                  )}
+            <div className="flex flex-wrap items-center gap-2">
+              {agent.agentCode && (
+                <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white">
+                  {agent.agentCode}
+                </span>
+              )}
 
-                  {agent.status && (
-                    <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white backdrop-blur">
-                      {formatLabel(agent.status)}
-                    </span>
-                  )}
+              {agent.status && (
+                <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white">
+                  {formatLabel(agent.status)}
+                </span>
+              )}
 
-                  {agent.relationshipStage && (
-                    <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white backdrop-blur">
-                      {formatLabel(agent.relationshipStage)}
-                    </span>
-                  )}
+              {agent.kycStatus && (
+                <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white">
+                  KYC: {formatLabel(agent.kycStatus)}
+                </span>
+              )}
 
-                  {agent.kycStatus && (
-                    <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white backdrop-blur">
-                      KYC: {formatLabel(agent.kycStatus)}
-                    </span>
-                  )}
+              <ProfileCompletionBadge completion={completion} />
+            </div>
 
-                  <ProfileCompletionBadge completion={completion} />
-                </div>
+            <h1 className="mt-4 text-2xl font-semibold tracking-tight text-white md:text-3xl">
+              {agent.agencyName || "Unnamed Travel Agent"}
+            </h1>
 
-                <h1 className="mt-4 text-2xl font-semibold tracking-tight text-white">
-                  {agent.agencyName || "Unnamed Travel Agent"}
-                </h1>
+            <p className="mt-1 max-w-5xl text-sm leading-6 text-blue-100">
+              Manage profile, SPOCs, business details, destinations,
+              communication preferences, and profile completion from one place.
+            </p>
 
-                <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-blue-50">
-                  <span className="inline-flex items-center gap-1.5">
-                    <MapPin size={15} />
-                    {locationLabel || "Location not added"}
-                  </span>
+            <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-blue-50">
+              <span className="inline-flex items-center gap-1.5">
+                <MapPin size={15} />
+                {locationLabel || "Location not added"}
+              </span>
 
-                  <span className="inline-flex items-center gap-1.5">
-                    <UserRound size={15} />
-                    {primarySpoc?.name || "Primary SPOC not added"}
-                  </span>
+              <span className="inline-flex items-center gap-1.5">
+                <UserRound size={15} />
+                {primarySpoc?.name || "Primary SPOC not added"}
+              </span>
 
-                  {websiteHref && (
-                    <a
-                      href={websiteHref}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1.5 text-white hover:underline"
-                    >
-                      <Globe2 size={15} />
-                      Website
-                    </a>
-                  )}
-
-                  <Link
-                    href={profilePath}
-                    className="inline-flex items-center gap-1.5 text-white hover:underline"
-                  >
-                    <ExternalLink size={15} />
-                    Profile Page
-                  </Link>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap lg:shrink-0 lg:justify-end">
-                <Link
-                  href={`/engagements/travel-agent/${agentId}`}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-blue-700 shadow-sm hover:bg-blue-50"
+              {websiteHref && (
+                <a
+                  href={websiteHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-white hover:underline"
                 >
-                  <MessageCircle size={16} />
-                  View Engagements
-                </Link>
-
-                <Link
-                  href={`/leads?agentId=${agentId}`}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/25 bg-white/10 px-4 py-2.5 text-sm font-medium text-white backdrop-blur hover:bg-white/20"
-                >
-                  <Users size={16} />
-                  View Leads
-                </Link>
-
-                <button
-                  type="button"
-                  onClick={copyProfileLink}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/25 bg-white/10 px-4 py-2.5 text-sm font-medium text-white backdrop-blur hover:bg-white/20"
-                >
-                  {profileCopied ? (
-                    <CheckCircle2 size={16} />
-                  ) : (
-                    <Link2 size={16} />
-                  )}
-                  {profileCopied ? "Link Copied" : "Copy Profile Link"}
-                </button>
-              </div>
+                  <Globe2 size={15} />
+                  Website
+                </a>
+              )}
             </div>
           </div>
 
-          {/* SUMMARY CARDS */}
-          <div className="grid grid-cols-1 gap-3 bg-gradient-to-b from-blue-50/60 to-white p-4 sm:grid-cols-2 lg:grid-cols-4">
-            <SummaryCard
-              icon={BadgeCheck}
-              label="Profile Completion"
-              value={completion.label}
-              helper={
-                completion.complete
-                  ? "Ready for engagement"
-                  : "Some fields are missing"
-              }
-              tone={completion.tone}
-            />
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 xl:w-[560px]">
+            <Link
+              href={`/engagements/travel-agent/${agentId}`}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-blue-700  hover:bg-blue-50"
+            >
+              <MessageCircle size={16} />
+              Engagements
+            </Link>
 
-            <SummaryCard
-              icon={Landmark}
-              label="Agency Type"
-              value={formatLabel(agent.agencyType)}
-              tone="blue"
-            />
+            <Link
+              href={`/leads?agentId=${agentId}`}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/25 bg-white/10 px-4 py-2.5 text-sm font-medium text-white hover:bg-white/20"
+            >
+              <Users size={16} />
+              Leads
+            </Link>
 
-            <SummaryCard
-              icon={UserRound}
-              label="Primary SPOC"
-              value={primarySpoc?.name || "Not added"}
-              helper={primarySpoc?.designation}
-              tone="emerald"
-            />
-
-            <SummaryCard
-              icon={Route}
-              label="Destinations"
-              value={destinations.length}
-              helper={
-                destinations.length
-                  ? "Mapped destinations"
-                  : "No destinations"
-              }
-              tone="violet"
-            />
+            <button
+              type="button"
+              onClick={copyProfileLink}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/25 bg-white/10 px-4 py-2.5 text-sm font-medium text-white hover:bg-white/20"
+            >
+              {profileCopied ? <CheckCircle2 size={16} /> : <Link2 size={16} />}
+              {profileCopied ? "Copied" : "Copy Link"}
+            </button>
           </div>
-        </section>
+        </div>
+      </section>
 
-        {/* MAIN GRID */}
-        <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          {/* LEFT COLUMN */}
-          <div className="space-y-6 lg:col-span-2">
+      {/* SUMMARY CARDS */}
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard
+          icon={BadgeCheck}
+          label="Profile Completion"
+          value={completion.label}
+          helper={
+            completion.complete
+              ? "Ready for engagement"
+              : "Some fields are missing"
+          }
+          tone={completion.tone}
+        />
+
+        <SummaryCard
+          icon={Landmark}
+          label="Agency Type"
+          value={formatLabel(agent.agencyType)}
+          tone="blue"
+        />
+
+        <SummaryCard
+          icon={UserRound}
+          label="Primary SPOC"
+          value={primarySpoc?.name || "Not added"}
+          helper={primarySpoc?.designation}
+          tone="emerald"
+        />
+
+        <SummaryCard
+          icon={Route}
+          label="Destinations"
+          value={destinations.length}
+          helper={
+            destinations.length
+              ? "Mapped destinations"
+              : "No destinations"
+          }
+          tone="violet"
+        />
+      </section>
+
+      {/* MAIN FULL WIDTH GRID */}
+      <section className="grid grid-cols-1 gap-5 xl:grid-cols-12">
+        {/* LEFT MAIN AREA */}
+        <div className="space-y-5 xl:col-span-8 2xl:col-span-9">
+          <div className="grid grid-cols-1 gap-5 2xl:grid-cols-2">
             {/* BUSINESS OVERVIEW */}
             <SectionCard
               title="Business Overview"
@@ -932,60 +904,22 @@ export default function TravelAgentDetailPage() {
                   value={formatLabel(agent.relationshipStage)}
                 />
 
-                <InfoRow
-                  label="Team"
-                  value={agent.team}
-                />
+                <InfoRow label="Team" value={agent.team} />
 
                 <InfoRow
                   label="Average Ticket Size"
                   value={formatCurrency(agent.avgTicketSize)}
                 />
 
-                <InfoRow
-                  label="USP"
-                  value={agent.usp}
-                />
+                <InfoRow label="USP" value={agent.usp} />
               </div>
             </SectionCard>
 
-            {/* DESTINATIONS */}
-            <SectionCard
-              title="Destinations"
-              icon={MapPin}
-              tone="violet"
-            >
-              {destinations.length ? (
-                <div className="flex flex-wrap gap-2">
-                  {destinations.map((destination, index) => (
-                    <TravelChip
-                      key={destination.id || destination.name || index}
-                      label={
-                        destination.name ||
-                        destination.destinationName ||
-                        "Unnamed Destination"
-                      }
-                      icon="destination"
-                      color="primary"
-                    />
-                  ))}
-                </div>
-              ) : (
-                <EmptyCardText>
-                  No destinations have been mapped to this travel agent yet.
-                </EmptyCardText>
-              )}
-            </SectionCard>
-
             {/* ADDRESS */}
-            <SectionCard
-              title="Address"
-              icon={MapPin}
-              tone="emerald"
-            >
+            <SectionCard title="Address" icon={MapPin} tone="emerald">
               {fullAddress ? (
                 <div className="space-y-4">
-                  <div className="rounded-xl border border-emerald-100 bg-gradient-to-br from-white to-emerald-50/60 p-4">
+                  <div className="rounded-xl border border-gray-200 bg-slate-50 p-4">
                     <p className="whitespace-pre-line text-sm leading-6 text-gray-700">
                       {fullAddress}
                     </p>
@@ -1011,170 +945,182 @@ export default function TravelAgentDetailPage() {
                 </EmptyCardText>
               )}
             </SectionCard>
-
-            {/* ALL SPOCS */}
-            <SectionCard
-              title="All SPOCs"
-              icon={Users}
-              tone="amber"
-            >
-              {allSpocs.length ? (
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {allSpocs.map((spoc, index) => (
-                    <SpocCard
-                      key={
-                        spoc.email ||
-                        spoc.mobile ||
-                        spoc.phone ||
-                        spoc.name ||
-                        index
-                      }
-                      spoc={spoc}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <EmptyCardText>
-                  No SPOC details have been added yet.
-                </EmptyCardText>
-              )}
-            </SectionCard>
           </div>
 
-          {/* RIGHT COLUMN */}
-          <aside className="space-y-6 lg:sticky lg:top-6 lg:h-fit">
-            {/* PRIMARY CONTACT */}
-            <SectionCard
-              title="Primary Contact"
-              icon={UserRound}
-              tone="emerald"
-            >
-              {primarySpoc ? (
-                <div className="space-y-4">
-                  <div>
-                    <p className="text-base font-semibold text-gray-950">
-                      {primarySpoc.name || "Unnamed SPOC"}
-                    </p>
-
-                    <p className="mt-1 text-sm text-gray-500">
-                      {primarySpoc.designation || "Designation not added"}
-                    </p>
-                  </div>
-
-                  <div className="space-y-2 rounded-xl border border-emerald-100 bg-gradient-to-br from-white to-emerald-50/60 p-4">
-                    {primaryPhone ? (
-                      <a
-                        href={`tel:${primaryPhone}`}
-                        className="flex items-center gap-2 text-sm font-medium text-blue-700 hover:underline"
-                      >
-                        <Phone size={15} />
-                        {primaryPhone}
-                      </a>
-                    ) : (
-                      <p className="text-sm text-gray-400">
-                        Phone not added
-                      </p>
-                    )}
-
-                    {primaryEmail ? (
-                      <a
-                        href={`mailto:${primaryEmail}`}
-                        className="flex items-center gap-2 truncate text-sm font-medium text-blue-700 hover:underline"
-                      >
-                        <Mail size={15} />
-                        <span className="truncate">
-                          {primaryEmail}
-                        </span>
-                      </a>
-                    ) : (
-                      <p className="text-sm text-gray-400">
-                        Email not added
-                      </p>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <EmptyCardText>
-                  Primary contact is not available.
-                </EmptyCardText>
-              )}
-            </SectionCard>
-
-            {/* PREFERRED COMMUNICATION */}
-            <SectionCard
-              title="Preferred Communication"
-              icon={MessageCircle}
-              tone="violet"
-            >
-              {preferredChannels.length ? (
-                <div className="flex flex-wrap gap-2">
-                  {preferredChannels.map(([key]) => (
-                    <TravelChip
-                      key={key}
-                      label={formatLabel(key)}
-                      icon={key}
-                      color="neutral"
-                    />
-                  ))}
-                </div>
-              ) : (
-                <EmptyCardText>
-                  Preferred communication channels are not configured.
-                </EmptyCardText>
-              )}
-            </SectionCard>
-
-            {/* PROFILE STATUS */}
-            <SectionCard
-              title="Profile Status"
-              icon={BadgeCheck}
-              tone={completion.tone}
-            >
-              <div className="space-y-3">
-                <ProfileCompletionPanel completion={completion} />
-
-                <div className="flex items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50/60 px-3 py-2">
-                  <span className="text-xs font-medium text-gray-600">
-                    Status
-                  </span>
-
+          {/* DESTINATIONS */}
+          <SectionCard title="Destinations" icon={MapPin} tone="violet">
+            {destinations.length ? (
+              <div className="flex flex-wrap gap-2">
+                {destinations.map((destination, index) => (
                   <TravelChip
-                    label={formatLabel(agent.status || "Active")}
-                    icon="date"
-                    color={getStatusColor(agent.status || "active")}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-100 bg-amber-50/60 px-3 py-2">
-                  <span className="text-xs font-medium text-gray-600">
-                    KYC
-                  </span>
-
-                  <TravelChip
-                    label={formatLabel(agent.kycStatus || "Pending")}
-                    icon={
-                      normalize(agent.kycStatus) === "approved"
-                        ? "engaged"
-                        : "warning"
+                    key={destination.id || destination.name || index}
+                    label={
+                      destination.name ||
+                      destination.destinationName ||
+                      "Unnamed Destination"
                     }
-                    color={getKycColor(agent.kycStatus || "pending")}
+                    icon="destination"
+                    color="primary"
                   />
+                ))}
+              </div>
+            ) : (
+              <EmptyCardText>
+                No destinations have been mapped to this travel agent yet.
+              </EmptyCardText>
+            )}
+          </SectionCard>
+
+          {/* ALL SPOCS */}
+          <SectionCard title="All SPOCs" icon={Users} tone="amber">
+            {allSpocs.length ? (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-3">
+                {allSpocs.map((spoc, index) => (
+                  <SpocCard
+                    key={
+                      spoc.email ||
+                      spoc.mobile ||
+                      spoc.phone ||
+                      spoc.name ||
+                      index
+                    }
+                    spoc={spoc}
+                  />
+                ))}
+              </div>
+            ) : (
+              <EmptyCardText>
+                No SPOC details have been added yet.
+              </EmptyCardText>
+            )}
+          </SectionCard>
+        </div>
+
+        {/* RIGHT INSIGHT AREA */}
+        <aside className="space-y-5 xl:col-span-4 2xl:col-span-3">
+          <SectionCard title="Primary Contact" icon={UserRound} tone="emerald">
+            {primarySpoc ? (
+              <div className="space-y-4">
+                <div>
+                  <p className="text-base font-semibold text-gray-950">
+                    {primarySpoc.name || "Unnamed SPOC"}
+                  </p>
+
+                  <p className="mt-1 text-sm text-gray-500">
+                    {primarySpoc.designation || "Designation not added"}
+                  </p>
                 </div>
 
-                <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2">
-                  <span className="text-xs font-medium text-gray-600">
-                    City
-                  </span>
+                <div className="space-y-2 rounded-xl border border-gray-200 bg-slate-50 p-4">
+                  {primaryPhone ? (
+                    <a
+                      href={`tel:${primaryPhone}`}
+                      className="flex items-center gap-2 text-sm font-medium text-blue-700 hover:underline"
+                    >
+                      <Phone size={15} />
+                      {primaryPhone}
+                    </a>
+                  ) : (
+                    <p className="text-sm text-gray-400">
+                      Phone not added
+                    </p>
+                  )}
 
-                  <span className="text-xs font-semibold text-gray-800">
-                    {city || "Not added"}
-                  </span>
+                  {primaryEmail ? (
+                    <a
+                      href={`mailto:${primaryEmail}`}
+                      className="flex items-center gap-2 truncate text-sm font-medium text-blue-700 hover:underline"
+                    >
+                      <Mail size={15} />
+                      <span className="truncate">{primaryEmail}</span>
+                    </a>
+                  ) : (
+                    <p className="text-sm text-gray-400">
+                      Email not added
+                    </p>
+                  )}
                 </div>
               </div>
-            </SectionCard>
-          </aside>
-        </section>
-      </div>
-    </main>
-  );
+            ) : (
+              <EmptyCardText>
+                Primary contact is not available.
+              </EmptyCardText>
+            )}
+          </SectionCard>
+
+          <SectionCard
+            title="Preferred Communication"
+            icon={MessageCircle}
+            tone="violet"
+          >
+            {preferredChannels.length ? (
+              <div className="flex flex-wrap gap-2">
+                {preferredChannels.map(([key]) => (
+                  <TravelChip
+                    key={key}
+                    label={formatLabel(key)}
+                    icon={key}
+                    color="neutral"
+                  />
+                ))}
+              </div>
+            ) : (
+              <EmptyCardText>
+                Preferred communication channels are not configured.
+              </EmptyCardText>
+            )}
+          </SectionCard>
+
+          <SectionCard
+            title="Profile Status"
+            icon={ShieldCheck}
+            tone={completion.tone}
+          >
+            <div className="space-y-3">
+              <ProfileCompletionPanel completion={completion} />
+
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-slate-50 px-3 py-2">
+                <span className="text-xs font-medium text-gray-600">
+                  Status
+                </span>
+
+                <TravelChip
+                  label={formatLabel(agent.status || "Active")}
+                  icon="date"
+                  color={getStatusColor(agent.status || "active")}
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-slate-50 px-3 py-2">
+                <span className="text-xs font-medium text-gray-600">
+                  KYC
+                </span>
+
+                <TravelChip
+                  label={formatLabel(agent.kycStatus || "Pending")}
+                  icon={
+                    normalize(agent.kycStatus) === "approved"
+                      ? "engaged"
+                      : "warning"
+                  }
+                  color={getKycColor(agent.kycStatus || "pending")}
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-slate-50 px-3 py-2">
+                <span className="text-xs font-medium text-gray-600">
+                  City
+                </span>
+
+                <span className="text-xs font-semibold text-gray-800">
+                  {city || "Not added"}
+                </span>
+              </div>
+            </div>
+          </SectionCard>
+        </aside>
+      </section>
+    </div>
+  </main>
+);
 }

@@ -3,6 +3,30 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { collection, onSnapshot } from "firebase/firestore";
+import {
+  Activity,
+  AlertTriangle,
+  ArrowRight,
+  BarChart3,
+  BriefcaseBusiness,
+  CalendarDays,
+  CheckCircle2,
+  CircleDollarSign,
+  Clock3,
+  CreditCard,
+  Eye,
+  Handshake,
+  IndianRupee,
+  Layers3,
+  LayoutDashboard,
+  LineChart,
+  PieChart,
+  Target,
+  TrendingUp,
+  UserCheck,
+  Users,
+  Wallet
+} from "lucide-react";
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
@@ -29,6 +53,124 @@ const ATTENDANCE_COLLECTION = "attendance_sessions";
 /* =========================
    COMMON HELPERS
 ========================== */
+
+
+function getGroupedAttentionRows(rows = []) {
+  const map = new Map();
+
+  rows.forEach(item => {
+    const key = item.leadId || item.leadCode;
+    if (!key) return;
+
+    const existing = map.get(key);
+
+    if (!existing) {
+      map.set(key, {
+        leadId: item.leadId,
+        leadCode: item.leadCode,
+        customerName: item.customerName,
+        agentName: item.agentName,
+        destinationName: item.destinationName,
+        assignedToName: item.assignedToName,
+        amount: Number(item.amount || 0),
+        lastActivityAt: item.lastActivityAt,
+        highestSeverity: item.severity || "medium",
+        issues: [
+          {
+            type: item.type,
+            severity: item.severity,
+            reason: item.reason
+          }
+        ]
+      });
+
+      return;
+    }
+
+    existing.amount = Math.max(existing.amount, Number(item.amount || 0));
+
+    if (
+      getSeverityRank(item.severity) >
+      getSeverityRank(existing.highestSeverity)
+    ) {
+      existing.highestSeverity = item.severity;
+    }
+
+    const itemDate = toDate(item.lastActivityAt);
+    const existingDate = toDate(existing.lastActivityAt);
+
+    if (itemDate && (!existingDate || itemDate > existingDate)) {
+      existing.lastActivityAt = item.lastActivityAt;
+    }
+
+    existing.issues.push({
+      type: item.type,
+      severity: item.severity,
+      reason: item.reason
+    });
+  });
+
+  return Array.from(map.values()).sort((a, b) => {
+    const severityDiff =
+      getSeverityRank(b.highestSeverity) -
+      getSeverityRank(a.highestSeverity);
+
+    if (severityDiff !== 0) return severityDiff;
+
+    return Number(b.amount || 0) - Number(a.amount || 0);
+  });
+}
+
+
+
+function getSeverityRank(severity) {
+  const ranks = {
+    critical: 4,
+    high: 3,
+    medium: 2,
+    low: 1
+  };
+
+  return ranks[severity] || 0;
+}
+
+function getUniqueHighValueAttentionRows(rows = []) {
+  const map = new Map();
+
+  rows.forEach(item => {
+    const leadKey = item.leadId || item.leadCode;
+    const amount = Number(item.amount || 0);
+
+    if (!leadKey || amount <= 0) return;
+
+    const existing = map.get(leadKey);
+
+    if (!existing) {
+      map.set(leadKey, {
+        name: item.leadCode || leadKey,
+        count: amount,
+        displayCount: formatCurrency(amount),
+        issueCount: 1,
+        severity: item.severity || "medium",
+        subLabel: `${readableLabel(item.type)} • ${readableLabel(item.severity)}`
+      });
+
+      return;
+    }
+
+    existing.count = Math.max(existing.count, amount);
+    existing.displayCount = formatCurrency(existing.count);
+    existing.issueCount += 1;
+
+    if (getSeverityRank(item.severity) > getSeverityRank(existing.severity)) {
+      existing.severity = item.severity;
+    }
+
+    existing.subLabel = `${existing.issueCount} attention items • Highest ${readableLabel(existing.severity)}`;
+  });
+
+  return Array.from(map.values()).sort((a, b) => b.count - a.count);
+}
 
 function toDate(value) {
   if (!value) return null;
@@ -230,13 +372,28 @@ function getScoreClass(score) {
   return "bg-red-50 text-red-700 border-red-100";
 }
 
+function getRangeLabel(range) {
+  return {
+    today: "Today",
+    week: "This Week",
+    month: "This Month",
+    all: "All Time"
+  }[range] || "Selected Period";
+}
+
 /* =========================
    GLOBAL LEAD VISIBILITY
-   isDeleted === true is excluded everywhere
+   Deleted leads are excluded everywhere
 ========================== */
 
 function isDeletedLead(lead) {
-  return lead?.isDeleted === true;
+  return (
+    lead?.isDeleted === true ||
+    lead?.deleted === true ||
+    String(lead?.isDeleted).trim().toLowerCase() === "true" ||
+    String(lead?.deleted).trim().toLowerCase() === "true" ||
+    Boolean(lead?.deletedAt)
+  );
 }
 
 function getActiveLeads(leads = []) {
@@ -269,9 +426,9 @@ function getLeadActivityDate(lead) {
 function hasLeadAssignee(lead) {
   return Boolean(
     lead?.assignedToUid ||
-      lead?.assignedToName ||
-      lead?.assignedTo ||
-      lead?.assignedToEmail
+    lead?.assignedToName ||
+    lead?.assignedTo ||
+    lead?.assignedToEmail
   );
 }
 
@@ -408,8 +565,8 @@ function isVendorQuotePending(lead) {
 function isVendorSelected(lead) {
   return Boolean(
     lead?.latestSelectedVendorName ||
-      lead?.latestSelectedVendorQuoteId ||
-      lead?.latestSelectedVendorRequestId
+    lead?.latestSelectedVendorQuoteId ||
+    lead?.latestSelectedVendorRequestId
   );
 }
 
@@ -706,7 +863,7 @@ export default function AdminDashboardGraph() {
         "[TimeLog] Auth resolved in",
         Math.round(
           (typeof performance !== "undefined" ? performance.now() : Date.now()) -
-            mountTimeRef.current
+          mountTimeRef.current
         ),
         "ms"
       );
@@ -919,10 +1076,6 @@ export default function AdminDashboardGraph() {
     const leadRows = getActiveLeads(periodLeads);
 
     const assignedLeads = leadRows.filter(hasLeadAssignee).length;
-    const openLeads = leadRows.filter(
-      lead => normalize(lead.status) === "open"
-    ).length;
-
     const activeLeads = leadRows.filter(isActiveLead).length;
     const wonLeads = leadRows.filter(isWonLead).length;
     const lostLeads = leadRows.filter(isLostLead).length;
@@ -940,7 +1093,6 @@ export default function AdminDashboardGraph() {
 
     return {
       total: leadRows.length,
-      openLeads,
       activeLeads,
       assignedLeads,
       unassignedLeads: Math.max(leadRows.length - assignedLeads, 0),
@@ -1248,7 +1400,7 @@ export default function AdminDashboardGraph() {
 
         return (
           (severityRank[b.severity] || 0) -
-            (severityRank[a.severity] || 0) ||
+          (severityRank[a.severity] || 0) ||
           (b.amount || 0) - (a.amount || 0)
         );
       }),
@@ -1632,20 +1784,112 @@ export default function AdminDashboardGraph() {
     return <p className="p-6 text-red-600">Access denied</p>;
   }
 
+  const tabs = [
+    { key: "overview", label: "Overview", icon: LayoutDashboard },
+    { key: "finance", label: "Finance", icon: CircleDollarSign },
+    { key: "leads", label: "Pipeline", icon: LineChart },
+    { key: "vendor", label: "Vendors", icon: Handshake },
+    { key: "attention", label: "Attention", icon: AlertTriangle },
+    { key: "engagement", label: "Engagement", icon: Activity },
+    { key: "attendance", label: "Attendance", icon: CalendarDays },
+    { key: "team", label: "Team", icon: Users }
+  ];
+
+  function HighValueAttentionLeads({ rows = [] }) {
+    const uniqueRows = getUniqueHighValueAttentionRows(rows).slice(0, 8);
+    const max = uniqueRows.length
+      ? Math.max(...uniqueRows.map(row => row.count))
+      : 0;
+
+    const theme = KPI_TONES.orange;
+
+    return (
+      <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4">
+        <div className="flex items-center gap-2">
+          <div className={`rounded-xl p-2 ${theme.icon}`}>
+            <CircleDollarSign className="h-4 w-4" />
+          </div>
+
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900">
+              High Value Attention Leads
+            </h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Unique leads ranked by quotation value.
+            </p>
+          </div>
+        </div>
+
+        {!uniqueRows.length ? (
+          <p className="text-sm text-gray-500 mt-4">
+            No high value attention leads found.
+          </p>
+        ) : (
+          <div className="mt-4 space-y-4">
+            {uniqueRows.map(row => {
+              const width = max
+                ? `${Math.max((row.count / max) * 100, 8)}%`
+                : "0%";
+
+              return (
+                <div key={row.key}>
+                  <div className="flex items-start justify-between gap-3 mb-1">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-800 truncate">
+                        {row.name}
+                      </p>
+
+                      <p className="mt-0.5 text-[11px] text-gray-400 truncate">
+                        {row.subLabel}
+                      </p>
+                    </div>
+
+                    <p className="text-sm font-semibold text-gray-900 shrink-0">
+                      {row.displayCount}
+                    </p>
+                  </div>
+
+                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${theme.icon}`}
+                      style={{ width }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+
+            {getUniqueHighValueAttentionRows(rows).length > 8 && (
+              <p className="text-xs text-gray-400">
+                Showing top 8 of {getUniqueHighValueAttentionRows(rows).length}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <main className="p-4 md:p-6 space-y-6 w-full">
       <section className="space-y-4">
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
           <div>
-            <h1 className="text-xl font-semibold text-gray-900">
+            <div className="inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
+              <BarChart3 className="h-3.5 w-3.5" />
+              Management Command Center
+            </div>
+
+            <h1 className="mt-3 text-xl font-semibold text-gray-900">
               Management Dashboard
             </h1>
+
             <p className="text-sm text-gray-500">
               Executive overview of active leads, finance, vendor operations, team workload and attendance.
             </p>
           </div>
 
-          <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl p-1 shadow-sm w-full md:w-auto">
+          <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl p-1  w-full md:w-auto">
             {[
               { key: "today", label: "Today" },
               { key: "week", label: "This Week" },
@@ -1658,10 +1902,9 @@ export default function AdminDashboardGraph() {
                 onClick={() => setRange(item.key)}
                 className={`
                   flex-1 md:flex-none px-3 py-1.5 rounded-lg text-xs font-medium transition
-                  ${
-                    range === item.key
-                      ? "bg-blue-600 text-white"
-                      : "text-gray-600 hover:bg-gray-50"
+                  ${range === item.key
+                    ? "bg-blue-600 text-white"
+                    : "text-gray-600 hover:bg-gray-50"
                   }
                 `}
               >
@@ -1677,96 +1920,321 @@ export default function AdminDashboardGraph() {
           </div>
         ) : null}
 
-        {dataLoading ? (
-          <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
-            Loading management data...
-          </div>
-        ) : null}
+        {dataLoading ? <DashboardSkeleton /> : null}
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <DashboardKpiCard label="Active Leads" value={leadTotals.activeLeads} color="blue" />
-          <DashboardKpiCard label="Converted Leads" value={leadTotals.wonLeads} color="green" />
-          <DashboardKpiCard label="Quotation Value" value={formatCurrency(financeTotals.quotationValue)} color="purple" />
-          <DashboardKpiCard label="Gross Profit" value={formatCurrency(financeTotals.grossProfit)} color="green" />
-        </div>
+        <BusinessPulseCard
+          range={range}
+          financeTotals={financeTotals}
+          leadTotals={leadTotals}
+          vendorTotals={vendorTotals}
+          attentionSummary={attentionSummary}
+        />
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <DashboardKpiCard label="Customer Received" value={formatCurrency(financeTotals.receivedAmount)} color="green" />
-          <DashboardKpiCard label="Pending Receivable" value={formatCurrency(financeTotals.pendingReceivable)} color={financeTotals.pendingReceivable ? "amber" : "gray"} />
-          <DashboardKpiCard label="Vendor Paid" value={formatCurrency(financeTotals.vendorPaid)} color="blue" />
-          <DashboardKpiCard label="Cash Position" value={formatCurrency(financeTotals.cashInHand)} color={financeTotals.cashInHand >= 0 ? "green" : "red"} />
-        </div>
+        <section className="grid grid-cols-1 xl:grid-cols-4 gap-4">
+          <ExecutiveKpiCard
+            title="Active Leads"
+            value={leadTotals.activeLeads}
+            helper={`${leadTotals.quoteSentLeads} quotations sent`}
+            icon={LineChart}
+            tone="blue"
+          />
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <DashboardKpiCard label="Unassigned Leads" value={leadTotals.unassignedLeads} color={leadTotals.unassignedLeads ? "red" : "gray"} />
-          <DashboardKpiCard label="Pending Vendor Quotes" value={vendorTotals.pendingQuoteLeads} color={vendorTotals.pendingQuoteLeads ? "amber" : "gray"} />
-          <DashboardKpiCard label="Attention Items" value={attentionSummary.total} color={attentionSummary.total ? "red" : "gray"} />
-          <DashboardKpiCard label="Present Today" value={attendanceTotals.presentToday} color="green" />
-        </div>
+          <ExecutiveKpiCard
+            title="Converted Leads"
+            value={leadTotals.wonLeads}
+            helper={`${leadTotals.lostLeads} lost leads`}
+            icon={CheckCircle2}
+            tone="green"
+          />
 
-        <div className="bg-white border border-gray-200 rounded-xl p-1 shadow-sm flex gap-1 overflow-x-auto">
-          {[
-            { key: "overview", label: "Overview" },
-            { key: "finance", label: "Finance" },
-            { key: "leads", label: "Pipeline" },
-            { key: "vendor", label: "Vendor Ops" },
-            { key: "attention", label: "Attention Required" },
-            { key: "engagement", label: "Engagement" },
-            { key: "attendance", label: "Attendance" },
-            { key: "team", label: "Team" }
-          ].map(tab => (
-            <button
-              key={tab.key}
-              type="button"
-              onClick={() => setActiveTab(tab.key)}
-              className={`
-                px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition
-                ${
-                  activeTab === tab.key
-                    ? "bg-gray-900 text-white"
-                    : "text-gray-600 hover:bg-gray-50"
+          <ExecutiveKpiCard
+            title="Quotation Value"
+            value={formatCurrency(financeTotals.quotationValue)}
+            helper={`Margin ${financeTotals.marginPercent}%`}
+            icon={IndianRupee}
+            tone="purple"
+          />
+
+          <ExecutiveKpiCard
+            title="Gross Profit"
+            value={formatCurrency(financeTotals.grossProfit)}
+            helper={`${formatCurrency(financeTotals.vendorCost)} vendor cost`}
+            icon={TrendingUp}
+            tone="emerald"
+          />
+        </section>
+
+        <section className="grid grid-cols-1 xl:grid-cols-4 gap-4">
+          <ExecutiveKpiCard
+            title="Customer Received"
+            value={formatCurrency(financeTotals.receivedAmount)}
+            helper={`${financeTotals.customerFullyPaid} fully paid leads`}
+            icon={Wallet}
+            tone="green"
+          />
+
+          <ExecutiveKpiCard
+            title="Pending Receivable"
+            value={formatCurrency(financeTotals.pendingReceivable)}
+            helper={financeTotals.pendingReceivable ? "Needs collection follow-up" : "No receivable pending"}
+            icon={CreditCard}
+            tone={financeTotals.pendingReceivable ? "amber" : "slate"}
+          />
+
+          <ExecutiveKpiCard
+            title="Vendor Balance"
+            value={formatCurrency(financeTotals.vendorBalance)}
+            helper={financeTotals.vendorBalance ? "Vendor payout pending" : "Vendor payout clear"}
+            icon={Handshake}
+            tone={financeTotals.vendorBalance ? "orange" : "slate"}
+          />
+
+          <ExecutiveKpiCard
+            title="Attention Items"
+            value={attentionSummary.total}
+            helper={`${attentionSummary.critical} critical • ${attentionSummary.high} high`}
+            icon={AlertTriangle}
+            tone={attentionSummary.total ? "red" : "slate"}
+          />
+        </section>
+
+        <section className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+          <DashboardGraphCard
+            title="Finance Health"
+            description="Receivable, received, vendor payout and profit view."
+            icon={CircleDollarSign}
+            tone="purple"
+          >
+            <MiniColumnGraph
+              rows={[
+                {
+                  label: "Quotation",
+                  value: financeTotals.quotationValue,
+                  display: formatCurrency(financeTotals.quotationValue),
+                  tone: "purple"
+                },
+                {
+                  label: "Received",
+                  value: financeTotals.receivedAmount,
+                  display: formatCurrency(financeTotals.receivedAmount),
+                  tone: "green"
+                },
+                {
+                  label: "Vendor Paid",
+                  value: financeTotals.vendorPaid,
+                  display: formatCurrency(financeTotals.vendorPaid),
+                  tone: "blue"
+                },
+                {
+                  label: "Gross Profit",
+                  value: financeTotals.grossProfit,
+                  display: formatCurrency(financeTotals.grossProfit),
+                  tone: "emerald"
                 }
-              `}
-            >
-              {tab.label}
-            </button>
-          ))}
+              ]}
+            />
+          </DashboardGraphCard>
+
+          <DashboardGraphCard
+            title="Pipeline Health"
+            description="Lead movement across assignment, quote and conversion."
+            icon={Layers3}
+            tone="blue"
+          >
+            <MiniColumnGraph
+              rows={[
+                {
+                  label: "Total",
+                  value: leadTotals.total,
+                  display: leadTotals.total,
+                  tone: "slate"
+                },
+                {
+                  label: "Assigned",
+                  value: leadTotals.assignedLeads,
+                  display: leadTotals.assignedLeads,
+                  tone: "blue"
+                },
+                {
+                  label: "Quote Sent",
+                  value: leadTotals.quoteSentLeads,
+                  display: leadTotals.quoteSentLeads,
+                  tone: "purple"
+                },
+                {
+                  label: "Converted",
+                  value: leadTotals.wonLeads,
+                  display: leadTotals.wonLeads,
+                  tone: "green"
+                }
+              ]}
+            />
+          </DashboardGraphCard>
+
+          <DashboardGraphCard
+            title="Risk Signals"
+            description="Items needing team or management attention."
+            icon={AlertTriangle}
+            tone={attentionSummary.total ? "red" : "green"}
+          >
+            <MiniColumnGraph
+              rows={[
+                {
+                  label: "Critical",
+                  value: attentionSummary.critical,
+                  display: attentionSummary.critical,
+                  tone: "red"
+                },
+                {
+                  label: "High",
+                  value: attentionSummary.high,
+                  display: attentionSummary.high,
+                  tone: "orange"
+                },
+                {
+                  label: "Medium",
+                  value: attentionSummary.medium,
+                  display: attentionSummary.medium,
+                  tone: "amber"
+                },
+                {
+                  label: "Vendor",
+                  value: vendorTotals.pendingQuoteLeads,
+                  display: vendorTotals.pendingQuoteLeads,
+                  tone: "purple"
+                }
+              ]}
+            />
+          </DashboardGraphCard>
+        </section>
+
+        <div className="sticky top-20 z-30 bg-white/90 backdrop-blur border border-gray-200 rounded-xl p-1  flex gap-1 overflow-x-auto">
+          {tabs.map(tab => {
+            const TabIcon = tab.icon;
+
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key)}
+                className={`
+                  inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition
+                  ${activeTab === tab.key
+                    ? "bg-gray-900 text-white "
+                    : "text-gray-600 hover:bg-gray-50"
+                  }
+                `}
+              >
+                <TabIcon className="h-4 w-4" />
+                {tab.label}
+              </button>
+            );
+          })}
         </div>
       </section>
 
       {activeTab === "overview" && (
         <section className="space-y-6">
+          <SectionHeader
+            icon={LayoutDashboard}
+            title="Executive Overview"
+            description={`Showing ${getRangeLabel(range)} performance across leads, finance, vendors and team.`}
+          />
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <DashboardKpiCard label="Total Leads" value={leadTotals.total} />
             <DashboardKpiCard label="Quote Sent" value={leadTotals.quoteSentLeads} color="blue" />
             <DashboardKpiCard label="Margin" value={`${financeTotals.marginPercent}%`} color="purple" />
-            <DashboardKpiCard label="Vendor Balance" value={formatCurrency(financeTotals.vendorBalance)} color={financeTotals.vendorBalance ? "amber" : "gray"} />
+            <DashboardKpiCard label="Present Today" value={attendanceTotals.presentToday} color="green" />
           </div>
 
+          <InsightCards
+            financeTotals={financeTotals}
+            attentionSummary={attentionSummary}
+          />
+
           <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <LeadsTrendChart leads={periodLeads} />
-            <LeadsByStageChart leads={periodLeads} />
+            <ChartShell
+              icon={LineChart}
+              tone="blue"
+              title="Lead Trend"
+              description="Lead inflow trend for selected period."
+            >
+              <LeadsTrendChart leads={periodLeads} />
+            </ChartShell>
+
+            <ChartShell
+              icon={PieChart}
+              tone="purple"
+              title="Leads by Stage"
+              description="Current lead distribution by pipeline stage."
+            >
+              <LeadsByStageChart leads={periodLeads} />
+            </ChartShell>
           </section>
 
           <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            <MiniBarList title="Revenue by Destination" rows={financeTotals.byDestinationRevenue} />
-            <MiniBarList title="Gross Profit by Destination" rows={financeTotals.byDestinationProfit} />
-            <MiniBarList title="Top Travel Agents" rows={leadTotals.byAgent} />
+            <MiniBarList
+              icon={TrendingUp}
+              tone="green"
+              title="Revenue by Destination"
+              rows={financeTotals.byDestinationRevenue}
+            />
+            <MiniBarList
+              icon={Target}
+              tone="emerald"
+              title="Gross Profit by Destination"
+              rows={financeTotals.byDestinationProfit}
+            />
+            <MiniBarList
+              icon={BriefcaseBusiness}
+              tone="blue"
+              title="Top Travel Agents"
+              rows={leadTotals.byAgent}
+            />
           </section>
 
           <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            <MiniBarList title="Vendor Requests by Status" rows={vendorTotals.byVendorStatus} />
-            <MiniBarList title="Vendor Quotes by Status" rows={vendorTotals.byVendorQuoteStatus} />
-            <MiniBarList title="Attention by Type" rows={attentionSummary.byType} />
+            <MiniBarList
+              icon={Handshake}
+              tone="purple"
+              title="Vendor Requests by Status"
+              rows={vendorTotals.byVendorStatus}
+            />
+            <MiniBarList
+              icon={CheckCircle2}
+              tone="green"
+              title="Vendor Quotes by Status"
+              rows={vendorTotals.byVendorQuoteStatus}
+            />
+            <MiniBarList
+              icon={AlertTriangle}
+              tone="red"
+              title="Attention by Type"
+              rows={attentionSummary.byType}
+            />
           </section>
 
-          <AttentionRequiredPanel rows={attentionSummary.rows.slice(0, 8)} compact />
+          <AttentionRequiredPanel
+            rows={attentionSummary.rows.slice(0, 8)}
+            compact
+            onViewLead={leadId => router.push(`/admin/leads/${leadId}`)}
+          />
+
           <ManagementOverviewTable rows={teamRows} />
         </section>
       )}
 
       {activeTab === "finance" && (
         <section className="space-y-6">
+          <SectionHeader
+            icon={CircleDollarSign}
+            title="Finance Performance"
+            description="Quotation value, receivables, vendor payout and gross profit view."
+          />
+
+          <FinanceFlowCard financeTotals={financeTotals} />
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <DashboardKpiCard label="Quotation Value" value={formatCurrency(financeTotals.quotationValue)} color="purple" />
             <DashboardKpiCard label="Total Receivable" value={formatCurrency(financeTotals.receivableAmount)} color="blue" />
@@ -1782,15 +2250,45 @@ export default function AdminDashboardGraph() {
           </div>
 
           <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            <MiniBarList title="Revenue by Destination" rows={financeTotals.byDestinationRevenue} />
-            <MiniBarList title="Gross Profit by Destination" rows={financeTotals.byDestinationProfit} />
-            <MiniBarList title="Revenue by Travel Agent" rows={financeTotals.byAgentRevenue} />
+            <MiniBarList
+              icon={TrendingUp}
+              tone="green"
+              title="Revenue by Destination"
+              rows={financeTotals.byDestinationRevenue}
+            />
+            <MiniBarList
+              icon={Target}
+              tone="emerald"
+              title="Gross Profit by Destination"
+              rows={financeTotals.byDestinationProfit}
+            />
+            <MiniBarList
+              icon={BriefcaseBusiness}
+              tone="blue"
+              title="Revenue by Travel Agent"
+              rows={financeTotals.byAgentRevenue}
+            />
           </section>
 
           <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            <MiniBarList title="Revenue by Team Member" rows={financeTotals.byAssigneeRevenue} />
-            <MiniBarList title="Customer Payment Status" rows={financeTotals.byPaymentStatus} />
-            <MiniBarList title="Vendor Payment Status" rows={financeTotals.byVendorPaymentStatus} />
+            <MiniBarList
+              icon={Users}
+              tone="purple"
+              title="Revenue by Team Member"
+              rows={financeTotals.byAssigneeRevenue}
+            />
+            <MiniBarList
+              icon={Wallet}
+              tone="green"
+              title="Customer Payment Status"
+              rows={financeTotals.byPaymentStatus}
+            />
+            <MiniBarList
+              icon={Handshake}
+              tone="orange"
+              title="Vendor Payment Status"
+              rows={financeTotals.byVendorPaymentStatus}
+            />
           </section>
 
           <ManagementFinanceTable rows={teamRows} />
@@ -1799,6 +2297,12 @@ export default function AdminDashboardGraph() {
 
       {activeTab === "leads" && (
         <section className="space-y-6">
+          <SectionHeader
+            icon={LineChart}
+            title="Lead Pipeline"
+            description="Lead movement, assignment, conversion and destination performance."
+          />
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <DashboardKpiCard label="New Leads" value={leadTotals.total} />
             <DashboardKpiCard label="Active Leads" value={leadTotals.activeLeads} color="blue" />
@@ -1814,14 +2318,29 @@ export default function AdminDashboardGraph() {
           </div>
 
           <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <LeadsByStageChart leads={periodLeads} />
-            <LeadsByDestinationChart leads={periodLeads} />
+            <ChartShell
+              icon={PieChart}
+              tone="purple"
+              title="Leads by Stage"
+              description="Lead distribution across pipeline stages."
+            >
+              <LeadsByStageChart leads={periodLeads} />
+            </ChartShell>
+
+            <ChartShell
+              icon={Target}
+              tone="blue"
+              title="Leads by Destination"
+              description="Destination-wise lead distribution."
+            >
+              <LeadsByDestinationChart leads={periodLeads} />
+            </ChartShell>
           </section>
 
           <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            <MiniBarList title="Leads by Stage" rows={leadTotals.byStage} />
-            <MiniBarList title="Leads by Status" rows={leadTotals.byStatus} />
-            <MiniBarList title="Leads by Source" rows={leadTotals.bySource} />
+            <MiniBarList icon={PieChart} tone="purple" title="Leads by Stage" rows={leadTotals.byStage} />
+            <MiniBarList icon={BarChart3} tone="blue" title="Leads by Status" rows={leadTotals.byStatus} />
+            <MiniBarList icon={Activity} tone="green" title="Leads by Source" rows={leadTotals.bySource} />
           </section>
 
           <ManagementLeadsTable rows={teamRows} />
@@ -1830,6 +2349,12 @@ export default function AdminDashboardGraph() {
 
       {activeTab === "vendor" && (
         <section className="space-y-6">
+          <SectionHeader
+            icon={Handshake}
+            title="Vendor Operations"
+            description="Vendor requests, received quotes, pending quotes and vendor payment exposure."
+          />
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <DashboardKpiCard label="Vendor Requests" value={vendorTotals.totalVendorRequests} color="blue" />
             <DashboardKpiCard label="Vendor Quotes" value={vendorTotals.totalVendorQuotes} color="green" />
@@ -1845,14 +2370,14 @@ export default function AdminDashboardGraph() {
           </div>
 
           <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            <MiniBarList title="Vendor Requests by Status" rows={vendorTotals.byVendorStatus} />
-            <MiniBarList title="Vendor Quotes by Status" rows={vendorTotals.byVendorQuoteStatus} />
-            <MiniBarList title="Top Vendors by Count" rows={vendorTotals.byVendor} />
+            <MiniBarList icon={Handshake} tone="blue" title="Vendor Requests by Status" rows={vendorTotals.byVendorStatus} />
+            <MiniBarList icon={CheckCircle2} tone="green" title="Vendor Quotes by Status" rows={vendorTotals.byVendorQuoteStatus} />
+            <MiniBarList icon={Users} tone="purple" title="Top Vendors by Count" rows={vendorTotals.byVendor} />
           </section>
 
           <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <MiniBarList title="Top Vendors by Cost" rows={vendorTotals.byVendorCost} />
-            <MiniBarList title="Vendor Payment Status" rows={financeTotals.byVendorPaymentStatus} />
+            <MiniBarList icon={CircleDollarSign} tone="orange" title="Top Vendors by Cost" rows={vendorTotals.byVendorCost} />
+            <MiniBarList icon={Wallet} tone="green" title="Vendor Payment Status" rows={financeTotals.byVendorPaymentStatus} />
           </section>
 
           <ManagementVendorTable rows={periodLeads} />
@@ -1861,6 +2386,12 @@ export default function AdminDashboardGraph() {
 
       {activeTab === "attention" && (
         <section className="space-y-6">
+          <SectionHeader
+            icon={AlertTriangle}
+            title="Attention Required"
+            description="Issues that need management or operations action."
+          />
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <DashboardKpiCard label="Total Attention Items" value={attentionSummary.total} color={attentionSummary.total ? "red" : "gray"} />
             <DashboardKpiCard label="Critical" value={attentionSummary.critical} color={attentionSummary.critical ? "red" : "gray"} />
@@ -1869,26 +2400,29 @@ export default function AdminDashboardGraph() {
           </div>
 
           <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <MiniBarList title="Attention by Type" rows={attentionSummary.byType} />
-            <MiniBarList
-              title="High Value Attention Leads"
-              rows={attentionSummary.rows
-                .filter(item => item.amount > 0)
-                .slice(0, 8)
-                .map(item => ({
-                  name: item.leadCode,
-                  count: item.amount,
-                  displayCount: formatCurrency(item.amount)
-                }))}
+            <MiniBarList icon={AlertTriangle} tone="red" title="Attention by Type" rows={attentionSummary.byType} />
+
+
+            <HighValueAttentionLeads
+              rows={attentionSummary.rows}
             />
           </section>
 
-          <AttentionRequiredPanel rows={attentionSummary.rows} />
+          <AttentionRequiredPanel
+            rows={attentionSummary.rows}
+            onViewLead={leadId => router.push(`/admin/leads/${leadId}`)}
+          />
         </section>
       )}
 
       {activeTab === "engagement" && (
         <section className="space-y-6">
+          <SectionHeader
+            icon={Activity}
+            title="Engagement Activity"
+            description="Calls, WhatsApp, emails, meetings and team engagement movement."
+          />
+
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <EngagementKpiCard label="Calls" value={engagementTotals.calls} />
             <EngagementKpiCard label="WhatsApp" value={engagementTotals.whatsapp} />
@@ -1897,11 +2431,18 @@ export default function AdminDashboardGraph() {
             <EngagementKpiCard label="Last Activity" value={formatDateTime(engagementTotals.lastActivity)} />
           </div>
 
-          <EngagementByChannelChart engagements={periodEngagements} />
+          <ChartShell
+            icon={Activity}
+            tone="blue"
+            title="Engagement by Channel"
+            description="Distribution of engagement activity by channel."
+          >
+            <EngagementByChannelChart engagements={periodEngagements} />
+          </ChartShell>
 
           <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <MiniBarList title="Engagement by Employee" rows={engagementTotals.byCreator} />
-            <MiniBarList title="Engagement by Destination" rows={engagementTotals.byDestination} />
+            <MiniBarList icon={Users} tone="purple" title="Engagement by Employee" rows={engagementTotals.byCreator} />
+            <MiniBarList icon={Target} tone="blue" title="Engagement by Destination" rows={engagementTotals.byDestination} />
           </section>
 
           <ManagementEngagementTable rows={teamRows} />
@@ -1910,6 +2451,12 @@ export default function AdminDashboardGraph() {
 
       {activeTab === "attendance" && (
         <section className="space-y-6">
+          <SectionHeader
+            icon={CalendarDays}
+            title="Attendance Overview"
+            description="Today’s presence, active sessions, late marks and total working hours."
+          />
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <DashboardKpiCard label="Present Today" value={attendanceTotals.presentToday} color="green" />
             <DashboardKpiCard label="Active Now" value={attendanceTotals.activeNow} color="green" />
@@ -1918,9 +2465,11 @@ export default function AdminDashboardGraph() {
           </div>
 
           <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <MiniBarList title="Attendance by Status" rows={attendanceTotals.byStatus} />
+            <MiniBarList icon={Clock3} tone="blue" title="Attendance by Status" rows={attendanceTotals.byStatus} />
 
             <MiniBarList
+              icon={Clock3}
+              tone="purple"
               title="Working Hours by Employee"
               rows={teamRows
                 .filter(row => row.totalMinutes > 0)
@@ -1939,6 +2488,12 @@ export default function AdminDashboardGraph() {
 
       {activeTab === "team" && (
         <section className="space-y-6">
+          <SectionHeader
+            icon={Users}
+            title="Team Performance"
+            description="Team workload, revenue contribution, engagement activity and attendance score."
+          />
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <DashboardKpiCard label="Active Users" value={userTotals.activeUsers} color="blue" />
             <DashboardKpiCard label="Employee Users" value={userTotals.employeeUsers} color="green" />
@@ -1947,8 +2502,8 @@ export default function AdminDashboardGraph() {
           </div>
 
           <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <MiniBarList title="Users by Department" rows={userTotals.byDepartment} />
-            <MiniBarList title="Users by Role" rows={userTotals.byRole} />
+            <MiniBarList icon={Users} tone="blue" title="Users by Department" rows={userTotals.byDepartment} />
+            <MiniBarList icon={UserCheck} tone="green" title="Users by Role" rows={userTotals.byRole} />
           </section>
 
           <ManagementTeamTable rows={teamRows} />
@@ -1959,17 +2514,520 @@ export default function AdminDashboardGraph() {
 }
 
 /* =========================
+   UX COMPONENTS
+========================== */
+
+const KPI_TONES = {
+  blue: {
+    card: "border-blue-100 bg-blue-50/70",
+    icon: "bg-blue-600 text-white",
+    title: "text-blue-700",
+    value: "text-blue-950",
+    helper: "text-blue-600"
+  },
+  green: {
+    card: "border-green-100 bg-green-50/70",
+    icon: "bg-green-600 text-white",
+    title: "text-green-700",
+    value: "text-green-950",
+    helper: "text-green-600"
+  },
+  emerald: {
+    card: "border-emerald-100 bg-emerald-50/70",
+    icon: "bg-emerald-600 text-white",
+    title: "text-emerald-700",
+    value: "text-emerald-950",
+    helper: "text-emerald-600"
+  },
+  purple: {
+    card: "border-purple-100 bg-purple-50/70",
+    icon: "bg-purple-600 text-white",
+    title: "text-purple-700",
+    value: "text-purple-950",
+    helper: "text-purple-600"
+  },
+  amber: {
+    card: "border-amber-100 bg-amber-50/80",
+    icon: "bg-amber-500 text-white",
+    title: "text-amber-700",
+    value: "text-amber-950",
+    helper: "text-amber-700"
+  },
+  orange: {
+    card: "border-orange-100 bg-orange-50/80",
+    icon: "bg-orange-500 text-white",
+    title: "text-orange-700",
+    value: "text-orange-950",
+    helper: "text-orange-700"
+  },
+  red: {
+    card: "border-red-100 bg-red-50/80",
+    icon: "bg-red-600 text-white",
+    title: "text-red-700",
+    value: "text-red-950",
+    helper: "text-red-700"
+  },
+  slate: {
+    card: "border-slate-200 bg-slate-50",
+    icon: "bg-slate-700 text-white",
+    title: "text-slate-600",
+    value: "text-slate-950",
+    helper: "text-slate-500"
+  }
+};
+
+function DashboardSkeleton() {
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {[1, 2, 3, 4].map(item => (
+          <div
+            key={item}
+            className="h-28 rounded-2xl bg-gray-100 animate-pulse"
+          />
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <div className="h-72 rounded-2xl bg-gray-100 animate-pulse" />
+        <div className="h-72 rounded-2xl bg-gray-100 animate-pulse" />
+      </div>
+    </div>
+  );
+}
+
+function ExecutiveKpiCard({
+  title,
+  value,
+  helper,
+  icon: Icon,
+  tone = "slate"
+}) {
+  const theme = KPI_TONES[tone] || KPI_TONES.slate;
+
+  return (
+    <div
+      className={`
+        relative overflow-hidden rounded-2xl border p-4  transition hover:-translate-y-0.5 hover:shadow-md
+        ${theme.card}
+      `}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className={`text-xs font-semibold uppercase tracking-wide ${theme.title}`}>
+            {title}
+          </p>
+
+          <p className={`mt-2 text-xl font-bold ${theme.value}`}>
+            {value}
+          </p>
+
+          {helper ? (
+            <p className={`mt-1 text-xs ${theme.helper}`}>
+              {helper}
+            </p>
+          ) : null}
+        </div>
+
+        <div className={`rounded-2xl p-2.5  ${theme.icon}`}>
+          <Icon className="h-5 w-5" />
+        </div>
+      </div>
+
+      <div className="pointer-events-none absolute -right-6 -bottom-6 h-20 w-20 rounded-full bg-white/40" />
+    </div>
+  );
+}
+
+function DashboardGraphCard({
+  title,
+  description,
+  icon: Icon,
+  tone = "slate",
+  children
+}) {
+  const theme = KPI_TONES[tone] || KPI_TONES.slate;
+
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white p-4 ">
+      <div className="flex items-start gap-3">
+        <div className={`rounded-2xl p-2.5 ${theme.icon}`}>
+          <Icon className="h-5 w-5" />
+        </div>
+
+        <div>
+          <h2 className="text-sm font-semibold text-gray-900">
+            {title}
+          </h2>
+          <p className="mt-0.5 text-xs text-gray-500">
+            {description}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-5">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function MiniColumnGraph({ rows = [] }) {
+  const max = Math.max(...rows.map(row => Number(row.value || 0)), 1);
+
+  return (
+    <div className="flex items-end gap-3 h-44">
+      {rows.map(row => {
+        const theme = KPI_TONES[row.tone] || KPI_TONES.slate;
+        const height = `${Math.max((Number(row.value || 0) / max) * 100, 8)}%`;
+
+        return (
+          <div key={row.label} className="flex-1 h-full flex flex-col justify-end">
+            <div className="flex-1 flex items-end">
+              <div
+                className={`
+                  w-full rounded-t-2xl transition-all
+                  ${theme.icon}
+                `}
+                style={{ height }}
+              />
+            </div>
+
+            <div className="mt-2 text-center">
+              <p className="text-[11px] font-medium text-gray-500 truncate">
+                {row.label}
+              </p>
+              <p className="text-xs font-semibold text-gray-900 truncate">
+                {row.display}
+              </p>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SectionHeader({ icon: Icon, title, description }) {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="rounded-2xl border border-gray-200 bg-white p-2.5 text-gray-700 ">
+        <Icon className="h-5 w-5" />
+      </div>
+
+      <div>
+        <h2 className="text-base font-semibold text-gray-900">
+          {title}
+        </h2>
+        <p className="mt-0.5 text-sm text-gray-500">
+          {description}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function BusinessPulseCard({
+  range,
+  financeTotals,
+  leadTotals,
+  vendorTotals,
+  attentionSummary
+}) {
+  return (
+    <section className="rounded-3xl border border-gray-200 bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 p-5 text-white ">
+      <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-5">
+        <div>
+          <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-gray-200">
+            <Activity className="h-3.5 w-3.5" />
+            {getRangeLabel(range)} Snapshot
+          </div>
+
+          <h2 className="mt-3 text-2xl font-semibold">
+            Business Pulse
+          </h2>
+
+          <p className="mt-1 max-w-2xl text-sm text-gray-300">
+            Quick view of revenue, collection, vendor exposure, team pipeline and management attention.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <PulseMetric
+            icon={LineChart}
+            label="Active Leads"
+            value={leadTotals.activeLeads}
+          />
+          <PulseMetric
+            icon={CircleDollarSign}
+            label="Quotation"
+            value={formatCurrency(financeTotals.quotationValue)}
+          />
+          <PulseMetric
+            icon={Wallet}
+            label="Cash Position"
+            value={formatCurrency(financeTotals.cashInHand)}
+            danger={financeTotals.cashInHand < 0}
+          />
+          <PulseMetric
+            icon={AlertTriangle}
+            label="Attention"
+            value={attentionSummary.total}
+            danger={attentionSummary.total > 0}
+          />
+        </div>
+      </div>
+
+      <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
+        <PulseInfo
+          icon={TrendingUp}
+          label="Gross Profit"
+          value={formatCurrency(financeTotals.grossProfit)}
+          helper={`Margin ${financeTotals.marginPercent}%`}
+        />
+        <PulseInfo
+          icon={Handshake}
+          label="Vendor Exposure"
+          value={formatCurrency(financeTotals.vendorBalance)}
+          helper={`${vendorTotals.pendingQuoteLeads} pending vendor quotes`}
+          warning={financeTotals.vendorBalance > 0 || vendorTotals.pendingQuoteLeads > 0}
+        />
+        <PulseInfo
+          icon={CheckCircle2}
+          label="Converted Leads"
+          value={leadTotals.wonLeads}
+          helper={`${financeTotals.customerFullyPaid} customer fully paid`}
+        />
+      </div>
+    </section>
+  );
+}
+
+function PulseMetric({ icon: Icon, label, value, danger = false }) {
+  return (
+    <div className="rounded-2xl bg-white/10 px-4 py-3 backdrop-blur">
+      <div className="flex items-center gap-2 text-gray-300">
+        <Icon className="h-4 w-4" />
+        <p className="text-xs">{label}</p>
+      </div>
+
+      <p className={`mt-2 text-lg font-semibold ${danger ? "text-red-300" : "text-white"}`}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function PulseInfo({ icon: Icon, label, value, helper, warning = false }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+      <div className="flex items-center gap-2 text-gray-300">
+        <Icon className="h-4 w-4" />
+        <span className="text-xs">{label}</span>
+      </div>
+
+      <p className="mt-2 text-lg font-semibold text-white">
+        {value}
+      </p>
+
+      <p className={`mt-1 text-xs ${warning ? "text-amber-300" : "text-gray-300"}`}>
+        {helper}
+      </p>
+    </div>
+  );
+}
+
+function FinanceFlowCard({ financeTotals }) {
+  const items = [
+    {
+      label: "Quotation",
+      value: formatCurrency(financeTotals.quotationValue),
+      icon: LineChart
+    },
+    {
+      label: "Received",
+      value: formatCurrency(financeTotals.receivedAmount),
+      icon: Wallet
+    },
+    {
+      label: "Vendor Paid",
+      value: formatCurrency(financeTotals.vendorPaid),
+      icon: Handshake
+    },
+    {
+      label: "Cash Position",
+      value: formatCurrency(financeTotals.cashInHand),
+      icon: CircleDollarSign
+    },
+    {
+      label: "Gross Profit",
+      value: formatCurrency(financeTotals.grossProfit),
+      icon: TrendingUp
+    }
+  ];
+
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white p-4 ">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div className="rounded-2xl bg-purple-50 p-2.5 text-purple-700">
+            <CircleDollarSign className="h-5 w-5" />
+          </div>
+
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900">
+              Finance Flow
+            </h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Quote to collection to vendor payout and final profit.
+            </p>
+          </div>
+        </div>
+
+        <span className="w-fit rounded-full bg-purple-50 px-3 py-1 text-xs font-medium text-purple-700">
+          Margin {financeTotals.marginPercent}%
+        </span>
+      </div>
+
+      <div className="mt-5 grid grid-cols-1 md:grid-cols-5 gap-3">
+        {items.map((item, index) => {
+          const ItemIcon = item.icon;
+
+          return (
+            <div key={item.label} className="relative rounded-xl bg-gray-50 p-4">
+              <div className="flex items-center gap-2 text-gray-500">
+                <ItemIcon className="h-4 w-4" />
+                <p className="text-xs">{item.label}</p>
+              </div>
+
+              <p className="mt-2 text-base font-semibold text-gray-900">
+                {item.value}
+              </p>
+
+              {index < items.length - 1 && (
+                <span className="hidden md:flex absolute -right-2 top-1/2 -translate-y-1/2 h-6 w-6 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-400">
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function InsightCards({ financeTotals, attentionSummary }) {
+  const bestDestination = financeTotals.byDestinationRevenue?.[0];
+  const bestAgent = financeTotals.byAgentRevenue?.[0];
+  const biggestRisk = attentionSummary.byType?.[0];
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <InsightCard
+        icon={Target}
+        label="Best Destination"
+        title={bestDestination?.name || "No destination yet"}
+        value={bestDestination?.displayCount || "—"}
+      />
+
+      <InsightCard
+        icon={BriefcaseBusiness}
+        label="Best Travel Agent"
+        title={bestAgent?.name || "No agent yet"}
+        value={bestAgent?.displayCount || "—"}
+      />
+
+      <InsightCard
+        icon={AlertTriangle}
+        label="Biggest Risk"
+        title={biggestRisk ? readableLabel(biggestRisk.name) : "No risk found"}
+        value={biggestRisk ? `${biggestRisk.count} items` : "Clear"}
+        danger={Boolean(biggestRisk)}
+      />
+    </div>
+  );
+}
+
+function InsightCard({ icon: Icon, label, title, value, danger = false }) {
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white p-4 ">
+      <div className="flex items-center gap-2 text-gray-400">
+        <Icon className="h-4 w-4" />
+        <p className="text-xs font-medium uppercase tracking-wide">
+          {label}
+        </p>
+      </div>
+
+      <p className="mt-3 text-sm font-semibold text-gray-900">
+        {readableLabel(title)}
+      </p>
+
+      <p className={`mt-1 text-lg font-semibold ${danger ? "text-red-600" : "text-gray-900"}`}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function ChartShell({
+  title,
+  description,
+  icon: Icon,
+  tone = "slate",
+  children
+}) {
+  const theme = KPI_TONES[tone] || KPI_TONES.slate;
+
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white  overflow-hidden">
+      <div className="border-b border-gray-100 px-4 py-3 flex items-start gap-3">
+        <div className={`rounded-xl p-2 ${theme.icon}`}>
+          <Icon className="h-4 w-4" />
+        </div>
+
+        <div>
+          <h2 className="text-sm font-semibold text-gray-900">
+            {title}
+          </h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {description}
+          </p>
+        </div>
+      </div>
+
+      <div className="p-4">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* =========================
    MINI BAR LIST
 ========================== */
 
-function MiniBarList({ title, rows }) {
+function MiniBarList({
+  title,
+  rows,
+  icon: Icon = BarChart3,
+  tone = "slate",
+  preserveLabel = false
+}) {
   const max = rows?.length ? Math.max(...rows.map(row => row.count)) : 0;
+  const theme = KPI_TONES[tone] || KPI_TONES.slate;
 
   return (
     <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4">
-      <h2 className="text-sm font-semibold text-gray-900">
-        {title}
-      </h2>
+      <div className="flex items-center gap-2">
+        <div className={`rounded-xl p-2 ${theme.icon}`}>
+          <Icon className="h-4 w-4" />
+        </div>
+
+        <h2 className="text-sm font-semibold text-gray-900">
+          {title}
+        </h2>
+      </div>
 
       {!rows?.length ? (
         <p className="text-sm text-gray-500 mt-4">
@@ -1984,24 +3042,39 @@ function MiniBarList({ title, rows }) {
 
             return (
               <div key={row.name}>
-                <div className="flex items-center justify-between gap-3 mb-1">
-                  <p className="text-sm font-medium text-gray-700 truncate">
-                    {readableLabel(row.name)}
-                  </p>
-                  <p className="text-sm font-semibold text-gray-900">
+                <div className="flex items-start justify-between gap-3 mb-1">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-gray-700 truncate">
+                      {preserveLabel ? row.name : readableLabel(row.name)}
+                    </p>
+
+                    {row.subLabel ? (
+                      <p className="mt-0.5 text-[11px] text-gray-400 truncate">
+                        {row.subLabel}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <p className="text-sm font-semibold text-gray-900 shrink-0">
                     {row.displayCount || row.count}
                   </p>
                 </div>
 
                 <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-gray-900 rounded-full"
+                    className={`h-full rounded-full ${theme.icon}`}
                     style={{ width }}
                   />
                 </div>
               </div>
             );
           })}
+
+          {rows.length > 8 && (
+            <p className="text-xs text-gray-400">
+              Showing top 8 of {rows.length}
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -2028,66 +3101,122 @@ function getSeverityClass(severity) {
   return "bg-gray-50 text-gray-700 border-gray-100";
 }
 
-function AttentionRequiredPanel({ rows, compact = false }) {
+function AttentionRequiredPanel({ rows, compact = false, onViewLead }) {
+  const groupedRows = getGroupedAttentionRows(rows);
+  const visibleRows = groupedRows.slice(0, compact ? 8 : 50);
+
   return (
     <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-100">
-        <h2 className="text-sm font-semibold text-gray-900">
-          Attention Required
-        </h2>
-        <p className="text-xs text-gray-500 mt-0.5">
-          Leads that need management or operations action.
-        </p>
+      <div className="px-4 py-3 border-b border-gray-100 flex items-start gap-3">
+        <div className="rounded-xl bg-red-50 p-2 text-red-600">
+          <AlertTriangle className="h-4 w-4" />
+        </div>
+
+        <div>
+          <h2 className="text-sm font-semibold text-gray-900">
+            Attention Required
+          </h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Unique leads that need management or operations action.
+          </p>
+        </div>
       </div>
 
-      {!rows.length ? (
+      {!visibleRows.length ? (
         <div className="px-4 py-8 text-center text-sm text-gray-500">
           No attention items found.
         </div>
       ) : (
         <div className="divide-y divide-gray-100">
-          {rows.slice(0, compact ? 8 : 50).map(item => (
+          {visibleRows.map(item => (
             <div
-              key={item.id}
-              className="px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3"
+              key={item.leadId || item.leadCode}
+              className="px-4 py-4 flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4"
             >
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <p className="font-medium text-sm text-gray-900">
+                  <p className="font-semibold text-sm text-gray-900">
                     {item.leadCode}
                   </p>
+
                   <span
                     className={`
                       inline-flex items-center px-2 py-0.5 rounded-full text-xs border
-                      ${getSeverityClass(item.severity)}
+                      ${getSeverityClass(item.highestSeverity)}
                     `}
                   >
-                    {readableLabel(item.severity)}
+                    Highest {readableLabel(item.highestSeverity)}
                   </span>
+
                   <span className="text-xs text-gray-500">
-                    {readableLabel(item.type)}
+                    {item.issues.length} attention item
+                    {item.issues.length > 1 ? "s" : ""}
                   </span>
                 </div>
 
-                <p className="text-sm text-gray-700 mt-1">
-                  {item.reason}
+                <p className="text-xs text-gray-500 mt-1">
+                  {item.customerName} • {item.destinationName} • Assigned:{" "}
+                  {item.assignedToName}
                 </p>
 
-                <p className="text-xs text-gray-500 mt-1">
-                  {item.customerName} • {item.destinationName} • Assigned: {item.assignedToName}
-                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {item.issues.map((issue, index) => (
+                    <div
+                      key={`${item.leadCode}-${issue.type}-${index}`}
+                      className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`
+                            inline-flex items-center px-2 py-0.5 rounded-full text-[11px] border
+                            ${getSeverityClass(issue.severity)}
+                          `}
+                        >
+                          {readableLabel(issue.severity)}
+                        </span>
+
+                        <span className="text-xs font-medium text-gray-700">
+                          {readableLabel(issue.type)}
+                        </span>
+                      </div>
+
+                      <p className="mt-1 text-xs text-gray-500">
+                        {issue.reason}
+                      </p>
+                    </div>
+                  ))}
+                </div>
               </div>
 
-              <div className="text-left md:text-right shrink-0">
-                <p className="text-sm font-semibold text-gray-900">
-                  {formatCurrency(item.amount)}
-                </p>
-                <p className="text-xs text-gray-500">
-                  Last: {formatDateTime(item.lastActivityAt)}
-                </p>
+              <div className="text-left xl:text-right shrink-0 space-y-2">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">
+                    {formatCurrency(item.amount)}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Last: {formatDateTime(item.lastActivityAt)}
+                  </p>
+                </div>
+
+                {onViewLead && (
+                  <button
+                    type="button"
+                    onClick={() => onViewLead(item.leadId)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    <Eye className="h-3.5 w-3.5" />
+                    View Lead
+                  </button>
+                )}
               </div>
             </div>
           ))}
+
+          {groupedRows.length > visibleRows.length && (
+            <div className="px-4 py-3 text-xs text-gray-400">
+              Showing {visibleRows.length} of {groupedRows.length} attention leads
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -2101,6 +3230,7 @@ function AttentionRequiredPanel({ rows, compact = false }) {
 function ManagementOverviewTable({ rows }) {
   return (
     <DashboardTable
+      icon={Users}
       title="Team Member Management Overview"
       description="Combined lead, revenue, engagement and attendance performance."
       headers={[
@@ -2118,8 +3248,8 @@ function ManagementOverviewTable({ rows }) {
       colSpan={9}
     >
       {rows.map(row => (
-        <tr key={row.uid || row.email || row.name}>
-          <td className="px-4 py-3">
+        <tr key={row.uid || row.email || row.name} className="hover:bg-gray-50">
+          <td className="px-4 py-3 text-left">
             <div className="font-medium text-gray-900">{row.name}</div>
             <div className="text-xs text-gray-500">
               {row.department || row.email || "—"}
@@ -2131,8 +3261,8 @@ function ManagementOverviewTable({ rows }) {
           <td className="px-4 py-3 text-right font-medium">{formatCurrency(row.grossProfit)}</td>
           <td className="px-4 py-3 text-right">{row.engagements}</td>
           <td className="px-4 py-3 text-right font-medium">{formatDuration(row.totalMinutes)}</td>
-          <td className="px-4 py-3 text-gray-600">{formatDateTime(row.lastActivityAt)}</td>
-          <td className="px-4 py-3">
+          <td className="px-4 py-3 text-right text-gray-600">{formatDateTime(row.lastActivityAt)}</td>
+          <td className="px-4 py-3 text-right">
             <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs border ${getScoreClass(row.score)}`}>
               {getScoreLabel(row.score)}
             </span>
@@ -2146,6 +3276,7 @@ function ManagementOverviewTable({ rows }) {
 function ManagementFinanceTable({ rows }) {
   return (
     <DashboardTable
+      icon={CircleDollarSign}
       title="Team Finance Overview"
       description="Revenue, collection, vendor payout and gross profit by team member."
       headers={[
@@ -2161,8 +3292,8 @@ function ManagementFinanceTable({ rows }) {
       colSpan={7}
     >
       {rows.map(row => (
-        <tr key={row.uid || row.email || row.name}>
-          <td className="px-4 py-3">
+        <tr key={row.uid || row.email || row.name} className="hover:bg-gray-50">
+          <td className="px-4 py-3 text-left">
             <div className="font-medium text-gray-900">{row.name}</div>
             <div className="text-xs text-gray-500">{row.email || "—"}</div>
           </td>
@@ -2183,6 +3314,7 @@ function ManagementVendorTable({ rows }) {
 
   return (
     <DashboardTable
+      icon={Handshake}
       title="Vendor Operations Overview"
       description="Vendor request, quote and payment status by active lead."
       headers={[
@@ -2200,19 +3332,19 @@ function ManagementVendorTable({ rows }) {
       colSpan={9}
     >
       {activeRows.map(row => (
-        <tr key={row.id}>
-          <td className="px-4 py-3">
+        <tr key={row.id} className="hover:bg-gray-50">
+          <td className="px-4 py-3 text-left">
             <div className="font-medium text-gray-900">{row.leadCode || row.id}</div>
             <div className="text-xs text-gray-500">{row.agentName || row.agencyName || "—"}</div>
           </td>
-          <td className="px-4 py-3 text-gray-600">{row.destinationName || "—"}</td>
-          <td className="px-4 py-3 text-gray-600">{row.latestVendorName || row.latestSelectedVendorName || "—"}</td>
+          <td className="px-4 py-3 text-right text-gray-600">{row.destinationName || "—"}</td>
+          <td className="px-4 py-3 text-right text-gray-600">{row.latestVendorName || row.latestSelectedVendorName || "—"}</td>
           <td className="px-4 py-3 text-right">{Number(row.vendorRequestCount || 0)}</td>
           <td className="px-4 py-3 text-right">{Number(row.vendorQuoteCount || 0)}</td>
           <td className="px-4 py-3 text-right">{formatCurrency(getLeadVendorCost(row))}</td>
           <td className="px-4 py-3 text-right">{formatCurrency(getLeadVendorPaidAmount(row))}</td>
           <td className="px-4 py-3 text-right font-medium">{formatCurrency(row.vendorPaymentBalance)}</td>
-          <td className="px-4 py-3 text-gray-600">
+          <td className="px-4 py-3 text-right text-gray-600">
             {readableLabel(row.latestVendorQuoteStatus || row.latestVendorRequestStatus || "Pending")}
           </td>
         </tr>
@@ -2224,6 +3356,7 @@ function ManagementVendorTable({ rows }) {
 function ManagementLeadsTable({ rows }) {
   return (
     <DashboardTable
+      icon={LineChart}
       title="Team Member Lead Overview"
       description="Lead assignment, quotation and pipeline movement for the selected period."
       headers={[
@@ -2239,8 +3372,8 @@ function ManagementLeadsTable({ rows }) {
       colSpan={7}
     >
       {rows.map(row => (
-        <tr key={row.uid || row.email || row.name}>
-          <td className="px-4 py-3">
+        <tr key={row.uid || row.email || row.name} className="hover:bg-gray-50">
+          <td className="px-4 py-3 text-left">
             <div className="font-medium text-gray-900">{row.name}</div>
             <div className="text-xs text-gray-500">{row.email || "—"}</div>
           </td>
@@ -2259,6 +3392,7 @@ function ManagementLeadsTable({ rows }) {
 function ManagementEngagementTable({ rows }) {
   return (
     <DashboardTable
+      icon={Activity}
       title="Team Member Engagement Overview"
       description="WhatsApp, call, email and meeting activity for the selected period."
       headers={[
@@ -2275,8 +3409,8 @@ function ManagementEngagementTable({ rows }) {
       colSpan={8}
     >
       {rows.map(row => (
-        <tr key={row.uid || row.email || row.name}>
-          <td className="px-4 py-3">
+        <tr key={row.uid || row.email || row.name} className="hover:bg-gray-50">
+          <td className="px-4 py-3 text-left">
             <div className="font-medium text-gray-900">{row.name}</div>
             <div className="text-xs text-gray-500">{row.email || "—"}</div>
           </td>
@@ -2286,7 +3420,7 @@ function ManagementEngagementTable({ rows }) {
           <td className="px-4 py-3 text-right">{row.emails}</td>
           <td className="px-4 py-3 text-right">{row.meetings}</td>
           <td className="px-4 py-3 text-right text-green-700 font-medium">{row.completedEngagements}</td>
-          <td className="px-4 py-3 text-gray-600">{formatDateTime(row.lastActivityAt)}</td>
+          <td className="px-4 py-3 text-right text-gray-600">{formatDateTime(row.lastActivityAt)}</td>
         </tr>
       ))}
     </DashboardTable>
@@ -2296,6 +3430,7 @@ function ManagementEngagementTable({ rows }) {
 function ManagementAttendanceTable({ rows }) {
   return (
     <DashboardTable
+      icon={CalendarDays}
       title="Team Member Attendance Overview"
       description="Attendance days, active sessions, late marks and working hours."
       headers={[
@@ -2313,8 +3448,8 @@ function ManagementAttendanceTable({ rows }) {
       colSpan={9}
     >
       {rows.map(row => (
-        <tr key={row.uid || row.email || row.name}>
-          <td className="px-4 py-3">
+        <tr key={row.uid || row.email || row.name} className="hover:bg-gray-50">
+          <td className="px-4 py-3 text-left">
             <div className="font-medium text-gray-900">{row.name}</div>
             <div className="text-xs text-gray-500">{row.department || row.email || "—"}</div>
           </td>
@@ -2327,8 +3462,8 @@ function ManagementAttendanceTable({ rows }) {
             {row.late}
           </td>
           <td className="px-4 py-3 text-right">{row.leave}</td>
-          <td className="px-4 py-3 text-gray-600">{formatDateTime(row.firstCheckIn)}</td>
-          <td className="px-4 py-3 text-gray-600">{formatDateTime(row.lastCheckOut)}</td>
+          <td className="px-4 py-3 text-right text-gray-600">{formatDateTime(row.firstCheckIn)}</td>
+          <td className="px-4 py-3 text-right text-gray-600">{formatDateTime(row.lastCheckOut)}</td>
           <td className="px-4 py-3 text-right font-medium">{formatDuration(row.totalMinutes)}</td>
         </tr>
       ))}
@@ -2339,6 +3474,7 @@ function ManagementAttendanceTable({ rows }) {
 function ManagementTeamTable({ rows }) {
   return (
     <DashboardTable
+      icon={Users}
       title="Team Workload Overview"
       description="Combined score based on leads, conversion, quotations, gross profit, engagements and attendance."
       headers={[
@@ -2357,20 +3493,20 @@ function ManagementTeamTable({ rows }) {
       colSpan={10}
     >
       {rows.map(row => (
-        <tr key={row.uid || row.email || row.name}>
-          <td className="px-4 py-3">
+        <tr key={row.uid || row.email || row.name} className="hover:bg-gray-50">
+          <td className="px-4 py-3 text-left">
             <div className="font-medium text-gray-900">{row.name}</div>
             <div className="text-xs text-gray-500">{row.email || "—"}</div>
           </td>
-          <td className="px-4 py-3 text-gray-600">{row.department || "—"}</td>
-          <td className="px-4 py-3 text-gray-600">{readableLabel(row.role)}</td>
+          <td className="px-4 py-3 text-right text-gray-600">{row.department || "—"}</td>
+          <td className="px-4 py-3 text-right text-gray-600">{readableLabel(row.role)}</td>
           <td className="px-4 py-3 text-right">{row.newLeads}</td>
           <td className="px-4 py-3 text-right text-green-700 font-medium">{row.wonLeads}</td>
           <td className="px-4 py-3 text-right font-medium">{formatCurrency(row.grossProfit)}</td>
           <td className="px-4 py-3 text-right">{row.engagements}</td>
           <td className="px-4 py-3 text-right font-medium">{formatDuration(row.totalMinutes)}</td>
           <td className="px-4 py-3 text-right font-semibold">{row.score}</td>
-          <td className="px-4 py-3">
+          <td className="px-4 py-3 text-right">
             <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs border ${getScoreClass(row.score)}`}>
               {getScoreLabel(row.score)}
             </span>
@@ -2382,6 +3518,7 @@ function ManagementTeamTable({ rows }) {
 }
 
 function DashboardTable({
+  icon: Icon = BarChart3,
   title,
   description,
   headers,
@@ -2394,19 +3531,25 @@ function DashboardTable({
     : Boolean(children);
 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-100">
-        <h2 className="text-sm font-semibold text-gray-900">
-          {title}
-        </h2>
-        <p className="text-xs text-gray-500 mt-0.5">
-          {description}
-        </p>
+    <div className="bg-white border border-gray-200 rounded-xl  overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-100 flex items-start gap-3">
+        <div className="rounded-xl bg-gray-50 p-2 text-gray-600">
+          <Icon className="h-4 w-4" />
+        </div>
+
+        <div>
+          <h2 className="text-sm font-semibold text-gray-900">
+            {title}
+          </h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {description}
+          </p>
+        </div>
       </div>
 
-      <div className="overflow-x-auto">
+      <div className="max-h-[560px] overflow-auto">
         <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-xs text-gray-500">
+          <thead className="sticky top-0 z-10 bg-gray-50 text-xs text-gray-500">
             <tr>
               {headers.map((header, index) => (
                 <th

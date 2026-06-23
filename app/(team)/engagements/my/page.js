@@ -273,7 +273,7 @@ function getProfileCompletion(engagement) {
 ========================= */
 function MiniStatCard({ icon: Icon, label, value, hint }) {
   return (
-    <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+    <div className="rounded-2xl border border-gray-200 bg-white p-4 ">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-medium text-gray-500">
@@ -591,8 +591,8 @@ export default function MyEngagementsPage() {
   if (loading || loadingList) {
     return (
       <main className="min-h-screen bg-gray-50">
-        <div className="max-w-7xl mx-auto px-4 py-6 space-y-4">
-          <div className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
+        <div className="max-w-9xl mx-auto px-4 py-6 space-y-4">
+          <div className="rounded-3xl border border-gray-200 bg-white p-6 ">
             <div className="h-6 w-52 bg-gray-200 rounded mb-3 animate-pulse" />
             <div className="h-4 w-80 bg-gray-100 rounded animate-pulse" />
           </div>
@@ -613,9 +613,9 @@ export default function MyEngagementsPage() {
 
   return (
     <main className="min-h-screen bg-gray-50">
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+      <div className="max-w-9xl mx-auto px-4 py-6 space-y-6">
         {/* ================= HERO HEADER ================= */}
-        <section className="rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 shadow-sm overflow-hidden">
+        <section className="rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700  overflow-hidden">
           <div className="p-5 md:p-6">
             <div className="flex items-start gap-4">
               <div className="h-12 w-12 rounded-2xl bg-white/15 text-white flex items-center justify-center shrink-0">
@@ -689,7 +689,7 @@ export default function MyEngagementsPage() {
             )}
 
             {!error && filteredEngagements.length === 0 && (
-              <div className="rounded-3xl border border-gray-200 bg-white p-10 shadow-sm">
+              <div className="rounded-3xl border border-gray-200 bg-white p-10 ">
                 <EmptyState
                   icon="📭"
                   title="No engagements found"
@@ -709,7 +709,7 @@ export default function MyEngagementsPage() {
                     {/* DATE HEADER */}
                     <div className="sticky top-0 z-10 bg-gray-50/90 backdrop-blur py-2">
                       <div className="flex items-center gap-3">
-                        <div className="rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm">
+                        <div className="rounded-full border border-gray-200 bg-white px-3 py-1.5 ">
                           <p className="text-xs font-semibold text-gray-700">
                             {group.label}
                           </p>
@@ -736,7 +736,7 @@ export default function MyEngagementsPage() {
                             <div key={e.id} className="relative sm:pl-10">
                               <div className="absolute left-[10px] top-6 h-3 w-3 rounded-full bg-white border-2 border-blue-500 hidden sm:block" />
 
-                              <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden hover:shadow-md transition-shadow">
+                              <div className="rounded-2xl border border-gray-200 bg-white  overflow-hidden hover:shadow-md transition-shadow">
                                 <AgentProfileStatusBar engagement={e} />
 
                                 <EngagementCard

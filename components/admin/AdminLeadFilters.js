@@ -2,7 +2,7 @@
 
 import {
   Download,
-  LayoutGrid,
+  Grid3X3,
   List,
   RotateCcw,
   Search,
@@ -14,221 +14,183 @@ export default function AdminLeadFilters({
   setView,
   filters,
   setFilters,
-  sort,
-  setSort,
-  onExport,
+  teamOptions = [],
   totalCount = 0,
   filteredCount = 0,
-  isSuperAdmin = false
+  isSuperAdmin = false,
+  onExport
 }) {
+  const updateFilter = (key, value) => {
+    setFilters(prev => ({
+      ...prev,
+      [key]: value
+    }));
+  };
+
   const resetFilters = () => {
     setFilters({
       stage: "all",
       assignedTo: "all",
       nextAction: "all",
-      status: "all",
       leadHealth: "all",
+      dateRange: "all",
       search: ""
-    });
-
-    setSort?.({
-      key: "createdAt",
-      direction: "desc"
     });
   };
 
   return (
-    <div
-      className="
-        sticky top-0 z-20 mb-4
-        rounded-2xl border border-gray-100
-        bg-white/90 p-3 shadow-sm backdrop-blur
-      "
-    >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        {/* LEFT */}
-        <div className="flex flex-1 flex-wrap items-center gap-2">
-          <div className="relative min-w-[220px] flex-1 sm:flex-none">
-            <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
-            <input
-              value={filters.search || ""}
-              onChange={e =>
-                setFilters(f => ({
-                  ...f,
-                  search: e.target.value
-                }))
-              }
-              placeholder="Search lead, customer, phone, agent..."
-              className="h-9 w-full rounded-xl border border-gray-100 bg-white pl-9 pr-3 text-xs outline-none focus:border-blue-200 focus:ring-2 focus:ring-blue-50"
-            />
-          </div>
+    <div className="sticky top-4 z-20 rounded-2xl border border-gray-100 bg-white/95 p-3 shadow-sm backdrop-blur">
+      <div className="flex flex-wrap items-center gap-2">
+        {/* SEARCH */}
+        <div className="relative min-w-[240px] flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
 
-          <select
-            value={filters.stage}
-            onChange={e =>
-              setFilters(f => ({
-                ...f,
-                stage: e.target.value
-              }))
-            }
-            className="h-9 rounded-xl border border-gray-100 bg-white px-3 text-xs outline-none focus:border-blue-200"
-          >
-            <option value="all">All Stages</option>
-            <option value="new">New</option>
-            <option value="follow_up">Follow Up</option>
-            <option value="quoted">Quoted</option>
-            <option value="closed_won">Closed Won</option>
-            <option value="closed_lost">Closed Lost</option>
-          </select>
-
-          <select
-            value={filters.assignedTo}
-            onChange={e =>
-              setFilters(f => ({
-                ...f,
-                assignedTo: e.target.value
-              }))
-            }
-            className="h-9 rounded-xl border border-gray-100 bg-white px-3 text-xs outline-none focus:border-blue-200"
-          >
-            <option value="all">All Team</option>
-            {/* map team users here later */}
-          </select>
-
-          <select
-            value={filters.nextAction}
-            onChange={e =>
-              setFilters(f => ({
-                ...f,
-                nextAction: e.target.value
-              }))
-            }
-            className="h-9 rounded-xl border border-gray-100 bg-white px-3 text-xs outline-none focus:border-blue-200"
-          >
-            <option value="all">All Actions</option>
-            <option value="overdue">Overdue</option>
-            <option value="today">Due Today</option>
-            <option value="none">No Next Action</option>
-          </select>
-
-          <select
-            value={filters.status || "all"}
-            onChange={e =>
-              setFilters(f => ({
-                ...f,
-                status: e.target.value
-              }))
-            }
-            className="h-9 rounded-xl border border-gray-100 bg-white px-3 text-xs outline-none focus:border-blue-200"
-          >
-            <option value="all">All Status</option>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-          </select>
-
-          <select
-            value={filters.leadHealth || "all"}
-            onChange={e =>
-              setFilters(f => ({
-                ...f,
-                leadHealth: e.target.value
-              }))
-            }
-            className="h-9 rounded-xl border border-gray-100 bg-white px-3 text-xs outline-none focus:border-blue-200"
-          >
-            <option value="all">All Health</option>
-            <option value="healthy">Healthy</option>
-            <option value="due_today">Due Today</option>
-            <option value="overdue">Overdue</option>
-            <option value="no_followup">No Follow-up</option>
-          </select>
-
-          {sort && setSort && (
-            <select
-              value={`${sort.key}:${sort.direction}`}
-              onChange={e => {
-                const [key, direction] = e.target.value.split(":");
-                setSort({ key, direction });
-              }}
-              className="h-9 rounded-xl border border-gray-100 bg-white px-3 text-xs outline-none focus:border-blue-200"
-            >
-              <option value="createdAt:desc">Newest First</option>
-              <option value="createdAt:asc">Oldest First</option>
-              <option value="nextActionAt:asc">Next Follow-up</option>
-              <option value="overdue:desc">Overdue First</option>
-              <option value="leadCode:asc">Lead Code A-Z</option>
-              <option value="stage:asc">Stage A-Z</option>
-            </select>
-          )}
+          <input
+            value={filters.search || ""}
+            onChange={e => updateFilter("search", e.target.value)}
+            placeholder="Search lead, customer, phone"
+            className="h-9 w-full rounded-xl border border-gray-200 bg-white pl-9 pr-3 text-xs text-gray-700 outline-none transition placeholder:text-gray-400 hover:border-blue-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+          />
         </div>
 
-        {/* RIGHT */}
-        <div className="flex items-center gap-2">
-          <div className="hidden text-right sm:block">
-            <p className="text-[11px] font-medium text-gray-700">
-              {filteredCount} / {totalCount}
-            </p>
-            <p className="text-[10px] text-gray-400">visible leads</p>
+        {/* STAGE */}
+        <select
+          value={filters.stage || "all"}
+          onChange={e => updateFilter("stage", e.target.value)}
+          className="h-9 min-w-[115px] rounded-xl border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 outline-none transition hover:border-blue-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+        >
+          <option value="all">All Stages</option>
+          <option value="new">New</option>
+          <option value="contacted">Contacted</option>
+          <option value="qualified">Qualified</option>
+          <option value="quotation">Quotation</option>
+          <option value="negotiation">Negotiation</option>
+          <option value="won">Won</option>
+          <option value="lost">Lost</option>
+        </select>
+
+        {/* TEAM */}
+        <select
+          value={filters.assignedTo || "all"}
+          onChange={e => updateFilter("assignedTo", e.target.value)}
+          className="h-9 min-w-[155px] rounded-xl border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 outline-none transition hover:border-blue-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+        >
+          <option value="all">All Team</option>
+
+          {teamOptions.map(member => (
+            <option key={member.value} value={member.value}>
+              {member.label}
+            </option>
+          ))}
+        </select>
+
+        {/* NEXT ACTION */}
+        <select
+          value={filters.nextAction || "all"}
+          onChange={e => updateFilter("nextAction", e.target.value)}
+          className="h-9 min-w-[120px] rounded-xl border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 outline-none transition hover:border-blue-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+        >
+          <option value="all">All Actions</option>
+          <option value="today">Due Today</option>
+          <option value="overdue">Overdue</option>
+          <option value="none">No Follow-up</option>
+        </select>
+
+        {/* HEALTH */}
+        <select
+          value={filters.leadHealth || "all"}
+          onChange={e => updateFilter("leadHealth", e.target.value)}
+          className="h-9 min-w-[110px] rounded-xl border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 outline-none transition hover:border-blue-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+        >
+          <option value="all">All Health</option>
+          <option value="healthy">Healthy</option>
+          <option value="due_today">Due Today</option>
+          <option value="overdue">Overdue</option>
+          <option value="no_followup">No Follow-up</option>
+          <option value="inactive">Inactive</option>
+        </select>
+
+        {/* DATE */}
+        <select
+          value={filters.dateRange || "all"}
+          onChange={e => updateFilter("dateRange", e.target.value)}
+          className="h-9 min-w-[105px] rounded-xl border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 outline-none transition hover:border-blue-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+        >
+          <option value="all">All Time</option>
+          <option value="today">Today</option>
+          <option value="yesterday">Yesterday</option>
+        </select>
+
+        {/* COUNT */}
+        <div className="ml-auto hidden min-w-[70px] text-right lg:block">
+          <p className="text-xs font-semibold text-gray-700">
+            {filteredCount} / {totalCount}
+          </p>
+          <p className="text-[10px] text-gray-400">
+            visible leads
+          </p>
+        </div>
+
+        {isSuperAdmin && (
+          <div className="hidden items-center gap-1 rounded-full bg-violet-50 px-2.5 py-1 text-[10px] font-medium text-violet-700 xl:inline-flex">
+            <ShieldCheck className="h-3.5 w-3.5" />
+            Super admin
           </div>
+        )}
 
-          {isSuperAdmin && (
-            <div className="hidden items-center gap-1 rounded-full bg-violet-50 px-2.5 py-1 text-[10px] font-medium text-violet-700 sm:inline-flex">
-              <ShieldCheck className="h-3 w-3" />
-              Super admin
-            </div>
-          )}
+        {/* RESET */}
+        <button
+          type="button"
+          onClick={resetFilters}
+          className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 text-xs font-medium text-gray-600 transition hover:border-gray-300 hover:bg-gray-50"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+          Reset
+        </button>
 
+        {/* EXPORT */}
+        <button
+          type="button"
+          onClick={onExport}
+          className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 text-xs font-medium text-gray-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+        >
+          <Download className="h-3.5 w-3.5" />
+          Export
+        </button>
+
+        {/* VIEW SWITCH */}
+        <div className="flex overflow-hidden rounded-xl border border-gray-200 bg-white">
           <button
             type="button"
-            onClick={resetFilters}
-            className="
-              inline-flex h-9 items-center gap-1.5
-              rounded-xl border border-gray-100 px-3
-              text-xs text-gray-600 hover:bg-gray-50
-            "
-          >
-            <RotateCcw size={14} />
-            Reset
-          </button>
-
-          <button
-            type="button"
-            onClick={onExport}
-            className="
-              inline-flex h-9 items-center gap-1.5
-              rounded-xl border border-gray-100 px-3
-              text-xs text-gray-600 hover:bg-gray-50
-            "
-          >
-            <Download size={14} />
-            Export
-          </button>
-
-          <div className="flex h-9 overflow-hidden rounded-xl border border-gray-100">
-            <button
-              type="button"
-              onClick={() => setView("card")}
-              className={`px-3 ${
+            onClick={() => setView("card")}
+            className={`
+              flex h-9 w-9 items-center justify-center transition
+              ${
                 view === "card"
                   ? "bg-blue-600 text-white"
                   : "text-gray-500 hover:bg-gray-50"
-              }`}
-            >
-              <LayoutGrid size={14} />
-            </button>
+              }
+            `}
+            title="Card view"
+          >
+            <Grid3X3 className="h-4 w-4" />
+          </button>
 
-            <button
-              type="button"
-              onClick={() => setView("table")}
-              className={`px-3 ${
+          <button
+            type="button"
+            onClick={() => setView("table")}
+            className={`
+              flex h-9 w-9 items-center justify-center border-l border-gray-200 transition
+              ${
                 view === "table"
                   ? "bg-blue-600 text-white"
                   : "text-gray-500 hover:bg-gray-50"
-              }`}
-            >
-              <List size={14} />
-            </button>
-          </div>
+              }
+            `}
+            title="Table view"
+          >
+            <List className="h-4 w-4" />
+          </button>
         </div>
       </div>
     </div>

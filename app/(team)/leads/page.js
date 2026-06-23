@@ -47,6 +47,13 @@ const DEFAULT_FILTERS = {
 /* =========================
    HELPERS
 ========================= */
+
+const isDeletedLead = lead =>
+  lead?.isDelete === true ||
+  lead?.deleted === true ||
+  lead?.isDeleted === true;
+
+
 const normalize = value =>
   String(value || "")
     .trim()
@@ -155,12 +162,12 @@ const getLeadAssignedByUid = lead =>
 const getNormalizedLeadStage = lead =>
   normalize(
     lead.stage ||
-      lead.status ||
-      lead.leadStage ||
-      lead.pipelineStage ||
-      lead.dealStatus ||
-      lead.outcome ||
-      ""
+    lead.status ||
+    lead.leadStage ||
+    lead.pipelineStage ||
+    lead.dealStatus ||
+    lead.outcome ||
+    ""
   )
     .replaceAll("-", "_")
     .replaceAll(" ", "_");
@@ -242,9 +249,9 @@ const isDealLostLead = lead => {
 function getLeadHealth(lead) {
   const due = getValidDate(
     lead?.nextActionDueAt ||
-      lead?.nextFollowUpAt ||
-      lead?.followUpAt ||
-      lead?.nextActionDate
+    lead?.nextFollowUpAt ||
+    lead?.followUpAt ||
+    lead?.nextActionDate
   );
 
   if (!due) return "healthy";
@@ -316,7 +323,7 @@ function KpiCard({ icon: Icon, label, value, helper, tone = "blue" }) {
   };
 
   return (
-    <div className="rounded-3xl border border-gray-200 bg-white p-4 shadow-sm hover:shadow-md transition">
+    <div className="rounded-3xl border border-gray-200 bg-white p-4  hover:shadow-md transition">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-medium text-gray-500">
@@ -335,9 +342,8 @@ function KpiCard({ icon: Icon, label, value, helper, tone = "blue" }) {
         </div>
 
         <div
-          className={`h-11 w-11 rounded-2xl flex items-center justify-center shrink-0 ${
-            toneClass[tone] || toneClass.blue
-          }`}
+          className={`h-11 w-11 rounded-2xl flex items-center justify-center shrink-0 ${toneClass[tone] || toneClass.blue
+            }`}
         >
           <Icon size={20} />
         </div>
@@ -348,7 +354,7 @@ function KpiCard({ icon: Icon, label, value, helper, tone = "blue" }) {
 
 function SectionCard({ title, subtitle, children }) {
   return (
-    <section className="rounded-3xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+    <section className="rounded-3xl border border-gray-200 bg-white  overflow-hidden">
       <div className="border-b border-gray-100 px-4 py-3">
         <h2 className="text-sm font-semibold text-gray-900">
           {title}
@@ -473,7 +479,7 @@ function RecentLeadItem({ lead, user }) {
 
   return (
     <Link href={`/leads/${lead.id}`} className="block group">
-      <div className="rounded-2xl border border-gray-200 bg-white p-4 hover:border-blue-200 hover:shadow-sm transition">
+      <div className="rounded-2xl border border-gray-200 bg-white p-4 hover:border-blue-200 hover: transition">
         <div className="flex items-start gap-3">
           <div className="h-10 w-10 rounded-2xl bg-blue-50 text-blue-700 flex items-center justify-center shrink-0">
             <Target size={18} />
@@ -551,10 +557,11 @@ export default function LeadDashboardPage() {
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
 
   /* =========================
-     LOAD LEADS
-     No orderBy here to avoid Firestore composite index requirement.
-     Sorting is handled after mergeRows().
-  ========================== */
+    LOAD LEADS
+    No orderBy here to avoid Firestore composite index requirement.
+    Sorting is handled after mergeRows().
+    Deleted leads are removed using isDelete / deleted / isDeleted flags.
+ ========================== */
   useEffect(() => {
     if (authLoading) return;
 
@@ -571,26 +578,49 @@ export default function LeadDashboardPage() {
     let createdRows = new Map();
     let assignedByRows = new Map();
 
+    const mapActiveDocs = snap => {
+      return new Map(
+        snap.docs
+          .map(d => {
+            const lead = {
+              id: d.id,
+              ...d.data()
+            };
+
+            return [d.id, lead];
+          })
+          .filter(([, lead]) => !isDeletedLead(lead))
+      );
+    };
+
     const mergeRows = () => {
       const merged = new Map();
 
       createdRows.forEach((value, key) => {
-        merged.set(key, value);
+        if (!isDeletedLead(value)) {
+          merged.set(key, value);
+        }
       });
 
       assignedRows.forEach((value, key) => {
-        merged.set(key, value);
+        if (!isDeletedLead(value)) {
+          merged.set(key, value);
+        }
       });
 
       assignedByRows.forEach((value, key) => {
-        merged.set(key, value);
+        if (!isDeletedLead(value)) {
+          merged.set(key, value);
+        }
       });
 
-      const rows = Array.from(merged.values()).sort((a, b) => {
-        const aTime = getValidDate(a.createdAt)?.getTime?.() || 0;
-        const bTime = getValidDate(b.createdAt)?.getTime?.() || 0;
-        return bTime - aTime;
-      });
+      const rows = Array.from(merged.values())
+        .filter(lead => !isDeletedLead(lead))
+        .sort((a, b) => {
+          const aTime = getValidDate(a.createdAt)?.getTime?.() || 0;
+          const bTime = getValidDate(b.createdAt)?.getTime?.() || 0;
+          return bTime - aTime;
+        });
 
       setLeads(rows);
       setLoading(false);
@@ -614,16 +644,7 @@ export default function LeadDashboardPage() {
     const unsubAssigned = onSnapshot(
       assignedQuery,
       snap => {
-        assignedRows = new Map(
-          snap.docs.map(d => [
-            d.id,
-            {
-              id: d.id,
-              ...d.data()
-            }
-          ])
-        );
-
+        assignedRows = mapActiveDocs(snap);
         mergeRows();
       },
       err => {
@@ -636,16 +657,7 @@ export default function LeadDashboardPage() {
     const unsubCreated = onSnapshot(
       createdQuery,
       snap => {
-        createdRows = new Map(
-          snap.docs.map(d => [
-            d.id,
-            {
-              id: d.id,
-              ...d.data()
-            }
-          ])
-        );
-
+        createdRows = mapActiveDocs(snap);
         mergeRows();
       },
       err => {
@@ -658,16 +670,7 @@ export default function LeadDashboardPage() {
     const unsubAssignedBy = onSnapshot(
       assignedByQuery,
       snap => {
-        assignedByRows = new Map(
-          snap.docs.map(d => [
-            d.id,
-            {
-              id: d.id,
-              ...d.data()
-            }
-          ])
-        );
-
+        assignedByRows = mapActiveDocs(snap);
         mergeRows();
       },
       err => {
@@ -960,7 +963,7 @@ export default function LeadDashboardPage() {
   if (authLoading || loading) {
     return (
       <main className="min-h-screen bg-gray-50">
-        <div className="max-w-7xl mx-auto px-4 py-6 space-y-4">
+        <div className="max-w-9xl mx-auto px-4 py-6 space-y-4">
           <CardSkeleton />
 
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
@@ -981,10 +984,10 @@ export default function LeadDashboardPage() {
 
   return (
     <main className="min-h-screen bg-gray-50">
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+      <div className="max-w-9xl mx-auto px-4 py-6 space-y-6">
 
         {/* ================= BANNER ================= */}
-        <section className="rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 shadow-sm overflow-hidden">
+        <section className="rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700  overflow-hidden">
           <div className="p-5 md:p-6">
             <div className="flex items-start gap-4">
               <div className="h-12 w-12 rounded-2xl bg-white/15 text-white flex items-center justify-center shrink-0">
@@ -1012,7 +1015,7 @@ export default function LeadDashboardPage() {
         </section>
 
         {/* ================= FILTER PANEL ================= */}
-        <section className="rounded-3xl border border-gray-200 bg-white p-4 shadow-sm">
+        <section className="rounded-3xl border border-gray-200 bg-white p-4 ">
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-8 gap-3">
 
             <div className="xl:col-span-2">

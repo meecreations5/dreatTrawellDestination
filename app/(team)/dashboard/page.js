@@ -53,7 +53,7 @@ function HeaderAction({
 }) {
   const desktopClasses =
     variant === "primary"
-      ? "bg-white text-blue-700 hover:bg-blue-50 shadow-sm"
+      ? "bg-white text-blue-700 hover:bg-blue-50 "
       : variant === "admin"
       ? "bg-red-50 text-red-700 border border-red-100 hover:bg-red-100"
       : "bg-white/10 text-white border border-white/20 hover:bg-white/20";
@@ -129,7 +129,7 @@ export default function DashboardPage() {
     return (
       <main className="min-h-screen bg-slate-50 px-4 py-4 md:p-6">
         <div className="w-full max-w-7xl mx-auto space-y-5">
-          <div className="h-40 rounded-3xl bg-white border border-slate-200 shadow-sm animate-pulse" />
+          <div className="h-40 rounded-3xl bg-white border border-slate-200  animate-pulse" />
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="h-28 rounded-2xl bg-white border border-slate-200 animate-pulse" />
@@ -146,10 +146,10 @@ export default function DashboardPage() {
 
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#eff6ff_0%,#f8fafc_36%,#f8fafc_100%)] px-3 py-3 md:px-6 md:py-6">
-      <div className="w-full max-w-7xl mx-auto space-y-5">
+      <div className="w-full max-w-9xl mx-auto space-y-5">
 
         {/* ================= HEADER ================= */}
-        <section className="overflow-hidden rounded-3xl border border-blue-100 bg-white shadow-sm">
+        <section className="overflow-hidden rounded-3xl border border-blue-100 bg-white ">
 
           <div className="relative bg-gradient-to-r from-blue-700 via-indigo-700 to-sky-600 px-4 py-5 md:px-6 md:py-6">
             <div className="absolute inset-0 opacity-20 bg-[radial-gradient(circle_at_top_right,_white,_transparent_35%)]" />
@@ -158,7 +158,7 @@ export default function DashboardPage() {
 
               {/* LEFT */}
               <div className="flex items-start gap-3 md:gap-4">
-                <div className="h-12 w-12 md:h-14 md:w-14 rounded-2xl bg-white/15 border border-white/20 text-white flex items-center justify-center shadow-sm">
+                <div className="h-12 w-12 md:h-14 md:w-14 rounded-2xl bg-white/15 border border-white/20 text-white flex items-center justify-center ">
                   <LayoutDashboard className="w-6 h-6 md:w-7 md:h-7" />
                 </div>
 
@@ -216,7 +216,7 @@ export default function DashboardPage() {
                 </div>
 
                 <div className="hidden sm:flex items-center gap-3 rounded-2xl bg-white/10 border border-white/20 px-3 py-2">
-                  <div className="h-9 w-9 rounded-full bg-white text-blue-700 flex items-center justify-center text-xs font-bold shadow-sm">
+                  <div className="h-9 w-9 rounded-full bg-white text-blue-700 flex items-center justify-center text-xs font-bold ">
                     {initials}
                   </div>
 

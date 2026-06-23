@@ -213,7 +213,7 @@ function PageSkeleton() {
 
 function InfoCard({ icon: Icon, title, description, children, action }) {
   return (
-    <section className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+    <section className="bg-white rounded-2xl border border-gray-100  overflow-hidden">
       <div className="px-5 py-4 border-b border-gray-100 bg-gray-50/70 flex items-center justify-between gap-3">
         <div className="flex items-start gap-3">
           <div className="h-10 w-10 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center shrink-0">
@@ -266,7 +266,7 @@ function StatCard({ icon: Icon, label, value, subText, tone = "blue" }) {
   };
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+    <div className="bg-white rounded-2xl border border-gray-100  p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-medium text-gray-500">
@@ -326,7 +326,7 @@ function TabButton({ active, children, onClick, count }) {
         px-4 py-2 rounded-xl text-sm font-medium transition inline-flex items-center gap-2
         ${
           active
-            ? "bg-blue-600 text-white shadow-sm"
+            ? "bg-blue-600 text-white "
             : "text-gray-600 hover:bg-gray-100"
         }
       `}
@@ -650,7 +650,7 @@ export default function VendorDetailPage() {
             Back
           </button>
 
-          <div className="mt-6 bg-white rounded-2xl border border-gray-100 shadow-sm p-10 text-center">
+          <div className="mt-6 bg-white rounded-2xl border border-gray-100  p-10 text-center">
             <XCircle size={42} className="text-red-500 mx-auto" />
 
             <h1 className="text-xl font-semibold text-gray-900 mt-4">
@@ -675,8 +675,8 @@ export default function VendorDetailPage() {
 
   if (editMode) {
     return (
-      <main className="min-h-screen bg-gray-50 p-4 md:p-6">
-        <div className="max-w-7xl mx-auto space-y-5">
+      <main className="min-h-screen p-4 md:p-6">
+        <div className="max-w-9xl mx-auto space-y-5">
           <button
             type="button"
             onClick={() => setEditMode(false)}
@@ -703,7 +703,7 @@ export default function VendorDetailPage() {
   const whatsappUrl = getWhatsAppUrl(vendor.whatsapp || vendor.mobile);
 
   return (
-    <main className="min-h-screen bg-gray-50 p-4 md:p-6">
+    <main className="min-h-screen  p-4 md:p-6">
       <div className="max-w-7xl mx-auto space-y-6">
         {/* TOP NAV */}
         <div className="flex items-center justify-between gap-3">
@@ -725,11 +725,11 @@ export default function VendorDetailPage() {
         </div>
 
         {/* HERO */}
-        <section className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
+        <section className="bg-white rounded-3xl border border-gray-100  overflow-hidden">
           <div className="p-5 md:p-6 bg-gradient-to-br from-blue-50 via-white to-indigo-50">
             <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-6">
               <div className="flex items-start gap-4 min-w-0">
-                <div className="h-16 w-16 rounded-2xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                <div className="h-16 w-16 rounded-2xl bg-blue-600 text-white flex items-center justify-center shrink-0 ">
                   <Building2 size={29} />
                 </div>
 
