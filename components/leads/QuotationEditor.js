@@ -260,6 +260,106 @@ function formatCurrency(value) {
   }).format(amount);
 }
 
+function formatQuotationPrice(value, currency = "INR") {
+  const amount = Number(value || 0);
+
+  if (!Number.isFinite(amount) || amount <= 0) return "";
+
+  try {
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: currency || "INR",
+      maximumFractionDigits: 0
+    }).format(amount);
+  } catch {
+    return `${currency || "INR"} ${amount.toLocaleString("en-IN")}`;
+  }
+}
+
+function buildQuotationWhatsAppMessage({
+  recipientName,
+  recipientEmail,
+  lead,
+  revision,
+  quotationData,
+  customerQuotedAmount,
+  customerQuoteCurrency,
+  whatsappSignatureText,
+  isFinalQuotation,
+  emailAlsoSent = false
+}) {
+  const travelDetails = quotationData?.travelDetails || {};
+
+  const destinationName = getFirstValue(
+    travelDetails.destinationName,
+    lead?.destinationName,
+    lead?.destination,
+    "your travel enquiry"
+  );
+
+  const travelMonth = formatDisplayMonth(travelDetails.travelMonth);
+  const checkIn = formatDisplayDate(travelDetails.checkIn);
+  const checkOut = formatDisplayDate(travelDetails.checkOut);
+
+  const paxText = getFirstValue(
+    travelDetails.paxText,
+    lead?.paxText,
+    lead?.noOfPax,
+    lead?.pax,
+    lead?.totalPax
+  );
+
+  const quotationRef = [
+    lead?.leadCode || "",
+    revision ? `Rev ${revision}` : ""
+  ]
+    .filter(Boolean)
+    .join(" / ");
+
+  const packagePrice = formatQuotationPrice(
+    customerQuotedAmount,
+    customerQuoteCurrency || "INR"
+  );
+
+  const travelRows = [
+    `Destination: ${destinationName}`,
+    travelMonth ? `Travel Month: ${travelMonth}` : "",
+    checkIn ? `Check-in: ${checkIn}` : "",
+    checkOut ? `Check-out: ${checkOut}` : "",
+    paxText ? `Guests: ${paxText}` : "",
+    quotationRef ? `Quotation Ref: ${quotationRef}` : "",
+    packagePrice ? `Package Price: ${packagePrice}` : "",
+    isFinalQuotation ? "Status: Final Quotation" : ""
+  ].filter(Boolean);
+
+  return [
+    `Hello ${recipientName || "Partner"},`,
+    "",
+    "Thank you for giving us the opportunity to design this travel experience for your client.",
+    "",
+    "We have thoughtfully prepared the quotation and itinerary, keeping comfort, seamless arrangements, and memorable travel moments at the centre of the plan.",
+    "",
+    "*Quotation Snapshot*",
+    travelRows.join("\n"),
+    "",
+    recipientEmail
+      ? `Please check the detailed quotation with itinerary on ${recipientEmail}.`
+      : emailAlsoSent
+        ? "The detailed quotation with itinerary has also been shared on email for your review."
+        : "Please review the shared quotation and itinerary details.",
+    "",
+    "*Recommended Next Step*",
+    "Kindly review the package details and share your feedback. If required, we can refine the hotel options, itinerary flow, inclusions, travel dates, or budget alignment.",
+    "",
+    "We will be happy to shape the plan further as per your client’s expectations.",
+    "",
+    whatsappSignatureText
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
 function htmlContainsGreeting(html = "") {
   const text = String(html)
     .replace(/<[^>]*>/g, " ")
@@ -2618,28 +2718,19 @@ export default function QuotationEditor({
       }
 
       if (sendWhatsApp && hasWhatsApp) {
-        const whatsappMessage = [
-          `Dear ${recipient.name || "Guest"},`,
-          "",
-          "Thank you for choosing DreamTrawell Destination.",
-          "",
-          `Your quotation for ${lead.destinationName || "your travel enquiry"
-          } has been prepared.`,
-          lead.leadCode || revision
-            ? `Quotation Ref: ${[
-              lead.leadCode || "",
-              revision ? `Rev ${revision}` : ""
-            ]
-              .filter(Boolean)
-              .join(" / ")}`
-            : "",
-          "",
-          "Please review the itinerary details shared with you and let us know if you would like any changes.",
-          "",
-          whatsappSignatureText
-        ]
-          .filter(Boolean)
-          .join("\n");
+        const whatsappMessage = buildQuotationWhatsAppMessage({
+          recipientName: recipient.name || "Partner",
+          recipientEmail: recipient.email || "",
+          lead,
+          revision,
+          quotationData: finalQuotationData || cleanPreviewQuotationData,
+          customerQuotedAmount: customerAmountNumber,
+          customerQuoteCurrency: selectedVendorCurrency,
+          whatsappSignatureText,
+          isFinalQuotation,
+          emailAlsoSent: emailSent
+        });
+
 
         sendWhatsAppWeb({
           mobile: recipient.mobile,
@@ -2729,21 +2820,18 @@ export default function QuotationEditor({
     itineraryAlreadyHasGreeting: previewAlreadyHasGreeting
   });
 
-  const previewWhatsappMessage = [
-    `Dear ${recipient.name || "Guest"},`,
-    "",
-    "Thank you for choosing DreamTrawell Destination.",
-    "",
-    `Your quotation for ${lead.destinationName || "your travel enquiry"
-    } has been prepared.`,
-    lead.leadCode ? `Quotation Ref: ${lead.leadCode}` : "",
-    "",
-    "Please review the itinerary details shared with you and let us know if you would like any changes.",
-    "",
-    previewWhatsappSignatureText
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const previewWhatsappMessage = buildQuotationWhatsAppMessage({
+    recipientName: recipient.name || "Partner",
+    recipientEmail: recipient.email || "",
+    lead,
+    revision: draftRevision,
+    quotationData: cleanPreviewQuotationData,
+    customerQuotedAmount: customerAmountNumber,
+    customerQuoteCurrency: selectedVendorCurrency,
+    whatsappSignatureText: previewWhatsappSignatureText,
+    isFinalQuotation,
+    emailAlsoSent: sendEmail && hasEmail
+  });
 
   const selectedSignatureName =
     getMemberName(previewSignature) ||

@@ -147,6 +147,7 @@ function getUniqueHighValueAttentionRows(rows = []) {
 
     if (!existing) {
       map.set(leadKey, {
+        key: String(leadKey),
         name: item.leadCode || leadKey,
         count: amount,
         displayCount: formatCurrency(amount),
@@ -593,6 +594,39 @@ function getLeadOwner(lead, userMap) {
     userData?.displayName ||
     userData?.name ||
     lead?.createdByName ||
+    formatNameFromEmail(email);
+
+  return {
+    uid,
+    email,
+    name,
+    department: userData?.department || "",
+    role: userData?.role || userData?.designation || ""
+  };
+}
+
+
+function getLeadCreator(lead, userMap) {
+  const uid =
+    lead?.createdByUid ||
+    lead?.createdByUserId ||
+    lead?.creatorUid ||
+    "";
+
+  const userData = uid ? userMap.get(uid) : null;
+
+  const email =
+    lead?.createdByEmail ||
+    lead?.createdBy ||
+    lead?.creatorEmail ||
+    userData?.email ||
+    "";
+
+  const name =
+    lead?.createdByName ||
+    lead?.creatorName ||
+    userData?.displayName ||
+    userData?.name ||
     formatNameFromEmail(email);
 
   return {
@@ -1660,10 +1694,18 @@ export default function AdminDashboardGraph() {
     });
 
     teamLeads.forEach(lead => {
+      const creator = getLeadCreator(lead, userMap);
+      const creatorRow = ensureMember(creator);
+
+      creatorRow.newLeads += 1;
+
+      updateLastActivity(
+        creatorRow,
+        lead.createdAt || lead.updatedAt || lead.assignedAt || lead.lastActivityAt
+      );
+
       const owner = getLeadOwner(lead, userMap);
       const row = ensureMember(owner);
-
-      row.newLeads += 1;
 
       if (hasLeadAssignee(lead)) row.assignedLeads += 1;
       if (isActiveLead(lead)) row.activeLeads += 1;
@@ -1832,7 +1874,7 @@ export default function AdminDashboardGraph() {
                 : "0%";
 
               return (
-                <div key={row.key}>
+                <div key={`high-value-attention-${row.key || row.name}`}>
                   <div className="flex items-start justify-between gap-3 mb-1">
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-gray-800 truncate">

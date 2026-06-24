@@ -50,14 +50,25 @@ const DEFAULT_FILTERS = {
 
 const isDeletedLead = lead =>
   lead?.isDelete === true ||
+  lead?.isDeleted === true ||
   lead?.deleted === true ||
-  lead?.isDeleted === true;
-
+  String(lead?.isDelete || "").trim().toLowerCase() === "true" ||
+  String(lead?.isDeleted || "").trim().toLowerCase() === "true" ||
+  String(lead?.deleted || "").trim().toLowerCase() === "true" ||
+  Boolean(lead?.deletedAt);
 
 const normalize = value =>
   String(value || "")
     .trim()
     .toLowerCase();
+
+const normalizeEmail = value =>
+  String(value || "")
+    .trim()
+    .toLowerCase();
+
+const getUserEmail = user =>
+  normalizeEmail(user?.email || user?.workEmail || user?.officialEmail);
 
 const getValidDate = value => {
   if (!value) return null;
@@ -92,10 +103,15 @@ const toDateInput = date => {
   return `${year}-${month}-${day}`;
 };
 
-const isSameDay = (a, b) =>
-  a.getDate() === b.getDate() &&
-  a.getMonth() === b.getMonth() &&
-  a.getFullYear() === b.getFullYear();
+const isSameDay = (a, b) => {
+  if (!a || !b) return false;
+
+  return (
+    a.getDate() === b.getDate() &&
+    a.getMonth() === b.getMonth() &&
+    a.getFullYear() === b.getFullYear()
+  );
+};
 
 const formatDate = value => {
   const date = getValidDate(value);
@@ -137,27 +153,52 @@ const getUid = value => {
   return "";
 };
 
-const getLeadCreatedByUid = lead =>
-  getUid(lead.createdByUid) ||
-  getUid(lead.createdBy) ||
-  getUid(lead.createdByUser) ||
-  getUid(lead.createdByUserId) ||
-  "";
+const valueMatchesUser = (value, user) => {
+  const raw = getUid(value);
+  const userEmail = getUserEmail(user);
+  const normalizedRaw = normalizeEmail(raw);
 
-const getLeadAssignedToUid = lead =>
-  getUid(lead.assignedToUid) ||
-  getUid(lead.assignedTo) ||
-  getUid(lead.ownerUid) ||
-  getUid(lead.assignedToUser) ||
-  getUid(lead.accountManagerUid) ||
-  "";
+  return Boolean(
+    raw === user?.uid ||
+      (userEmail && normalizedRaw === userEmail)
+  );
+};
 
-const getLeadAssignedByUid = lead =>
-  getUid(lead.assignedByUid) ||
-  getUid(lead.assignedBy) ||
-  getUid(lead.assignedByUser) ||
-  getUid(lead.lastAssignedByUid) ||
-  "";
+const isLeadCreatedByUser = (lead, user) => {
+  return (
+    valueMatchesUser(lead.createdByUid, user) ||
+    valueMatchesUser(lead.createdBy, user) ||
+    valueMatchesUser(lead.createdByUser, user) ||
+    valueMatchesUser(lead.createdByUserId, user) ||
+    valueMatchesUser(lead.creatorUid, user) ||
+    normalizeEmail(lead.createdByEmail) === getUserEmail(user) ||
+    normalizeEmail(lead.creatorEmail) === getUserEmail(user)
+  );
+};
+
+const isLeadAssignedToUser = (lead, user) => {
+  return (
+    valueMatchesUser(lead.assignedToUid, user) ||
+    valueMatchesUser(lead.assignedTo, user) ||
+    valueMatchesUser(lead.ownerUid, user) ||
+    valueMatchesUser(lead.assignedToUser, user) ||
+    valueMatchesUser(lead.accountManagerUid, user) ||
+    normalizeEmail(lead.assignedToEmail) === getUserEmail(user) ||
+    normalizeEmail(lead.assigneeEmail) === getUserEmail(user) ||
+    normalizeEmail(lead.teamMemberEmail) === getUserEmail(user)
+  );
+};
+
+const isLeadAssignedByUser = (lead, user) => {
+  return (
+    valueMatchesUser(lead.assignedByUid, user) ||
+    valueMatchesUser(lead.assignedBy, user) ||
+    valueMatchesUser(lead.assignedByUser, user) ||
+    valueMatchesUser(lead.lastAssignedByUid, user) ||
+    normalizeEmail(lead.assignedByEmail) === getUserEmail(user) ||
+    normalizeEmail(lead.assignedByUserEmail) === getUserEmail(user)
+  );
+};
 
 const getNormalizedLeadStage = lead =>
   normalize(
@@ -249,9 +290,9 @@ const isDealLostLead = lead => {
 function getLeadHealth(lead) {
   const due = getValidDate(
     lead?.nextActionDueAt ||
-    lead?.nextFollowUpAt ||
-    lead?.followUpAt ||
-    lead?.nextActionDate
+      lead?.nextFollowUpAt ||
+      lead?.followUpAt ||
+      lead?.nextActionDate
   );
 
   if (!due) return "healthy";
@@ -307,6 +348,8 @@ const getOwnerName = lead =>
   lead.assignedToName ||
   lead.ownerName ||
   lead.accountManagerName ||
+  lead.assignedToEmail ||
+  lead.assignedTo ||
   "Unassigned";
 
 /* =========================
@@ -342,8 +385,9 @@ function KpiCard({ icon: Icon, label, value, helper, tone = "blue" }) {
         </div>
 
         <div
-          className={`h-11 w-11 rounded-2xl flex items-center justify-center shrink-0 ${toneClass[tone] || toneClass.blue
-            }`}
+          className={`h-11 w-11 rounded-2xl flex items-center justify-center shrink-0 ${
+            toneClass[tone] || toneClass.blue
+          }`}
         >
           <Icon size={20} />
         </div>
@@ -427,9 +471,9 @@ function HealthBadge({ health }) {
 }
 
 function OwnershipBadges({ lead, user }) {
-  const createdByMe = getLeadCreatedByUid(lead) === user?.uid;
-  const assignedToMe = getLeadAssignedToUid(lead) === user?.uid;
-  const assignedByMe = getLeadAssignedByUid(lead) === user?.uid;
+  const createdByMe = isLeadCreatedByUser(lead, user);
+  const assignedToMe = isLeadAssignedToUser(lead, user);
+  const assignedByMe = isLeadAssignedByUser(lead, user);
 
   return (
     <>
@@ -534,7 +578,8 @@ function RecentLeadItem({ lead, user }) {
 
             {(lead.nextActionDueAt || lead.nextFollowUpAt) && (
               <p className="mt-3 text-xs text-gray-500">
-                Next action due: {formatDate(lead.nextActionDueAt || lead.nextFollowUpAt)}
+                Next action due:{" "}
+                {formatDate(lead.nextActionDueAt || lead.nextFollowUpAt)}
               </p>
             )}
           </div>
@@ -557,11 +602,12 @@ export default function LeadDashboardPage() {
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
 
   /* =========================
-    LOAD LEADS
-    No orderBy here to avoid Firestore composite index requirement.
-    Sorting is handled after mergeRows().
-    Deleted leads are removed using isDelete / deleted / isDeleted flags.
- ========================== */
+     LOAD LEADS
+     UID + email fallback.
+     No orderBy here to avoid Firestore composite index requirement.
+     Sorting is handled after mergeRows().
+     Deleted leads are removed using isDelete / deleted / isDeleted / deletedAt.
+  ========================== */
   useEffect(() => {
     if (authLoading) return;
 
@@ -574,9 +620,57 @@ export default function LeadDashboardPage() {
     setLoading(true);
     setError("");
 
-    let assignedRows = new Map();
-    let createdRows = new Map();
-    let assignedByRows = new Map();
+    const userEmail = getUserEmail(user);
+    const querySpecs = [];
+
+    const addQuerySpec = (group, field, value, label) => {
+      const cleanValue = String(value || "").trim();
+      if (!cleanValue) return;
+
+      querySpecs.push({
+        key: `${group}:${field}:${cleanValue}`,
+        group,
+        field,
+        value: cleanValue,
+        label
+      });
+    };
+
+    addQuerySpec("assigned", "assignedToUid", user.uid, "assigned leads");
+    addQuerySpec("assigned", "assignedTo", user.uid, "assigned leads");
+    addQuerySpec("assigned", "ownerUid", user.uid, "assigned leads");
+    addQuerySpec("assigned", "accountManagerUid", user.uid, "assigned leads");
+
+    addQuerySpec("created", "createdByUid", user.uid, "created leads");
+    addQuerySpec("created", "createdBy", user.uid, "created leads");
+    addQuerySpec("created", "createdByUserId", user.uid, "created leads");
+    addQuerySpec("created", "creatorUid", user.uid, "created leads");
+
+    addQuerySpec("assignedBy", "assignedByUid", user.uid, "leads assigned by you");
+    addQuerySpec("assignedBy", "assignedBy", user.uid, "leads assigned by you");
+    addQuerySpec("assignedBy", "lastAssignedByUid", user.uid, "leads assigned by you");
+
+    if (userEmail) {
+      addQuerySpec("assigned", "assignedToEmail", userEmail, "assigned leads");
+      addQuerySpec("assigned", "assignedTo", userEmail, "assigned leads");
+      addQuerySpec("assigned", "assigneeEmail", userEmail, "assigned leads");
+      addQuerySpec("assigned", "teamMemberEmail", userEmail, "assigned leads");
+
+      addQuerySpec("created", "createdByEmail", userEmail, "created leads");
+      addQuerySpec("created", "createdBy", userEmail, "created leads");
+      addQuerySpec("created", "creatorEmail", userEmail, "created leads");
+
+      addQuerySpec("assignedBy", "assignedByEmail", userEmail, "leads assigned by you");
+      addQuerySpec("assignedBy", "assignedBy", userEmail, "leads assigned by you");
+      addQuerySpec("assignedBy", "assignedByUserEmail", userEmail, "leads assigned by you");
+    }
+
+    const uniqueQuerySpecs = Array.from(
+      new Map(querySpecs.map(item => [item.key, item])).values()
+    );
+
+    const sourceRows = new Map();
+    const loadedSources = new Set();
 
     const mapActiveDocs = snap => {
       return new Map(
@@ -596,26 +690,24 @@ export default function LeadDashboardPage() {
     const mergeRows = () => {
       const merged = new Map();
 
-      createdRows.forEach((value, key) => {
-        if (!isDeletedLead(value)) {
-          merged.set(key, value);
-        }
-      });
-
-      assignedRows.forEach((value, key) => {
-        if (!isDeletedLead(value)) {
-          merged.set(key, value);
-        }
-      });
-
-      assignedByRows.forEach((value, key) => {
-        if (!isDeletedLead(value)) {
-          merged.set(key, value);
-        }
+      sourceRows.forEach(rowsMap => {
+        rowsMap.forEach((value, key) => {
+          if (!isDeletedLead(value)) {
+            merged.set(key, value);
+          }
+        });
       });
 
       const rows = Array.from(merged.values())
-        .filter(lead => !isDeletedLead(lead))
+        .filter(lead => {
+          if (isDeletedLead(lead)) return false;
+
+          return (
+            isLeadCreatedByUser(lead, user) ||
+            isLeadAssignedToUser(lead, user) ||
+            isLeadAssignedByUser(lead, user)
+          );
+        })
         .sort((a, b) => {
           const aTime = getValidDate(a.createdAt)?.getTime?.() || 0;
           const bTime = getValidDate(b.createdAt)?.getTime?.() || 0;
@@ -623,69 +715,43 @@ export default function LeadDashboardPage() {
         });
 
       setLeads(rows);
-      setLoading(false);
+
+      if (loadedSources.size >= uniqueQuerySpecs.length) {
+        setLoading(false);
+      }
     };
 
-    const assignedQuery = query(
-      collection(db, "leads"),
-      where("assignedToUid", "==", user.uid)
-    );
+    if (!uniqueQuerySpecs.length) {
+      setLeads([]);
+      setLoading(false);
+      return;
+    }
 
-    const createdQuery = query(
-      collection(db, "leads"),
-      where("createdByUid", "==", user.uid)
-    );
+    const unsubs = uniqueQuerySpecs.map(spec => {
+      const leadQuery = query(
+        collection(db, "leads"),
+        where(spec.field, "==", spec.value)
+      );
 
-    const assignedByQuery = query(
-      collection(db, "leads"),
-      where("assignedByUid", "==", user.uid)
-    );
-
-    const unsubAssigned = onSnapshot(
-      assignedQuery,
-      snap => {
-        assignedRows = mapActiveDocs(snap);
-        mergeRows();
-      },
-      err => {
-        console.error("Failed to load assigned leads:", err);
-        setError("Unable to load assigned leads. Please check Firestore permissions.");
-        setLoading(false);
-      }
-    );
-
-    const unsubCreated = onSnapshot(
-      createdQuery,
-      snap => {
-        createdRows = mapActiveDocs(snap);
-        mergeRows();
-      },
-      err => {
-        console.error("Failed to load created leads:", err);
-        setError("Unable to load created leads. Please check Firestore permissions.");
-        setLoading(false);
-      }
-    );
-
-    const unsubAssignedBy = onSnapshot(
-      assignedByQuery,
-      snap => {
-        assignedByRows = mapActiveDocs(snap);
-        mergeRows();
-      },
-      err => {
-        console.error("Failed to load assigned-by leads:", err);
-        setError("Unable to load leads assigned by you. Please check Firestore permissions.");
-        setLoading(false);
-      }
-    );
+      return onSnapshot(
+        leadQuery,
+        snap => {
+          sourceRows.set(spec.key, mapActiveDocs(snap));
+          loadedSources.add(spec.key);
+          mergeRows();
+        },
+        err => {
+          console.error(`Failed to load ${spec.label}:`, err);
+          setError(`Unable to load ${spec.label}. Please check Firestore permissions.`);
+          setLoading(false);
+        }
+      );
+    });
 
     return () => {
-      unsubAssigned();
-      unsubCreated();
-      unsubAssignedBy();
+      unsubs.forEach(unsub => unsub());
     };
-  }, [user?.uid, authLoading]);
+  }, [user, authLoading]);
 
   /* =========================
      FILTER OPTIONS
@@ -729,9 +795,9 @@ export default function LeadDashboardPage() {
       const createdDate = getValidDate(lead.createdAt);
       const health = getLeadHealth(lead);
 
-      const createdByMe = getLeadCreatedByUid(lead) === user?.uid;
-      const assignedToMe = getLeadAssignedToUid(lead) === user?.uid;
-      const assignedByMe = getLeadAssignedByUid(lead) === user?.uid;
+      const createdByMe = isLeadCreatedByUser(lead, user);
+      const assignedToMe = isLeadAssignedToUser(lead, user);
+      const assignedByMe = isLeadAssignedByUser(lead, user);
       const dealWon = isDealWonLead(lead);
       const dealLost = isDealLostLead(lead);
 
@@ -772,10 +838,15 @@ export default function LeadDashboardPage() {
           lead.leadCode,
           lead.leadName,
           lead.customerName,
+          lead.customerEmail,
+          lead.customerMobile,
           lead.destinationName,
           lead.assignedToName,
+          lead.assignedToEmail,
           lead.createdByName,
+          lead.createdByEmail,
           lead.assignedByName,
+          lead.assignedByEmail,
           lead.stage,
           lead.status,
           lead.nextActionType,
@@ -794,7 +865,7 @@ export default function LeadDashboardPage() {
 
       return true;
     });
-  }, [leads, filters, dateRangeError, user?.uid]);
+  }, [leads, filters, dateRangeError, user]);
 
   /* =========================
      SUMMARY
@@ -832,9 +903,9 @@ export default function LeadDashboardPage() {
       if (health === "at_risk") atRiskCount += 1;
       if (health === "overdue") overdueCount += 1;
 
-      if (getLeadCreatedByUid(lead) === user?.uid) createdByMeCount += 1;
-      if (getLeadAssignedToUid(lead) === user?.uid) assignedToMeCount += 1;
-      if (getLeadAssignedByUid(lead) === user?.uid) assignedByMeCount += 1;
+      if (isLeadCreatedByUser(lead, user)) createdByMeCount += 1;
+      if (isLeadAssignedToUser(lead, user)) assignedToMeCount += 1;
+      if (isLeadAssignedByUser(lead, user)) assignedByMeCount += 1;
 
       if (isDealWonLead(lead)) dealWonCount += 1;
       if (isDealLostLead(lead)) dealLostCount += 1;
@@ -889,7 +960,7 @@ export default function LeadDashboardPage() {
       ownerRows: toSorted(ownerMap).slice(0, 5),
       sourceRows: toSorted(sourceMap).slice(0, 5)
     };
-  }, [filteredLeads, user?.uid]);
+  }, [filteredLeads, user]);
 
   const recentLeads = useMemo(() => {
     return filteredLeads.slice(0, 6);
@@ -985,7 +1056,6 @@ export default function LeadDashboardPage() {
   return (
     <main className="min-h-screen bg-gray-50">
       <div className="max-w-9xl mx-auto px-4 py-6 space-y-6">
-
         {/* ================= BANNER ================= */}
         <section className="rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700  overflow-hidden">
           <div className="p-5 md:p-6">
@@ -1017,7 +1087,6 @@ export default function LeadDashboardPage() {
         {/* ================= FILTER PANEL ================= */}
         <section className="rounded-3xl border border-gray-200 bg-white p-4 ">
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-8 gap-3">
-
             <div className="xl:col-span-2">
               <label className="block text-xs font-semibold text-gray-600 mb-1.5">
                 Search

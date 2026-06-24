@@ -48,6 +48,17 @@ const INITIAL_FILTERS = {
   overdue: false
 };
 
+function getAssignedKey(lead) {
+  const raw =
+    lead.assignedToUid ||
+    lead.assignedToEmail ||
+    lead.assignedTo ||
+    lead.assignedToName ||
+    "";
+
+  return String(raw).trim().toLowerCase();
+}
+
 /* =========================
    DATE HELPERS
 ========================== */
@@ -202,9 +213,9 @@ function getLeadCreatedDate(lead) {
 function getNextActionDate(lead) {
   return toDate(
     lead.nextActionAt ||
-      lead.nextActionDueAt ||
-      lead.followUpAt ||
-      lead.nextFollowUpAt
+    lead.nextActionDueAt ||
+    lead.followUpAt ||
+    lead.nextFollowUpAt
   );
 }
 
@@ -231,11 +242,11 @@ function isLeadUnassigned(lead) {
 function isHotLead(lead) {
   const value = String(
     lead.priority ||
-      lead.leadPriority ||
-      lead.leadTemperature ||
-      lead.temperature ||
-      lead.leadType ||
-      ""
+    lead.leadPriority ||
+    lead.leadTemperature ||
+    lead.temperature ||
+    lead.leadType ||
+    ""
   ).toLowerCase();
 
   return value === "hot" || value === "high" || value === "urgent";
@@ -373,11 +384,10 @@ function DatePresetBar({ activePreset, onPresetChange }) {
             key={preset.key}
             type="button"
             onClick={() => onPresetChange(preset.key)}
-            className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${
-              active
-                ? "border-slate-900 bg-slate-900 text-white "
-                : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
-            }`}
+            className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${active
+              ? "border-slate-900 bg-slate-900 text-white "
+              : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+              }`}
           >
             {preset.label}
           </button>
@@ -548,18 +558,16 @@ function ActionCard({
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-2xl border p-4 text-left  transition hover:-translate-y-0.5 hover:shadow-md ${
-        active
-          ? "border-slate-900 bg-slate-900 text-white"
-          : currentTone.box
-      }`}
+      className={`rounded-2xl border p-4 text-left  transition hover:-translate-y-0.5 hover:shadow-md ${active
+        ? "border-slate-900 bg-slate-900 text-white"
+        : currentTone.box
+        }`}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
           <p
-            className={`text-xs font-medium uppercase tracking-wide ${
-              active ? "text-slate-300" : "opacity-80"
-            }`}
+            className={`text-xs font-medium uppercase tracking-wide ${active ? "text-slate-300" : "opacity-80"
+              }`}
           >
             {label}
           </p>
@@ -570,18 +578,16 @@ function ActionCard({
         </div>
 
         <div
-          className={`flex h-10 w-10 items-center justify-center rounded-xl ${
-            active ? "bg-white/10 text-white" : currentTone.icon
-          }`}
+          className={`flex h-10 w-10 items-center justify-center rounded-xl ${active ? "bg-white/10 text-white" : currentTone.icon
+            }`}
         >
           <Icon size={19} />
         </div>
       </div>
 
       <p
-        className={`mt-3 text-xs leading-5 ${
-          active ? "text-slate-300" : "opacity-75"
-        }`}
+        className={`mt-3 text-xs leading-5 ${active ? "text-slate-300" : "opacity-75"
+          }`}
       >
         {helper}
       </p>
@@ -788,9 +794,8 @@ function ActiveFilterChips({
   } else if (filters.from || filters.to) {
     chips.push({
       key: "customDate",
-      label: `Date: ${filters.from || "Start"} to ${
-        filters.to || "End"
-      }`,
+      label: `Date: ${filters.from || "Start"} to ${filters.to || "End"
+        }`,
       onClear: () => {
         setDatePreset("");
         setFilters(prev => ({
@@ -917,9 +922,8 @@ function InsightCard({ icon: Icon, label, value, helper, tone = "slate" }) {
         </div>
 
         <div
-          className={`flex h-10 w-10 items-center justify-center rounded-xl border ${
-            toneMap[tone] || toneMap.slate
-          }`}
+          className={`flex h-10 w-10 items-center justify-center rounded-xl border ${toneMap[tone] || toneMap.slate
+            }`}
         >
           <Icon size={19} />
         </div>
@@ -1067,13 +1071,8 @@ export default function AdminDashboardPage() {
     const map = new Map();
 
     activeLeads.forEach(lead => {
-      const uid =
-        lead.assignedToUid ||
-        lead.assignedTo ||
-        lead.assignedToEmail ||
-        "";
-
-      if (!uid) return;
+      const value = getAssignedKey(lead);
+      if (!value) return;
 
       const label =
         lead.assignedToName ||
@@ -1081,7 +1080,7 @@ export default function AdminDashboardPage() {
         lead.assignedTo ||
         "Unassigned";
 
-      map.set(uid, label);
+      map.set(value, label);
     });
 
     return Array.from(map.entries())
@@ -1136,11 +1135,7 @@ export default function AdminDashboardPage() {
       }
 
       if (filters.assignedTo !== "all") {
-        const assignedValue =
-          lead.assignedToUid ||
-          lead.assignedTo ||
-          lead.assignedToEmail ||
-          "";
+        const assignedValue = getAssignedKey(lead);
 
         if (assignedValue !== filters.assignedTo) {
           return false;
@@ -1492,9 +1487,8 @@ export default function AdminDashboardPage() {
           icon={BarChart3}
           label="Top Stage"
           value={topStage.label}
-          helper={`${topStage.count} lead${
-            topStage.count === 1 ? "" : "s"
-          } in this stage.`}
+          helper={`${topStage.count} lead${topStage.count === 1 ? "" : "s"
+            } in this stage.`}
           tone="purple"
         />
       </div>

@@ -21,7 +21,10 @@ import {
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
-import createLeadVendorRequest from "@/lib/leadVendorRequests";
+import {
+  createLeadVendorRequest,
+  markVendorWhatsappOpened
+} from "@/lib/leadVendorRequests";
 import VendorResponseTimelineFields from "@/components/vendors/VendorResponseTimelineFields";
 
 /* =========================
@@ -523,21 +526,32 @@ export default function LeadVendorRequestForm({
       return;
     }
 
-    if (!form.requirementHtml) {
+    if (!plainRequirementText) {
       setNoticeType("warning");
       setNotice("Please enter requirement details.");
       return;
     }
 
-    const sendVia = [
+    const selectedChannels = [
       form.sendEmail ? "email" : "",
       form.sendWhatsapp ? "whatsapp" : ""
     ].filter(Boolean);
 
-    if (!sendVia.length) {
+    if (!selectedChannels.length) {
       setNoticeType("warning");
       setNotice("Please select Email or WhatsApp.");
       return;
+    }
+
+    /*
+      Important:
+      Open blank WhatsApp tab immediately from user click.
+      If we wait until after email/API work, browser may block popup.
+    */
+    let whatsappWindow = null;
+
+    if (form.sendWhatsapp && typeof window !== "undefined") {
+      whatsappWindow = window.open("about:blank", "_blank");
     }
 
     try {
@@ -555,7 +569,7 @@ export default function LeadVendorRequestForm({
         travelDates: form.travelDates,
         paxText: form.paxText,
 
-        sendVia,
+        sendVia: selectedChannels,
 
         expectedTat,
         expectedReplyBy,
@@ -568,11 +582,40 @@ export default function LeadVendorRequestForm({
         user
       });
 
+      if (form.sendWhatsapp) {
+        if (result?.whatsappUrl) {
+          if (whatsappWindow && !whatsappWindow.closed) {
+            whatsappWindow.location.href = result.whatsappUrl;
+          } else if (typeof window !== "undefined") {
+            window.open(result.whatsappUrl, "_blank", "noopener,noreferrer");
+          }
+
+          await markVendorWhatsappOpened({
+            leadId,
+            vendorRequestId: result.vendorRequestId
+          });
+        } else {
+          if (whatsappWindow && !whatsappWindow.closed) {
+            whatsappWindow.close();
+          }
+
+          setNoticeType("warning");
+          setNotice(
+            result?.whatsappStatus === "missing_number"
+              ? "Vendor request saved and email sent, but WhatsApp number is missing."
+              : "Vendor request saved, but WhatsApp could not be opened."
+          );
+
+          setSaving(false);
+          return;
+        }
+      }
+
       setNoticeType("success");
       setNotice("Vendor request sent successfully.");
 
-      if (typeof onSuccess === "function") {
-        onSuccess(result);
+      if (typeof onCreated === "function") {
+        onCreated(result);
       }
 
       if (typeof onClose === "function") {
@@ -580,6 +623,10 @@ export default function LeadVendorRequestForm({
       }
     } catch (error) {
       console.error("Vendor request failed:", error);
+
+      if (whatsappWindow && !whatsappWindow.closed) {
+        whatsappWindow.close();
+      }
 
       setNoticeType("error");
       setNotice(error?.message || "Failed to send vendor request.");
