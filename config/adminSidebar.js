@@ -113,19 +113,19 @@ export const adminSidebar = [
   {
     label: "Vendors",
     icon: Building2,
-    permission: "leadManagement",
+    permission: "vendorManagement",
     children: [
       {
         label: "All Vendors",
         icon: Building2,
         href: "/admin/vendors",
-        permission: "leadManagement"
+        permission: "vendorManagement"
       },
       {
         label: "Add Vendor",
         icon: PlusCircle,
         href: "/admin/vendors/new",
-        permission: "leadManagement"
+        permission: "vendorManagement"
       }
     ]
   },
@@ -258,12 +258,19 @@ export const adminSidebar = [
         icon: Building2,
         href: "/admin/settings/branding",
         permission: "settingsManagement"
-      },
+      }
+    ]
+  },
+  {
+    label: "Quotation",
+    icon: FileText,
+    permission: "quotationManagement",
+    children: [
       {
         label: "Quotation Templates",
         icon: FileText,
         href: "/admin/settings/quotation-templates",
-        permission: "settingsManagement"
+        permission: "quotationManagement"
       }
     ]
   }
