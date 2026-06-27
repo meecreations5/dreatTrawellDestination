@@ -15,7 +15,6 @@ import {
   Copy,
   Eye,
   FileText,
-  Loader2,
   Mail,
   MessageCircle,
   Pencil,
@@ -25,7 +24,6 @@ import {
   Sparkles,
   TrendingUp,
   Trophy,
-  UserRound,
   X
 } from "lucide-react";
 
@@ -98,6 +96,32 @@ function formatPercent(value) {
   return `${number.toFixed(1)}%`;
 }
 
+function normalizeSelectedVendorQuotes(value = []) {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map(item => ({
+      vendorId: cleanString(item?.vendorId),
+      vendorName: cleanString(item?.vendorName),
+      vendorCode: cleanString(item?.vendorCode),
+
+      vendorRequestId: cleanString(item?.vendorRequestId),
+      vendorQuoteId: cleanString(item?.vendorQuoteId),
+
+      serviceType: cleanString(item?.serviceType || "other"),
+      serviceLabel: cleanString(item?.serviceLabel || "Vendor Cost"),
+
+      currency: cleanString(item?.currency || "INR"),
+      amount: getNumber(item?.amount),
+      revision: Number(item?.revision || 1),
+
+      referenceText: cleanString(item?.referenceText),
+      referenceFileUrl: cleanString(item?.referenceFileUrl),
+      referenceFileName: cleanString(item?.referenceFileName)
+    }))
+    .filter(item => item.vendorQuoteId && item.amount !== null);
+}
+
 function getQuotationAmount(quotation) {
   return getNumber(
     quotation?.customerQuoteAmount ??
@@ -110,8 +134,10 @@ function getQuotationAmount(quotation) {
 
 function getVendorCost(quotation) {
   return getNumber(
-    quotation?.selectedVendorCost ??
+    quotation?.totalSelectedVendorCost ??
+      quotation?.selectedVendorCost ??
       quotation?.vendorCost ??
+      quotation?.latestTotalSelectedVendorCost ??
       quotation?.latestVendorCost
   );
 }
@@ -172,7 +198,8 @@ function getPricingModeLabel(mode = "") {
     vendor_quote: "Vendor Quote",
     vendor_final: "Final Vendor Cost",
     vendor_draft: "Vendor Pricing",
-    manual_cost: "Manual Cost"
+    manual_cost: "Manual Cost",
+    multi_vendor: "Multi Vendor Costing"
   };
 
   return labels[value] || "Direct Quote";
@@ -182,7 +209,15 @@ function getPricingModeTone(mode = "") {
   const value = cleanString(mode);
 
   if (value === "vendor_final") return "green";
-  if (value === "vendor_quote" || value === "vendor_draft") return "purple";
+
+  if (
+    value === "vendor_quote" ||
+    value === "vendor_draft" ||
+    value === "multi_vendor"
+  ) {
+    return "purple";
+  }
+
   if (value === "manual_cost") return "amber";
 
   return "blue";
@@ -208,7 +243,30 @@ function getCreatedAt(quotation) {
   );
 }
 
+function getVendorCostingMode(quotation) {
+  return cleanString(quotation?.vendorCostingMode) === "multi_vendor"
+    ? "multi_vendor"
+    : "single_vendor";
+}
+
+function getSelectedVendorQuotes(quotation) {
+  return normalizeSelectedVendorQuotes(
+    quotation?.selectedVendorQuotes ||
+      quotation?.pricingSnapshot?.selectedVendorQuotes ||
+      []
+  );
+}
+
 function createRevisionSeed(quotation) {
+  const selectedVendorQuotes = getSelectedVendorQuotes(quotation);
+  const selectedVendorQuoteIds = Array.isArray(quotation?.selectedVendorQuoteIds)
+    ? quotation.selectedVendorQuoteIds
+    : selectedVendorQuotes.map(item => item.vendorQuoteId);
+
+  const vendorCostingMode =
+    quotation?.vendorCostingMode ||
+    (selectedVendorQuotes.length ? "multi_vendor" : "single_vendor");
+
   return {
     ...quotation,
 
@@ -224,14 +282,30 @@ function createRevisionSeed(quotation) {
 
     pricingSnapshot: {
       quotationPricingMode: quotation?.quotationPricingMode || "direct",
+
+      vendorCostingMode,
       vendorQuoteFinalized: Boolean(quotation?.vendorQuoteFinalized),
 
+      selectedVendorQuotes,
+      selectedVendorQuoteIds,
+
+      totalSelectedVendorCost:
+        quotation?.totalSelectedVendorCost ??
+        quotation?.selectedVendorCost ??
+        quotation?.vendorCost ??
+        null,
+
       selectedVendorCost:
-        quotation?.selectedVendorCost ?? quotation?.vendorCost ?? null,
+        quotation?.selectedVendorCost ??
+        quotation?.vendorCost ??
+        quotation?.totalSelectedVendorCost ??
+        null,
+
       selectedVendorCurrency:
         quotation?.selectedVendorCurrency ||
         quotation?.customerQuoteCurrency ||
         "INR",
+
       selectedVendorName: quotation?.selectedVendorName || "",
       selectedVendorQuoteId: quotation?.selectedVendorQuoteId || "",
       selectedVendorRequestId: quotation?.selectedVendorRequestId || "",
@@ -280,12 +354,20 @@ function StatusBadge({ status, isDraft, isFinalQuotation }) {
   );
 }
 
-function PricingModeBadge({ mode, vendorQuoteFinalized }) {
-  const label = vendorQuoteFinalized
-    ? "Final Vendor Cost"
-    : getPricingModeLabel(mode);
+function PricingModeBadge({ mode, vendorQuoteFinalized, vendorCostingMode }) {
+  const isMultiVendor = vendorCostingMode === "multi_vendor";
 
-  const tone = vendorQuoteFinalized ? "green" : getPricingModeTone(mode);
+  const label = isMultiVendor
+    ? "Multi Vendor Costing"
+    : vendorQuoteFinalized
+      ? "Final Vendor Cost"
+      : getPricingModeLabel(mode);
+
+  const tone = isMultiVendor
+    ? "purple"
+    : vendorQuoteFinalized
+      ? "green"
+      : getPricingModeTone(mode);
 
   const toneClass =
     tone === "green"
@@ -382,6 +464,82 @@ function EmptyState() {
   );
 }
 
+function MultiVendorCostingBlock({ quotation }) {
+  const selectedVendorQuotes = getSelectedVendorQuotes(quotation);
+
+  if (!selectedVendorQuotes.length) return null;
+
+  const currency =
+    quotation?.selectedVendorCurrency ||
+    quotation?.customerQuoteCurrency ||
+    selectedVendorQuotes[0]?.currency ||
+    "INR";
+
+  const totalCost =
+    quotation?.totalSelectedVendorCost ??
+    quotation?.selectedVendorCost ??
+    quotation?.vendorCost ??
+    selectedVendorQuotes.reduce(
+      (sum, item) => sum + Number(item.amount || 0),
+      0
+    );
+
+  return (
+    <div className="mb-5 rounded-2xl border border-purple-100 bg-purple-50 p-4">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-purple-900">
+            Multi Vendor Costing
+          </p>
+
+          <p className="text-xs text-purple-700">
+            {selectedVendorQuotes.length} vendor quote(s) combined for this quotation.
+          </p>
+        </div>
+
+        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-purple-700">
+          Total: {formatMoney(totalCost, currency)}
+        </span>
+      </div>
+
+      <div className="mt-3 space-y-2">
+        {selectedVendorQuotes.map(item => (
+          <div
+            key={item.vendorQuoteId}
+            className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 text-sm"
+          >
+            <div className="min-w-0">
+              <p className="font-semibold text-gray-900">
+                {item.vendorName || "Vendor"}
+              </p>
+
+              <p className="text-xs text-gray-500">
+                {item.serviceLabel || item.serviceType || "Vendor Cost"}
+                {item.revision ? ` · Rev ${item.revision}` : ""}
+                {item.vendorCode ? ` · ${item.vendorCode}` : ""}
+              </p>
+            </div>
+
+            <p className="shrink-0 font-bold text-gray-950">
+              {formatMoney(item.amount, item.currency || currency)}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-3 flex items-center justify-between border-t border-purple-100 pt-3">
+        <span className="text-sm font-semibold text-purple-900">
+          Total Selected Vendor Cost
+        </span>
+
+        <span className="text-base font-bold text-purple-900">
+          {formatMoney(totalCost, currency)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 /* =========================
    DETAILS MODAL
 ========================= */
@@ -393,7 +551,13 @@ function QuotationDetailsModal({ quotation, onClose }) {
   const vendorCost = getVendorCost(quotation);
   const profit = getGrossProfit(quotation);
   const margin = getMarginPercent(quotation);
-  const currency = quotation?.customerQuoteCurrency || "INR";
+  const currency =
+    quotation?.customerQuoteCurrency ||
+    quotation?.selectedVendorCurrency ||
+    "INR";
+
+  const selectedVendorQuotes = getSelectedVendorQuotes(quotation);
+  const vendorCostingMode = getVendorCostingMode(quotation);
 
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 p-4">
@@ -410,6 +574,7 @@ function QuotationDetailsModal({ quotation, onClose }) {
               <PricingModeBadge
                 mode={quotation.quotationPricingMode}
                 vendorQuoteFinalized={quotation.vendorQuoteFinalized}
+                vendorCostingMode={vendorCostingMode}
               />
             </div>
 
@@ -426,6 +591,7 @@ function QuotationDetailsModal({ quotation, onClose }) {
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close quotation details"
             className="flex h-9 w-9 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-500 hover:text-gray-900"
           >
             <X size={17} />
@@ -443,7 +609,11 @@ function QuotationDetailsModal({ quotation, onClose }) {
 
             <Metric
               icon={BadgeIndianRupee}
-              label="Vendor Cost"
+              label={
+                vendorCostingMode === "multi_vendor"
+                  ? "Total Vendor Cost"
+                  : "Vendor Cost"
+              }
               value={vendorCost === null ? "—" : formatMoney(vendorCost, currency)}
               tone="purple"
             />
@@ -465,7 +635,8 @@ function QuotationDetailsModal({ quotation, onClose }) {
 
           {(quotation.selectedVendorName ||
             quotation.selectedVendorQuoteId ||
-            quotation.selectedVendorRequestId) && (
+            quotation.selectedVendorRequestId ||
+            selectedVendorQuotes.length > 0) && (
             <div className="mb-5 rounded-2xl border border-green-100 bg-green-50 p-4">
               <p className="text-sm font-semibold text-green-900">
                 Vendor Pricing Source
@@ -475,14 +646,18 @@ function QuotationDetailsModal({ quotation, onClose }) {
                 <div>
                   <p className="text-xs text-green-700">Vendor</p>
                   <p className="text-sm font-semibold text-gray-900">
-                    {quotation.selectedVendorName || "—"}
+                    {vendorCostingMode === "multi_vendor"
+                      ? "Multiple Vendors"
+                      : quotation.selectedVendorName || "—"}
                   </p>
                 </div>
 
                 <div>
                   <p className="text-xs text-green-700">Vendor Quote ID</p>
                   <p className="break-all text-sm font-semibold text-gray-900">
-                    {quotation.selectedVendorQuoteId || "—"}
+                    {vendorCostingMode === "multi_vendor"
+                      ? `${selectedVendorQuotes.length} quote(s) selected`
+                      : quotation.selectedVendorQuoteId || "—"}
                   </p>
                 </div>
 
@@ -495,6 +670,8 @@ function QuotationDetailsModal({ quotation, onClose }) {
               </div>
             </div>
           )}
+
+          <MultiVendorCostingBlock quotation={quotation} />
 
           <div className="rounded-2xl border border-gray-200 bg-white p-5">
             <p className="mb-3 text-sm font-semibold text-gray-900">
@@ -571,10 +748,16 @@ function QuotationCard({
   const vendorCost = getVendorCost(quotation);
   const profit = getGrossProfit(quotation);
   const margin = getMarginPercent(quotation);
-  const currency = quotation?.customerQuoteCurrency || "INR";
+  const currency =
+    quotation?.customerQuoteCurrency ||
+    quotation?.selectedVendorCurrency ||
+    "INR";
 
   const isDraft =
     quotation?.isDraft || quotation?.status === "draft";
+
+  const selectedVendorQuotes = getSelectedVendorQuotes(quotation);
+  const vendorCostingMode = getVendorCostingMode(quotation);
 
   return (
     <div className="overflow-hidden rounded-3xl border border-gray-100 bg-white shadow-sm transition hover:border-blue-200">
@@ -595,7 +778,14 @@ function QuotationCard({
               <PricingModeBadge
                 mode={quotation.quotationPricingMode}
                 vendorQuoteFinalized={quotation.vendorQuoteFinalized}
+                vendorCostingMode={vendorCostingMode}
               />
+
+              {vendorCostingMode === "multi_vendor" && selectedVendorQuotes.length > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-purple-100 bg-purple-50 px-2.5 py-1 text-xs font-semibold text-purple-700">
+                  {selectedVendorQuotes.length} vendors
+                </span>
+              )}
             </div>
 
             <h3 className="mt-3 text-base font-semibold text-gray-900">
@@ -655,7 +845,11 @@ function QuotationCard({
 
         <Metric
           icon={BadgeIndianRupee}
-          label="Vendor Cost"
+          label={
+            vendorCostingMode === "multi_vendor"
+              ? "Total Vendor Cost"
+              : "Vendor Cost"
+          }
           value={vendorCost === null ? "—" : formatMoney(vendorCost, currency)}
           tone="purple"
         />

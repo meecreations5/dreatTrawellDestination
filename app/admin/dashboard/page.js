@@ -25,7 +25,8 @@ import {
   TrendingUp,
   UserCheck,
   Users,
-  Wallet
+  Wallet,
+  X
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
@@ -461,6 +462,105 @@ function isLostLead(lead) {
   );
 }
 
+function getLeadWonDate(lead) {
+  if (!isWonLead(lead)) return null;
+
+  const stageHistoryWonDate = Array.isArray(lead?.stageHistory)
+    ? lead.stageHistory
+      .filter(item => {
+        const stage = normalize(
+          item?.toStage ||
+          item?.stage ||
+          item?.stageLabel ||
+          item?.toStageLabel
+        );
+
+        return (
+          stage === "closed_won" ||
+          stage === "won" ||
+          stage === "converted" ||
+          stage === "business_generated"
+        );
+      })
+      .map(item => toDate(item?.changedAt))
+      .filter(Boolean)
+      .sort((a, b) => b.getTime() - a.getTime())[0]
+    : null;
+
+  return (
+    toDate(lead?.closedWonAt) ||
+    toDate(lead?.closedAt) ||
+    toDate(lead?.dealWonAt) ||
+    toDate(lead?.businessGeneratedAt) ||
+    toDate(lead?.convertedAt) ||
+    toDate(lead?.bookingConfirmedAt) ||
+    toDate(lead?.stageUpdatedAt) ||
+    stageHistoryWonDate ||
+    toDate(lead?.statusUpdatedAt) ||
+    toDate(lead?.updatedAt) ||
+    toDate(lead?.lastActivityAt) ||
+    toDate(lead?.createdAt)
+  );
+}
+
+function getLeadLostDate(lead) {
+  if (!isLostLead(lead)) return null;
+
+  return (
+    toDate(lead?.closedLostAt) ||
+    toDate(lead?.dealLostAt) ||
+    toDate(lead?.cancelledAt) ||
+    toDate(lead?.rejectedAt) ||
+    toDate(lead?.stageUpdatedAt) ||
+    toDate(lead?.statusUpdatedAt) ||
+    toDate(lead?.updatedAt) ||
+    toDate(lead?.lastActivityAt) ||
+    toDate(lead?.createdAt)
+  );
+}
+
+function getQuotationDate(lead) {
+  return (
+    toDate(lead?.finalQuotationAt) ||
+    toDate(lead?.latestQuotationSentAt) ||
+    toDate(lead?.quotationSentAt) ||
+    toDate(lead?.lastQuotationSentAt) ||
+    toDate(lead?.updatedAt) ||
+    toDate(lead?.createdAt)
+  );
+}
+
+function getPaymentDate(lead) {
+  return (
+    toDate(lead?.latestCustomerPaymentAt) ||
+    toDate(lead?.lastPaymentReceivedAt) ||
+    toDate(lead?.paymentReceivedAt) ||
+    toDate(lead?.updatedAt) ||
+    toDate(lead?.createdAt)
+  );
+}
+
+function isInSelectedRangeByDate(dateValue, rangeWindow) {
+  if (!rangeWindow?.start) return true;
+
+  const date = toDate(dateValue);
+  if (!date) return false;
+
+  return date >= rangeWindow.start && date <= rangeWindow.end;
+}
+
+function getLeadDisplayName(lead) {
+  return (
+    lead?.leadCode ||
+    lead?.customerName ||
+    lead?.agentName ||
+    lead?.agencyName ||
+    lead?.travelAgentName ||
+    lead?.id ||
+    "Lead"
+  );
+}
+
 function isClosedLead(lead) {
   const status = normalize(lead?.status);
   const stage = normalize(lead?.stage);
@@ -480,10 +580,13 @@ function isActiveLead(lead) {
 function getLeadQuotationAmount(lead) {
   return (
     pickAmount(
+      lead?.finalQuotationAmount,
       lead?.latestQuotationAmount,
       lead?.latestCustomerQuoteAmount,
       lead?.totalReceivableAmount,
-      lead?.customerQuoteAmount
+      lead?.customerQuoteAmount,
+      lead?.quotationAmount,
+      lead?.packageAmount
     ) || 0
   );
 }
@@ -491,19 +594,23 @@ function getLeadQuotationAmount(lead) {
 function getLeadVendorCost(lead) {
   return (
     pickAmount(
+      lead?.finalVendorCost,
       lead?.latestVendorCost,
       lead?.latestSelectedVendorCost,
       lead?.totalVendorPayableAmount,
-      lead?.latestVendorQuoteCost
+      lead?.latestVendorQuoteCost,
+      lead?.vendorCost
     ) || 0
   );
 }
 
 function getLeadGrossProfit(lead) {
   const storedProfit = pickAmount(
+    lead?.finalGrossProfit,
     lead?.actualGrossProfit,
     lead?.latestGrossProfit,
-    lead?.expectedGrossProfit
+    lead?.expectedGrossProfit,
+    lead?.grossProfit
   );
 
   if (storedProfit !== null) return storedProfit;
@@ -511,13 +618,153 @@ function getLeadGrossProfit(lead) {
   return getLeadQuotationAmount(lead) - getLeadVendorCost(lead);
 }
 
+function getPaymentBalance(lead) {
+  const explicitBalance = pickAmount(
+    lead?.paymentBalance,
+    lead?.customerPaymentBalance,
+    lead?.receivableBalance,
+    lead?.pendingReceivable
+  );
+
+  if (explicitBalance !== null) return explicitBalance;
+
+  const receivable = toAmount(lead?.totalReceivableAmount) || getLeadQuotationAmount(lead);
+  const received = getLeadReceivedAmount(lead);
+
+  return Math.max(receivable - received, 0);
+}
+
+function getVendorPaymentBalance(lead) {
+  const explicitBalance = pickAmount(
+    lead?.vendorPaymentBalance,
+    lead?.vendorBalance,
+    lead?.pendingVendorPayable
+  );
+
+  if (explicitBalance !== null) return explicitBalance;
+
+  const vendorPayable = toAmount(lead?.totalVendorPayableAmount) || getLeadVendorCost(lead);
+  const vendorPaid = getLeadVendorPaidAmount(lead);
+
+  return Math.max(vendorPayable - vendorPaid, 0);
+}
+
+function isCustomerPaymentRealized(lead) {
+  const status = normalize(lead?.customerPaymentStatus);
+
+  return (
+    status === "fully_paid" ||
+    status === "paid" ||
+    status === "received" ||
+    getPaymentBalance(lead) <= 0
+  );
+}
+
+function isVendorPaymentSettled(lead) {
+  const status = normalize(lead?.vendorPaymentStatus);
+
+  return (
+    status === "fully_paid" ||
+    status === "paid" ||
+    status === "settled" ||
+    getVendorPaymentBalance(lead) <= 0
+  );
+}
+
+function isGrossProfitRealized(lead) {
+  return (
+    isWonLead(lead) &&
+    getLeadGrossProfit(lead) > 0 &&
+    isCustomerPaymentRealized(lead) &&
+    isVendorPaymentSettled(lead)
+  );
+}
+
+function getLeadActualRealizedGrossProfit(lead) {
+  if (!isGrossProfitRealized(lead)) return 0;
+  return getLeadGrossProfit(lead);
+}
+
+function getLeadUnrealizedGrossProfit(lead) {
+  const grossProfit = getLeadGrossProfit(lead);
+  const realizedProfit = getLeadActualRealizedGrossProfit(lead);
+
+  return Math.max(grossProfit - realizedProfit, 0);
+}
+
 function getLeadReceivedAmount(lead) {
   return (
     pickAmount(
       lead?.totalPaymentReceived,
-      lead?.latestCustomerPaymentAmount
+      lead?.travelAgentReceivedAmount,
+      lead?.customerReceivedAmount,
+      lead?.actualReceivedAmount,
+      lead?.receivedAmount,
+      lead?.amountReceived,
+      lead?.paymentReceivedAmount,
+      lead?.latestCustomerPaymentAmount,
+      lead?.latestTravelAgentPaymentAmount
     ) || 0
   );
+}
+
+function getLeadReceivableAmount(lead) {
+  return (
+    pickAmount(
+      lead?.totalReceivableAmount,
+      lead?.finalQuotationAmount,
+      lead?.latestQuotationAmount,
+      lead?.latestCustomerQuoteAmount,
+      lead?.customerQuoteAmount
+    ) || 0
+  );
+}
+
+function getLeadPaymentBalance(lead) {
+  const explicitBalance = pickAmount(
+    lead?.paymentBalance,
+    lead?.customerPaymentBalance,
+    lead?.receivableBalance,
+    lead?.pendingReceivable
+  );
+
+  if (explicitBalance !== null && explicitBalance > 0) {
+    return explicitBalance;
+  }
+
+  const receivable = getLeadReceivableAmount(lead);
+  const received = getLeadReceivedAmount(lead);
+
+  return Math.max(receivable - received, 0);
+}
+
+function getLeadVendorPayableAmount(lead) {
+  return (
+    pickAmount(
+      lead?.totalVendorPayableAmount,
+      lead?.finalVendorCost,
+      lead?.latestVendorCost,
+      lead?.latestSelectedVendorCost,
+      lead?.latestVendorQuoteCost
+    ) || 0
+  );
+}
+
+function getLeadVendorPaymentBalance(lead) {
+  const explicitBalance = pickAmount(
+    lead?.vendorPaymentBalance,
+    lead?.vendorBalance,
+    lead?.pendingVendorPayable
+  );
+
+  if (explicitBalance !== null && explicitBalance > 0) {
+    return explicitBalance;
+  }
+
+  const payable = getLeadVendorPayableAmount(lead);
+  const paid = getLeadVendorPaidAmount(lead);
+
+  return Math.max(payable - paid, 0);
 }
 
 function getLeadVendorPaidAmount(lead) {
@@ -531,8 +778,17 @@ function getLeadVendorPaidAmount(lead) {
 }
 
 function hasQuotationSent(lead) {
+  const status = normalize(lead?.latestQuotationStatus);
+
   return (
-    normalize(lead?.latestQuotationStatus) === "sent" ||
+    status === "sent" ||
+    status === "final" ||
+    status === "finalized" ||
+    status === "approved" ||
+    status === "converted" ||
+    status === "closed won" ||
+    Boolean(lead?.finalQuotationId) ||
+    Boolean(lead?.finalQuotationAt) ||
     Boolean(lead?.latestQuotationSentAt) ||
     Boolean(lead?.latestQuotationId)
   );
@@ -884,6 +1140,11 @@ export default function AdminDashboardGraph() {
 
   const [dataLoading, setDataLoading] = useState(true);
   const [dashboardError, setDashboardError] = useState("");
+  const [selectedInsight, setSelectedInsight] = useState(null);
+
+  const openInsight = key => {
+    setSelectedInsight(key);
+  };
 
   /* =========================
      AUTH REDIRECTION
@@ -1102,6 +1363,30 @@ export default function AdminDashboardGraph() {
     );
   }, [attendanceRecords, rangeWindow]);
 
+  const convertedPeriodLeads = useMemo(() => {
+    return getActiveLeads(activeDashboardLeads).filter(lead => {
+      return isWonLead(lead) && isInSelectedRangeByDate(getLeadWonDate(lead), rangeWindow);
+    });
+  }, [activeDashboardLeads, rangeWindow]);
+
+  const lostPeriodLeads = useMemo(() => {
+    return getActiveLeads(activeDashboardLeads).filter(lead => {
+      return isLostLead(lead) && isInSelectedRangeByDate(getLeadLostDate(lead), rangeWindow);
+    });
+  }, [activeDashboardLeads, rangeWindow]);
+
+  const quotationPeriodLeads = useMemo(() => {
+    return getActiveLeads(activeDashboardLeads).filter(lead => {
+      return hasQuotationSent(lead) && isInSelectedRangeByDate(getQuotationDate(lead), rangeWindow);
+    });
+  }, [activeDashboardLeads, rangeWindow]);
+
+  const paymentReceivedPeriodLeads = useMemo(() => {
+    return getActiveLeads(activeDashboardLeads).filter(lead => {
+      return getLeadReceivedAmount(lead) > 0 && isInSelectedRangeByDate(getPaymentDate(lead), rangeWindow);
+    });
+  }, [activeDashboardLeads, rangeWindow]);
+
   /* =========================
      LEAD TOTALS
   ========================== */
@@ -1111,9 +1396,10 @@ export default function AdminDashboardGraph() {
 
     const assignedLeads = leadRows.filter(hasLeadAssignee).length;
     const activeLeads = leadRows.filter(isActiveLead).length;
-    const wonLeads = leadRows.filter(isWonLead).length;
-    const lostLeads = leadRows.filter(isLostLead).length;
-    const quoteSentLeads = leadRows.filter(hasQuotationSent).length;
+
+    const wonLeads = convertedPeriodLeads.length;
+    const lostLeads = lostPeriodLeads.length;
+    const quoteSentLeads = quotationPeriodLeads.length;
 
     const uniqueAgents = new Set(
       leadRows
@@ -1155,7 +1441,13 @@ export default function AdminDashboardGraph() {
           "Unknown Agent"
       )
     };
-  }, [periodLeads, userMap]);
+  }, [
+    periodLeads,
+    userMap,
+    convertedPeriodLeads,
+    lostPeriodLeads,
+    quotationPeriodLeads
+  ]);
 
   /* =========================
      FINANCE TOTALS
@@ -1175,6 +1467,22 @@ export default function AdminDashboardGraph() {
     const grossProfit = financeLeads.reduce((sum, lead) => {
       return sum + getLeadGrossProfit(lead);
     }, 0);
+
+    const realizedGrossProfit = financeLeads.reduce((sum, lead) => {
+      return sum + getLeadActualRealizedGrossProfit(lead);
+    }, 0);
+
+    const unrealizedGrossProfit = financeLeads.reduce((sum, lead) => {
+      return sum + getLeadUnrealizedGrossProfit(lead);
+    }, 0);
+
+    const realizedGrossProfitLeads = financeLeads.filter(lead => {
+      return getLeadActualRealizedGrossProfit(lead) > 0;
+    }).length;
+
+    const unrealizedGrossProfitLeads = financeLeads.filter(lead => {
+      return getLeadUnrealizedGrossProfit(lead) > 0;
+    }).length;
 
     const receivableAmount = financeLeads.reduce((sum, lead) => {
       return sum + toAmount(lead?.totalReceivableAmount);
@@ -1216,10 +1524,36 @@ export default function AdminDashboardGraph() {
       ? Number(((grossProfit / quotationValue) * 100).toFixed(2))
       : 0;
 
+    const lockedGrossProfit = convertedPeriodLeads.reduce((sum, lead) => {
+      return sum + getLeadGrossProfit(lead);
+    }, 0);
+
+    const lockedQuotationValue = convertedPeriodLeads.reduce((sum, lead) => {
+      return sum + getLeadQuotationAmount(lead);
+    }, 0);
+
+    const lockedVendorCost = convertedPeriodLeads.reduce((sum, lead) => {
+      return sum + getLeadVendorCost(lead);
+    }, 0);
+
+    const lockedGrossProfitLeads = convertedPeriodLeads.length;
+
+
+
+    const pipelineGrossProfit = financeLeads
+      .filter(lead => isActiveLead(lead))
+      .reduce((sum, lead) => {
+        return sum + getLeadGrossProfit(lead);
+      }, 0);
+
     return {
       quotationValue,
       vendorCost,
       grossProfit,
+      realizedGrossProfit,
+      unrealizedGrossProfit,
+      realizedGrossProfitLeads,
+      unrealizedGrossProfitLeads,
       receivableAmount,
       receivedAmount,
       pendingReceivable,
@@ -1230,6 +1564,11 @@ export default function AdminDashboardGraph() {
       customerFullyPaid,
       vendorFullyPaid,
       marginPercent,
+      lockedGrossProfit,
+      lockedQuotationValue,
+      lockedVendorCost,
+      lockedGrossProfitLeads,
+      pipelineGrossProfit,
       cashInHand: receivedAmount - vendorPaid,
       byDestinationRevenue: sumBy(
         financeLeads,
@@ -1271,7 +1610,7 @@ export default function AdminDashboardGraph() {
         lead => lead.vendorPaymentStatus || "Not Updated"
       )
     };
-  }, [periodLeads, userMap]);
+  }, [periodLeads, userMap, convertedPeriodLeads]);
 
   /* =========================
      VENDOR TOTALS
@@ -1814,6 +2153,178 @@ export default function AdminDashboardGraph() {
     activeTab
   ]);
 
+  const insightPanels = useMemo(() => {
+    const activeLeadRows = periodLeads.filter(isActiveLead);
+
+    const quotationRows = quotationPeriodLeads.filter(
+      lead => getLeadQuotationAmount(lead) > 0
+    );
+
+    const grossProfitRows = convertedPeriodLeads.filter(
+      lead => getLeadGrossProfit(lead) !== 0
+    );
+
+    const pendingReceivableRows = periodLeads.filter(
+      lead => toAmount(lead?.paymentBalance) > 0
+    );
+
+    const vendorBalanceRows = periodLeads.filter(
+      lead => toAmount(lead?.vendorPaymentBalance) > 0
+    );
+
+    return {
+      activeLeads: {
+        title: "Active Leads",
+        description: `${getRangeLabel(range)} active pipeline leads.`,
+        rows: activeLeadRows,
+        type: "lead",
+        amountLabel: "Quotation",
+        amountGetter: getLeadQuotationAmount
+      },
+
+      convertedLeads: {
+        title: "Converted Leads",
+        description: "Leads converted during the selected period.",
+        rows: convertedPeriodLeads,
+        type: "lead",
+        amountLabel: "Gross Profit",
+        amountGetter: getLeadGrossProfit,
+        dateGetter: getLeadWonDate
+      },
+
+      quotationValue: {
+        title: "Quotation Value",
+        description: "Quotation-sent leads during the selected period.",
+        rows: quotationRows,
+        type: "lead",
+        amountLabel: "Quotation",
+        amountGetter: getLeadQuotationAmount,
+        dateGetter: getQuotationDate
+      },
+
+      vendorPaid: {
+        title: "Vendor Paid",
+        description: "Vendor payment already paid for selected leads.",
+        rows: periodLeads.filter(lead => getLeadVendorPaidAmount(lead) > 0),
+        type: "lead",
+        amountLabel: "Vendor Paid",
+        amountGetter: getLeadVendorPaidAmount
+      },
+
+      cashPosition: {
+        title: "Net Cash Position",
+        description: "Travel agent received amount minus vendor paid amount.",
+        rows: periodLeads.filter(lead => {
+          return getLeadReceivedAmount(lead) > 0 || getLeadVendorPaidAmount(lead) > 0;
+        }),
+        type: "lead",
+        amountLabel: "Net Cash",
+        amountGetter: lead => getLeadReceivedAmount(lead) - getLeadVendorPaidAmount(lead)
+      },
+
+      grossProfit: {
+        title: "Gross Profit",
+        description: "Total gross profit from selected leads.",
+        rows: periodLeads.filter(lead => getLeadGrossProfit(lead) !== 0),
+        type: "lead",
+        amountLabel: "Gross Profit",
+        amountGetter: getLeadGrossProfit,
+        dateGetter: getLeadDate,
+        showGrossProfitBreakdown: true,
+        summaryCards: [
+          {
+            label: "Total Gross Profit",
+            value: formatCurrency(financeTotals.grossProfit),
+            tone: "emerald"
+          },
+          {
+            label: "Actual Realized",
+            value: formatCurrency(financeTotals.realizedGrossProfit),
+            tone: "green"
+          },
+          {
+            label: "Not Realized",
+            value: formatCurrency(financeTotals.unrealizedGrossProfit),
+            tone: "amber"
+          }
+        ]
+      },
+
+      lockedGrossProfit: {
+        title: "Locked Gross Profit",
+        description: "Gross profit locked after leads are marked as Deal Won / Converted / Closed Won.",
+        rows: convertedPeriodLeads,
+        type: "lead",
+        amountLabel: "Locked GP",
+        amountGetter: getLeadGrossProfit,
+        dateGetter: getLeadWonDate,
+        summaryCards: [
+          {
+            label: "Locked GP",
+            value: formatCurrency(financeTotals.lockedGrossProfit),
+            tone: "green"
+          },
+          {
+            label: "Locked Quotation",
+            value: formatCurrency(financeTotals.lockedQuotationValue),
+            tone: "emerald"
+          },
+          {
+            label: "Locked Vendor Cost",
+            value: formatCurrency(financeTotals.lockedVendorCost),
+            tone: "amber"
+          }
+        ]
+      },
+
+      customerReceived: {
+        title: "Customer Received",
+        description: "Leads with customer payment received in selected period.",
+        rows: paymentReceivedPeriodLeads,
+        type: "lead",
+        amountLabel: "Received",
+        amountGetter: getLeadReceivedAmount,
+        dateGetter: getPaymentDate
+      },
+
+      pendingReceivable: {
+        title: "Pending Receivable",
+        description: "Leads where customer payment balance is pending.",
+        rows: pendingReceivableRows,
+        type: "lead",
+        amountLabel: "Pending",
+        amountGetter: lead => toAmount(lead?.paymentBalance)
+      },
+
+      vendorBalance: {
+        title: "Vendor Balance",
+        description: "Leads where vendor payout balance is pending.",
+        rows: vendorBalanceRows,
+        type: "lead",
+        amountLabel: "Vendor Balance",
+        amountGetter: lead => toAmount(lead?.vendorPaymentBalance)
+      },
+
+      attentionItems: {
+        title: "Attention Items",
+        description: "Issues that need management or operations action.",
+        rows: attentionSummary.rows,
+        type: "attention"
+      }
+    };
+  }, [
+    periodLeads,
+    quotationPeriodLeads,
+    convertedPeriodLeads,
+    paymentReceivedPeriodLeads,
+    attentionSummary.rows,
+    range
+  ]);
+
+  const selectedInsightPanel = selectedInsight
+    ? insightPanels[selectedInsight]
+    : null;
+
   /* =========================
      RENDER GUARDS
   ========================== */
@@ -1970,6 +2481,7 @@ export default function AdminDashboardGraph() {
           leadTotals={leadTotals}
           vendorTotals={vendorTotals}
           attentionSummary={attentionSummary}
+          onOpenDetail={openInsight}
         />
 
         <section className="grid grid-cols-1 xl:grid-cols-4 gap-4">
@@ -1979,6 +2491,7 @@ export default function AdminDashboardGraph() {
             helper={`${leadTotals.quoteSentLeads} quotations sent`}
             icon={LineChart}
             tone="blue"
+            onClick={() => openInsight("activeLeads")}
           />
 
           <ExecutiveKpiCard
@@ -1987,6 +2500,7 @@ export default function AdminDashboardGraph() {
             helper={`${leadTotals.lostLeads} lost leads`}
             icon={CheckCircle2}
             tone="green"
+            onClick={() => openInsight("convertedLeads")}
           />
 
           <ExecutiveKpiCard
@@ -1995,40 +2509,45 @@ export default function AdminDashboardGraph() {
             helper={`Margin ${financeTotals.marginPercent}%`}
             icon={IndianRupee}
             tone="purple"
+            onClick={() => openInsight("quotationValue")}
           />
 
           <ExecutiveKpiCard
             title="Gross Profit"
             value={formatCurrency(financeTotals.grossProfit)}
-            helper={`${formatCurrency(financeTotals.vendorCost)} vendor cost`}
+            helper={`${formatCurrency(financeTotals.pipelineGrossProfit)} pipeline GP`}
             icon={TrendingUp}
             tone="emerald"
+            onClick={() => openInsight("grossProfit")}
           />
         </section>
 
         <section className="grid grid-cols-1 xl:grid-cols-4 gap-4">
           <ExecutiveKpiCard
-            title="Customer Received"
+            title="Locked GP"
+            value={formatCurrency(financeTotals.lockedGrossProfit)}
+            helper={`${financeTotals.lockedGrossProfitLeads} converted leads • ${formatCurrency(financeTotals.lockedVendorCost)} vendor cost`}
+            icon={CheckCircle2}
+            tone="green"
+            onClick={() => openInsight("lockedGrossProfit")}
+          />
+
+          <ExecutiveKpiCard
+            title="Travel Agent Received"
             value={formatCurrency(financeTotals.receivedAmount)}
             helper={`${financeTotals.customerFullyPaid} fully paid leads`}
             icon={Wallet}
             tone="green"
+            onClick={() => openInsight("customerReceived")}
           />
 
           <ExecutiveKpiCard
-            title="Pending Receivable"
+            title="Pending TA Collection"
             value={formatCurrency(financeTotals.pendingReceivable)}
-            helper={financeTotals.pendingReceivable ? "Needs collection follow-up" : "No receivable pending"}
+            helper={financeTotals.pendingReceivable ? "Follow-up required" : "No collection pending"}
             icon={CreditCard}
             tone={financeTotals.pendingReceivable ? "amber" : "slate"}
-          />
-
-          <ExecutiveKpiCard
-            title="Vendor Balance"
-            value={formatCurrency(financeTotals.vendorBalance)}
-            helper={financeTotals.vendorBalance ? "Vendor payout pending" : "Vendor payout clear"}
-            icon={Handshake}
-            tone={financeTotals.vendorBalance ? "orange" : "slate"}
+            onClick={() => openInsight("pendingReceivable")}
           />
 
           <ExecutiveKpiCard
@@ -2037,6 +2556,7 @@ export default function AdminDashboardGraph() {
             helper={`${attentionSummary.critical} critical • ${attentionSummary.high} high`}
             icon={AlertTriangle}
             tone={attentionSummary.total ? "red" : "slate"}
+            onClick={() => openInsight("attentionItems")}
           />
         </section>
 
@@ -2551,6 +3071,12 @@ export default function AdminDashboardGraph() {
           <ManagementTeamTable rows={teamRows} />
         </section>
       )}
+
+      <DashboardDetailDrawer
+        panel={selectedInsightPanel}
+        onClose={() => setSelectedInsight(null)}
+        onViewLead={leadId => router.push(`/admin/leads/${leadId}`)}
+      />
     </main>
   );
 }
@@ -2643,17 +3169,13 @@ function ExecutiveKpiCard({
   value,
   helper,
   icon: Icon,
-  tone = "slate"
+  tone = "slate",
+  onClick
 }) {
   const theme = KPI_TONES[tone] || KPI_TONES.slate;
 
-  return (
-    <div
-      className={`
-        relative overflow-hidden rounded-2xl border p-4  transition hover:-translate-y-0.5 hover:shadow-md
-        ${theme.card}
-      `}
-    >
+  const content = (
+    <>
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className={`text-xs font-semibold uppercase tracking-wide ${theme.title}`}>
@@ -2669,16 +3191,39 @@ function ExecutiveKpiCard({
               {helper}
             </p>
           ) : null}
+
+          {onClick ? (
+            <p className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-gray-500">
+              View details
+              <ArrowRight className="h-3.5 w-3.5" />
+            </p>
+          ) : null}
         </div>
 
-        <div className={`rounded-2xl p-2.5  ${theme.icon}`}>
+        <div className={`rounded-2xl p-2.5 ${theme.icon}`}>
           <Icon className="h-5 w-5" />
         </div>
       </div>
 
       <div className="pointer-events-none absolute -right-6 -bottom-6 h-20 w-20 rounded-full bg-white/40" />
-    </div>
+    </>
   );
+
+  const className = `
+    relative overflow-hidden rounded-2xl border p-4 transition hover:-translate-y-0.5 hover:shadow-md
+    ${theme.card}
+    ${onClick ? "cursor-pointer text-left focus:outline-none focus:ring-2 focus:ring-blue-500/20" : ""}
+  `;
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={className}>
+        {content}
+      </button>
+    );
+  }
+
+  return <div className={className}>{content}</div>;
 }
 
 function DashboardGraphCard({
@@ -2774,7 +3319,8 @@ function BusinessPulseCard({
   financeTotals,
   leadTotals,
   vendorTotals,
-  attentionSummary
+  attentionSummary,
+  onOpenDetail
 }) {
   return (
     <section className="rounded-3xl border border-gray-200 bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 p-5 text-white ">
@@ -2799,23 +3345,30 @@ function BusinessPulseCard({
             icon={LineChart}
             label="Active Leads"
             value={leadTotals.activeLeads}
+            onClick={() => onOpenDetail?.("activeLeads")}
           />
+
           <PulseMetric
             icon={CircleDollarSign}
             label="Quotation"
             value={formatCurrency(financeTotals.quotationValue)}
+            onClick={() => onOpenDetail?.("quotationValue")}
           />
+
           <PulseMetric
             icon={Wallet}
             label="Cash Position"
             value={formatCurrency(financeTotals.cashInHand)}
             danger={financeTotals.cashInHand < 0}
+            onClick={() => onOpenDetail?.("customerReceived")}
           />
+
           <PulseMetric
             icon={AlertTriangle}
             label="Attention"
             value={attentionSummary.total}
             danger={attentionSummary.total > 0}
+            onClick={() => onOpenDetail?.("attentionItems")}
           />
         </div>
       </div>
@@ -2823,31 +3376,36 @@ function BusinessPulseCard({
       <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
         <PulseInfo
           icon={TrendingUp}
-          label="Gross Profit"
-          value={formatCurrency(financeTotals.grossProfit)}
-          helper={`Margin ${financeTotals.marginPercent}%`}
+          label="Actual Realized GP"
+          value={formatCurrency(financeTotals.realizedGrossProfit)}
+          helper={`${formatCurrency(financeTotals.unrealizedGrossProfit)} not realized`}
+          onClick={() => onOpenDetail?.("grossProfit")}
         />
+
         <PulseInfo
           icon={Handshake}
           label="Vendor Exposure"
           value={formatCurrency(financeTotals.vendorBalance)}
           helper={`${vendorTotals.pendingQuoteLeads} pending vendor quotes`}
           warning={financeTotals.vendorBalance > 0 || vendorTotals.pendingQuoteLeads > 0}
+          onClick={() => onOpenDetail?.("vendorBalance")}
         />
+
         <PulseInfo
           icon={CheckCircle2}
           label="Converted Leads"
           value={leadTotals.wonLeads}
           helper={`${financeTotals.customerFullyPaid} customer fully paid`}
+          onClick={() => onOpenDetail?.("convertedLeads")}
         />
       </div>
     </section>
   );
 }
 
-function PulseMetric({ icon: Icon, label, value, danger = false }) {
-  return (
-    <div className="rounded-2xl bg-white/10 px-4 py-3 backdrop-blur">
+function PulseMetric({ icon: Icon, label, value, danger = false, onClick }) {
+  const content = (
+    <>
       <div className="flex items-center gap-2 text-gray-300">
         <Icon className="h-4 w-4" />
         <p className="text-xs">{label}</p>
@@ -2856,13 +3414,28 @@ function PulseMetric({ icon: Icon, label, value, danger = false }) {
       <p className={`mt-2 text-lg font-semibold ${danger ? "text-red-300" : "text-white"}`}>
         {value}
       </p>
-    </div>
+    </>
   );
+
+  const className = `
+    rounded-2xl bg-white/10 px-4 py-3 backdrop-blur transition
+    ${onClick ? "cursor-pointer text-left hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-white/20" : ""}
+  `;
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={className}>
+        {content}
+      </button>
+    );
+  }
+
+  return <div className={className}>{content}</div>;
 }
 
-function PulseInfo({ icon: Icon, label, value, helper, warning = false }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+function PulseInfo({ icon: Icon, label, value, helper, warning = false, onClick }) {
+  const content = (
+    <>
       <div className="flex items-center gap-2 text-gray-300">
         <Icon className="h-4 w-4" />
         <span className="text-xs">{label}</span>
@@ -2875,8 +3448,23 @@ function PulseInfo({ icon: Icon, label, value, helper, warning = false }) {
       <p className={`mt-1 text-xs ${warning ? "text-amber-300" : "text-gray-300"}`}>
         {helper}
       </p>
-    </div>
+    </>
   );
+
+  const className = `
+    rounded-2xl border border-white/10 bg-white/5 p-4 transition
+    ${onClick ? "cursor-pointer text-left hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/20" : ""}
+  `;
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={className}>
+        {content}
+      </button>
+    );
+  }
+
+  return <div className={className}>{content}</div>;
 }
 
 function FinanceFlowCard({ financeTotals }) {
@@ -3623,6 +4211,294 @@ function DashboardTable({
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+function DashboardDetailDrawer({ panel, onClose, onViewLead }) {
+  if (!panel) return null;
+
+  const rows = Array.isArray(panel.rows) ? panel.rows : [];
+  const totalAmount =
+    panel.type === "lead" && panel.amountGetter
+      ? rows.reduce((sum, lead) => sum + Number(panel.amountGetter(lead) || 0), 0)
+      : 0;
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <button
+        type="button"
+        aria-label="Close drawer backdrop"
+        onClick={onClose}
+        className="absolute inset-0 bg-slate-950/30 backdrop-blur-[1px]"
+      />
+
+      <aside className="absolute right-0 top-0 h-full w-full max-w-xl overflow-hidden bg-white shadow-2xl">
+        <div className="flex h-full flex-col">
+          <div className="border-b border-gray-100 px-5 py-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-gray-900">
+                  {panel.title}
+                </h2>
+
+                <p className="mt-1 text-sm text-gray-500">
+                  {panel.description}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-xl border border-gray-200 p-2 text-gray-500 hover:bg-gray-50"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <div className="rounded-2xl bg-gray-50 p-3">
+                <p className="text-xs font-medium text-gray-500">
+                  Total Records
+                </p>
+                <p className="mt-1 text-xl font-semibold text-gray-900">
+                  {rows.length}
+                </p>
+              </div>
+
+              {panel.summaryCards?.length ? (
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  {panel.summaryCards.map(card => {
+                    const toneMap = {
+                      emerald: "bg-emerald-50 text-emerald-800",
+                      green: "bg-green-50 text-green-800",
+                      amber: "bg-amber-50 text-amber-800",
+                      slate: "bg-gray-50 text-gray-900"
+                    };
+
+                    return (
+                      <div
+                        key={card.label}
+                        className={`rounded-2xl p-3 ${toneMap[card.tone] || toneMap.slate}`}
+                      >
+                        <p className="text-xs font-medium opacity-80">
+                          {card.label}
+                        </p>
+                        <p className="mt-1 text-lg font-semibold">
+                          {card.value}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <div className="rounded-2xl bg-gray-50 p-3">
+                    <p className="text-xs font-medium text-gray-500">
+                      Total Records
+                    </p>
+                    <p className="mt-1 text-xl font-semibold text-gray-900">
+                      {rows.length}
+                    </p>
+                  </div>
+
+                  {panel.type === "lead" && panel.amountGetter ? (
+                    <div className="rounded-2xl bg-emerald-50 p-3">
+                      <p className="text-xs font-medium text-emerald-700">
+                        Total {panel.amountLabel || "Value"}
+                      </p>
+                      <p className="mt-1 text-xl font-semibold text-emerald-800">
+                        {formatCurrency(totalAmount)}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl bg-red-50 p-3">
+                      <p className="text-xs font-medium text-red-700">
+                        Attention View
+                      </p>
+                      <p className="mt-1 text-xl font-semibold text-red-800">
+                        {rows.length}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-5">
+            {!rows.length ? (
+              <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-8 text-center">
+                <p className="text-sm font-semibold text-gray-800">
+                  No records found
+                </p>
+                <p className="mt-1 text-xs text-gray-500">
+                  No matching data is available for the selected range.
+                </p>
+              </div>
+            ) : panel.type === "attention" ? (
+              <div className="space-y-3">
+                {rows.map((item, index) => (
+                  <div
+                    key={item.id || `${item.leadId}-${item.type}-${index}`}
+                    className="rounded-2xl border border-gray-200 bg-white p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-gray-900">
+                          {item.leadCode}
+                        </p>
+
+                        <p className="mt-1 text-xs text-gray-500">
+                          {item.customerName} • {item.destinationName}
+                        </p>
+                      </div>
+
+                      <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${getSeverityClass(item.severity)}`}>
+                        {readableLabel(item.severity)}
+                      </span>
+                    </div>
+
+                    <p className="mt-3 text-sm font-medium text-gray-800">
+                      {readableLabel(item.type)}
+                    </p>
+
+                    <p className="mt-1 text-xs leading-5 text-gray-500">
+                      {item.reason}
+                    </p>
+
+                    <div className="mt-4 flex items-center justify-between gap-3">
+                      <p className="text-sm font-semibold text-gray-900">
+                        {formatCurrency(item.amount)}
+                      </p>
+
+                      {item.leadId ? (
+                        <button
+                          type="button"
+                          onClick={() => onViewLead?.(item.leadId)}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                          View Lead
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {rows.map(lead => {
+                  const amount = panel.amountGetter
+                    ? Number(panel.amountGetter(lead) || 0)
+                    : 0;
+
+                  const dateValue = panel.dateGetter
+                    ? panel.dateGetter(lead)
+                    : getLeadDate(lead);
+
+                  return (
+                    <div
+                      key={lead.id || lead.leadCode}
+                      className="rounded-2xl border border-gray-200 bg-white p-4"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-gray-900">
+                            {getLeadDisplayName(lead)}
+                          </p>
+
+                          <p className="mt-1 text-xs text-gray-500">
+                            {lead.customerName || lead.agentName || lead.agencyName || "Unknown Client"} •{" "}
+                            {lead.destinationName || "Unknown Destination"}
+                          </p>
+                        </div>
+
+                        <span className="rounded-full bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-600">
+                          {readableLabel(lead.stage || lead.status || "Open")}
+                        </span>
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-2 gap-3">
+                        <div className="rounded-xl bg-gray-50 p-3">
+                          <p className="text-[11px] font-medium text-gray-500">
+                            Assigned To
+                          </p>
+                          <p className="mt-1 truncate text-xs font-semibold text-gray-800">
+                            {lead.assignedToName || lead.assignedToEmail || "Unassigned"}
+                          </p>
+                        </div>
+
+                        <div className="rounded-xl bg-gray-50 p-3">
+                          <p className="text-[11px] font-medium text-gray-500">
+                            Date
+                          </p>
+                          <p className="mt-1 text-xs font-semibold text-gray-800">
+                            {formatDateTime(dateValue)}
+                          </p>
+                        </div>
+                      </div>
+
+                      {panel.showGrossProfitBreakdown ? (
+                        <div className="mt-4 grid grid-cols-3 gap-2">
+                          <div className="rounded-xl bg-emerald-50 p-3">
+                            <p className="text-[11px] font-medium text-emerald-700">
+                              Total GP
+                            </p>
+                            <p className="mt-1 text-xs font-semibold text-emerald-900">
+                              {formatCurrency(getLeadGrossProfit(lead))}
+                            </p>
+                          </div>
+
+                          <div className="rounded-xl bg-green-50 p-3">
+                            <p className="text-[11px] font-medium text-green-700">
+                              Realized
+                            </p>
+                            <p className="mt-1 text-xs font-semibold text-green-900">
+                              {formatCurrency(getLeadActualRealizedGrossProfit(lead))}
+                            </p>
+                          </div>
+
+                          <div className="rounded-xl bg-amber-50 p-3">
+                            <p className="text-[11px] font-medium text-amber-700">
+                              Not Realized
+                            </p>
+                            <p className="mt-1 text-xs font-semibold text-amber-900">
+                              {formatCurrency(getLeadUnrealizedGrossProfit(lead))}
+                            </p>
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div className="mt-4 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-medium text-gray-500">
+                            {panel.amountLabel || "Value"}
+                          </p>
+                          <p className="text-sm font-semibold text-gray-900">
+                            {formatCurrency(amount)}
+                          </p>
+                        </div>
+
+                        {lead.id ? (
+                          <button
+                            type="button"
+                            onClick={() => onViewLead?.(lead.id)}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            View Lead
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </aside>
     </div>
   );
 }
