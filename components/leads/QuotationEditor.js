@@ -1509,7 +1509,8 @@ function ConfirmSendModal({
   vendorCost,
   grossProfit,
   marginPercent,
-  isDraftSend
+  isDraftSend,
+  vendorCostingMode = "single_vendor"
 }) {
   if (!open) return null;
 
