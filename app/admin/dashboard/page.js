@@ -2722,7 +2722,7 @@ export default function AdminDashboardGraph() {
               title="Lead Trend"
               description="Lead inflow trend for selected period."
             >
-              <LeadsTrendChart leads={periodLeads} />
+              <LeadsTrendChart leads={activeDashboardLeads} days={14} />
             </ChartShell>
 
             <ChartShell
@@ -3605,28 +3605,50 @@ function ChartShell({
   description,
   icon: Icon,
   tone = "slate",
-  children
+  children,
+  rightContent = null,
+  noPadding = false,
+  className = ""
 }) {
   const theme = KPI_TONES[tone] || KPI_TONES.slate;
 
   return (
-    <div className="rounded-2xl border border-gray-200 bg-white  overflow-hidden">
-      <div className="border-b border-gray-100 px-4 py-3 flex items-start gap-3">
-        <div className={`rounded-xl p-2 ${theme.icon}`}>
-          <Icon className="h-4 w-4" />
-        </div>
+    <div
+      className={`
+        overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm
+        transition hover:shadow-md
+        ${className}
+      `}
+    >
+      <div className="border-b border-gray-100 bg-gradient-to-r from-gray-50 via-white to-gray-50 px-4 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className={`rounded-xl p-2 shadow-sm ${theme.icon}`}>
+              <Icon className="h-4 w-4" />
+            </div>
 
-        <div>
-          <h2 className="text-sm font-semibold text-gray-900">
-            {title}
-          </h2>
-          <p className="text-xs text-gray-500 mt-0.5">
-            {description}
-          </p>
+            <div>
+              <h2 className="text-sm font-semibold text-gray-900">
+                {title}
+              </h2>
+
+              {description ? (
+                <p className="mt-0.5 text-xs text-gray-500">
+                  {description}
+                </p>
+              ) : null}
+            </div>
+          </div>
+
+          {rightContent ? (
+            <div className="shrink-0">
+              {rightContent}
+            </div>
+          ) : null}
         </div>
       </div>
 
-      <div className="p-4">
+      <div className={noPadding ? "" : "p-4"}>
         {children}
       </div>
     </div>
