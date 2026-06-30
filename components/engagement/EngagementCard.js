@@ -17,7 +17,10 @@ import {
   User,
   ExternalLink,
   CheckCircle2,
-  AlertTriangle
+  AlertTriangle,
+  Package,
+  Copy,
+  Check
 } from "lucide-react";
 
 import InitialAvatar from "@/components/ui/InitialAvatar";
@@ -120,6 +123,78 @@ const getAgentCity = (engagement, agent) =>
   engagement?.travelAgent?.address?.city ||
   "";
 
+function getFirstValue(...values) {
+  return (
+    values.find(
+      value => typeof value === "string" && value.trim().length > 0
+    )?.trim() || ""
+  );
+}
+
+function getAssetTitle(asset) {
+  return getFirstValue(
+    asset?.title,
+    asset?.name,
+    asset?.fileName,
+    asset?.currentFileName,
+    "Asset"
+  );
+}
+
+function getAssetUrl(asset) {
+  return getFirstValue(
+    asset?.url,
+    asset?.currentUrl,
+    asset?.externalUrl,
+    asset?.downloadUrl,
+    asset?.fileUrl
+  );
+}
+
+function normalizeAsset(asset) {
+  return {
+    assetId: asset?.assetId || asset?.id || asset?.documentId || "",
+    title: getAssetTitle(asset),
+    url: getAssetUrl(asset),
+
+    categoryId: asset?.categoryId || "",
+    categoryName: asset?.categoryName || "",
+    categorySlug: asset?.categorySlug || "",
+
+    assetType: asset?.assetType || asset?.documentType || "document",
+    usageType: asset?.usageType || "",
+
+    currentVersion: asset?.currentVersion || asset?.version || 1,
+
+    fileName: asset?.fileName || asset?.currentFileName || "",
+    fileSize: asset?.fileSize || asset?.currentFileSize || null,
+    fileType: asset?.fileType || asset?.currentFileType || "",
+    fileExtension:
+      asset?.fileExtension || asset?.currentFileExtension || "",
+
+    sharedAs: asset?.sharedAs || "file_link"
+  };
+}
+
+function getSharedAssets(engagement) {
+  const assets = Array.isArray(engagement?.sharedAssets)
+    ? engagement.sharedAssets
+    : [];
+
+  const normalized = assets
+    .map(normalizeAsset)
+    .filter(asset => asset.assetId || asset.url);
+
+  const unique = new Map();
+
+  normalized.forEach(asset => {
+    const key = asset.assetId || asset.url;
+    unique.set(key, asset);
+  });
+
+  return Array.from(unique.values());
+}
+
 const getProfileStatus = (engagement, agent) => {
   const directlyComplete =
     agent?.profileComplete === true ||
@@ -202,17 +277,30 @@ export default function EngagementCard({
   const router = useRouter();
 
   const [expanded, setExpanded] = useState(false);
+  const [assetsExpanded, setAssetsExpanded] = useState(false);
   const [pinned, setPinned] = useState(!!engagement?.pinned);
   const [leadOpen, setLeadOpen] = useState(false);
   const [commOpen, setCommOpen] = useState(false);
+  const [copiedAssetKey, setCopiedAssetKey] = useState("");
 
   const PREVIEW_CHARS = 140;
+  const ASSET_PREVIEW_LIMIT = 3;
 
   const message = normalizeHtmlText(
     engagement?.message ||
       engagement?.messageText ||
       engagement?.messageHtml ||
       ""
+  );
+
+  const sharedAssets = getSharedAssets(engagement);
+  const visibleAssets = assetsExpanded
+    ? sharedAssets
+    : sharedAssets.slice(0, ASSET_PREVIEW_LIMIT);
+
+  const hiddenAssetCount = Math.max(
+    sharedAssets.length - ASSET_PREVIEW_LIMIT,
+    0
   );
 
   const channelKey = String(engagement?.channel || "meeting").toLowerCase();
@@ -283,6 +371,25 @@ export default function EngagementCard({
     setLeadOpen(true);
   };
 
+  const copyAssetLink = async asset => {
+    const url = getAssetUrl(asset);
+    if (!url) return;
+
+    const key = asset.assetId || url;
+
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedAssetKey(key);
+
+      window.setTimeout(() => {
+        setCopiedAssetKey("");
+      }, 1600);
+    } catch (error) {
+      console.error("Failed to copy asset link:", error);
+      alert("Unable to copy link. Please open the asset and copy manually.");
+    }
+  };
+
   return (
     <>
       <article
@@ -310,6 +417,14 @@ export default function EngagementCard({
             <span className="text-xs text-gray-600 capitalize truncate">
               {engagement?.status || "logged"}
             </span>
+
+            {sharedAssets.length > 0 && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700 border border-blue-100">
+                <Package className="w-3 h-3" />
+                {sharedAssets.length} asset
+                {sharedAssets.length > 1 ? "s" : ""}
+              </span>
+            )}
           </button>
 
           <div className="flex items-center gap-2 shrink-0">
@@ -385,6 +500,107 @@ export default function EngagementCard({
                 className="mt-1 text-xs text-blue-600 hover:underline"
               >
                 {expanded ? "View less" : "View more"}
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* SHARED ASSETS */}
+        {sharedAssets.length > 0 && (
+          <div className="rounded-xl border border-blue-100 bg-blue-50/40 px-3 py-2 space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="inline-flex items-center gap-2 text-xs font-semibold text-blue-800">
+                <Package className="w-3.5 h-3.5" />
+                Shared Assets
+              </div>
+
+              <span className="text-[11px] text-blue-600">
+                {sharedAssets.length} selected
+              </span>
+            </div>
+
+            <div className="space-y-1.5">
+              {visibleAssets.map(asset => {
+                const url = getAssetUrl(asset);
+                const key = asset.assetId || url;
+                const copied = copiedAssetKey === key;
+
+                return (
+                  <div
+                    key={key}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-blue-100 bg-white px-2.5 py-2"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-xs font-semibold text-gray-800">
+                        {getAssetTitle(asset)}
+                      </p>
+
+                      <p className="truncate text-[11px] text-gray-500">
+                        {asset.categoryName || asset.assetType || "Asset"} · v
+                        {asset.currentVersion || 1}
+                      </p>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-2">
+                      {url && (
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={e => e.stopPropagation()}
+                          className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-700 hover:underline"
+                        >
+                          <Eye className="w-3 h-3" />
+                          View
+                        </a>
+                      )}
+
+                      {url && (
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.stopPropagation();
+                            copyAssetLink(asset);
+                          }}
+                          className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-600 hover:text-gray-900"
+                        >
+                          {copied ? (
+                            <>
+                              <Check className="w-3 h-3 text-green-600" />
+                              Copied
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3" />
+                              Copy
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {hiddenAssetCount > 0 && !assetsExpanded && (
+              <button
+                type="button"
+                onClick={() => setAssetsExpanded(true)}
+                className="text-xs text-blue-700 hover:underline"
+              >
+                Show {hiddenAssetCount} more asset
+                {hiddenAssetCount > 1 ? "s" : ""}
+              </button>
+            )}
+
+            {assetsExpanded && sharedAssets.length > ASSET_PREVIEW_LIMIT && (
+              <button
+                type="button"
+                onClick={() => setAssetsExpanded(false)}
+                className="text-xs text-blue-700 hover:underline"
+              >
+                Show less assets
               </button>
             )}
           </div>

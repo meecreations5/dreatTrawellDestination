@@ -16,6 +16,7 @@ import dynamic from "next/dynamic";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import AdminGuard from "@/components/AdminGuard";
+import AssetPickerModal from "@/components/documents/AssetPickerModal";
 
 import "react-quill-new/dist/quill.snow.css";
 
@@ -45,7 +46,9 @@ const VARIABLES = [
   { key: "companyName", desc: "Company name" },
   { key: "companyEmail", desc: "Company email" },
   { key: "companyPhone", desc: "Company phone" },
-  { key: "companyLogoUrl", desc: "Company logo public URL" }
+  { key: "companyLogoUrl", desc: "Company logo public URL" },
+  { key: "assetLinks", desc: "Selected asset links for WhatsApp / plain text" },
+  { key: "assetLinksHtml", desc: "Selected asset links as HTML block for email" }
 ];
 
 /* =========================
@@ -71,6 +74,11 @@ const EMPTY_TEMPLATE = {
   whatsappText: "",
 
   attachments: [],
+
+  defaultAssets: [],
+  defaultAssetIds: [],
+  defaultAssetTitles: [],
+  hasDefaultAssets: false,
 
   active: false,
   status: "draft",
@@ -103,6 +111,23 @@ const getParamValue = value => {
   if (Array.isArray(value)) return value[0];
   return value;
 };
+
+function getFirstValue(...values) {
+  return (
+    values.find(
+      value => typeof value === "string" && value.trim().length > 0
+    )?.trim() || ""
+  );
+}
+
+function escapeHtml(value = "") {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
 
 const stripHtml = html => {
   return (html || "")
@@ -138,11 +163,129 @@ const renderTemplate = (content = "", variables = {}) => {
   });
 };
 
+function getAssetTitle(asset) {
+  return getFirstValue(
+    asset?.title,
+    asset?.name,
+    asset?.fileName,
+    asset?.currentFileName,
+    "Asset"
+  );
+}
+
+function getAssetUrl(asset) {
+  return getFirstValue(
+    asset?.url,
+    asset?.currentUrl,
+    asset?.externalUrl,
+    asset?.downloadUrl,
+    asset?.fileUrl
+  );
+}
+
+function normalizeAssetForTemplate(asset) {
+  return {
+    assetId: asset.assetId || asset.id || asset.documentId || "",
+    title: getAssetTitle(asset),
+    url: getAssetUrl(asset),
+
+    categoryId: asset.categoryId || "",
+    categoryName: asset.categoryName || "",
+    categorySlug: asset.categorySlug || "",
+
+    assetType: asset.assetType || asset.documentType || "document",
+    usageType: asset.usageType || "",
+
+    currentVersion: asset.currentVersion || asset.version || 1,
+
+    fileName: asset.fileName || asset.currentFileName || "",
+    fileSize: asset.fileSize || asset.currentFileSize || null,
+    fileType: asset.fileType || asset.currentFileType || "",
+    fileExtension: asset.fileExtension || asset.currentFileExtension || "",
+
+    sharedAs: asset.sharedAs || "file_link"
+  };
+}
+
+function buildAssetLinksText(assets = []) {
+  const usableAssets = assets.filter(asset => getAssetUrl(asset));
+
+  if (!usableAssets.length) return "";
+
+  return [
+    "Shared Assets:",
+    ...usableAssets.map((asset, index) => {
+      return `${index + 1}. ${getAssetTitle(asset)}\n${getAssetUrl(asset)}`;
+    })
+  ].join("\n");
+}
+
+function buildAssetLinksHtml(assets = []) {
+  const usableAssets = assets.filter(asset => getAssetUrl(asset));
+
+  if (!usableAssets.length) return "";
+
+  const rows = usableAssets
+    .map(asset => {
+      const title = escapeHtml(getAssetTitle(asset));
+      const category = escapeHtml(
+        getFirstValue(asset?.categoryName, asset?.assetType, "Asset")
+      );
+      const url = escapeHtml(getAssetUrl(asset));
+
+      return `
+        <tr>
+          <td style="padding:10px 0;border-bottom:1px solid #e5e7eb;">
+            <div style="font-size:14px;font-weight:600;color:#111827;">
+              ${title}
+            </div>
+            <div style="font-size:12px;color:#6b7280;margin-top:2px;">
+              ${category}
+            </div>
+          </td>
+          <td style="padding:10px 0;border-bottom:1px solid #e5e7eb;text-align:right;">
+            <a href="${url}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-size:12px;font-weight:600;padding:8px 12px;border-radius:8px;">
+              View Asset
+            </a>
+          </td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  return `
+    <div style="margin:18px 0;padding:14px;border:1px solid #e5e7eb;border-radius:12px;background:#f9fafb;">
+      <div style="font-size:15px;font-weight:700;color:#111827;margin-bottom:8px;">
+        Shared Assets
+      </div>
+      <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse;">
+        ${rows}
+      </table>
+    </div>
+  `;
+}
+
 const hasAttachment = attachments => {
-  return Array.isArray(attachments) && attachments.some(a => a?.documentId);
+  return (
+    Array.isArray(attachments) &&
+    attachments.some(
+      a =>
+        a?.documentId ||
+        a?.assetId ||
+        a?.url ||
+        a?.fileUrl ||
+        a?.currentUrl
+    )
+  );
 };
 
 const normalizeTemplateWithCategory = (template, categories) => {
+  const normalizedDefaultAssets = Array.isArray(template?.defaultAssets)
+    ? template.defaultAssets.map(normalizeAssetForTemplate)
+    : Array.isArray(template?.attachments)
+      ? template.attachments.map(normalizeAssetForTemplate)
+      : [];
+
   const base = {
     ...EMPTY_TEMPLATE,
     ...template,
@@ -152,7 +295,17 @@ const normalizeTemplateWithCategory = (template, categories) => {
     },
     attachments: Array.isArray(template?.attachments)
       ? template.attachments
-      : []
+      : [],
+    defaultAssets: normalizedDefaultAssets,
+    defaultAssetIds: Array.isArray(template?.defaultAssetIds)
+      ? template.defaultAssetIds
+      : normalizedDefaultAssets.map(asset => asset.assetId).filter(Boolean),
+    defaultAssetTitles: Array.isArray(template?.defaultAssetTitles)
+      ? template.defaultAssetTitles
+      : normalizedDefaultAssets.map(asset => asset.title).filter(Boolean),
+    hasDefaultAssets: Boolean(
+      template?.hasDefaultAssets || normalizedDefaultAssets.length
+    )
   };
 
   const matchedCategory =
@@ -189,7 +342,6 @@ export default function TemplateEditorPage() {
 
   const [form, setForm] = useState(EMPTY_TEMPLATE);
   const [categories, setCategories] = useState([]);
-  const [documents, setDocuments] = useState([]);
   const [branding, setBranding] = useState(EMPTY_BRANDING);
 
   const [errors, setErrors] = useState({});
@@ -203,6 +355,7 @@ export default function TemplateEditorPage() {
   const [previewMode, setPreviewMode] = useState("email");
   const [emailEditorMode, setEmailEditorMode] = useState("design");
   const [isDirty, setIsDirty] = useState(false);
+  const [assetPickerOpen, setAssetPickerOpen] = useState(false);
 
   const dirtyRef = useRef(false);
   const quillRef = useRef(null);
@@ -231,15 +384,9 @@ export default function TemplateEditorPage() {
         setLoading(true);
         setPageError("");
 
-        const [
-          templateSnap,
-          categorySnap,
-          documentSnap,
-          brandingSnap
-        ] = await Promise.all([
+        const [templateSnap, categorySnap, brandingSnap] = await Promise.all([
           getDoc(doc(db, "communicationTemplates", templateId)),
           getDocs(collection(db, "templateCategories")),
-          getDocs(collection(db, "documents")),
           getDoc(doc(db, "settings", "branding"))
         ]);
 
@@ -253,20 +400,12 @@ export default function TemplateEditorPage() {
           .map(d => ({ id: d.id, ...d.data() }))
           .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
 
-        const documentRows = documentSnap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(d => d.active !== false)
-          .sort((a, b) =>
-            (a.name || a.title || "").localeCompare(b.name || b.title || "")
-          );
-
         const normalizedTemplate = normalizeTemplateWithCategory(
           templateSnap.data(),
           categoryRows
         );
 
         setCategories(categoryRows);
-        setDocuments(documentRows);
         setForm(normalizedTemplate);
 
         if (brandingSnap.exists()) {
@@ -339,6 +478,20 @@ export default function TemplateEditorPage() {
     form.categoryRequireAttachment
   );
 
+  const selectedAssets = useMemo(() => {
+    return Array.isArray(form.defaultAssets)
+      ? form.defaultAssets.map(normalizeAssetForTemplate)
+      : [];
+  }, [form.defaultAssets]);
+
+  const assetLinksText = useMemo(() => {
+    return buildAssetLinksText(selectedAssets);
+  }, [selectedAssets]);
+
+  const assetLinksHtml = useMemo(() => {
+    return buildAssetLinksHtml(selectedAssets);
+  }, [selectedAssets]);
+
   const usedVariables = useMemo(() => {
     return [
       ...new Set([
@@ -366,9 +519,12 @@ export default function TemplateEditorPage() {
       companyName: branding.companyName || "DreamTrawell",
       companyEmail: branding.companyEmail || "",
       companyPhone: branding.companyPhone || "",
-      companyLogoUrl: branding.companyLogoUrl || ""
+      companyLogoUrl: branding.companyLogoUrl || "",
+
+      assetLinks: assetLinksText,
+      assetLinksHtml
     };
-  }, [branding, user]);
+  }, [branding, user, assetLinksText, assetLinksHtml]);
 
   const renderedEmailSubject = useMemo(() => {
     return renderTemplate(form.emailSubject || "", previewVariables);
@@ -430,8 +586,10 @@ export default function TemplateEditorPage() {
     if (categoryRequiresAttachment) {
       checks.push({
         key: "attachment",
-        label: "Required attachment selected",
-        done: hasAttachment(form.attachments)
+        label: "Required default asset selected",
+        done:
+          hasAttachment(form.attachments) ||
+          hasAttachment(form.defaultAssets)
       });
     }
 
@@ -458,6 +616,7 @@ export default function TemplateEditorPage() {
     form.emailHtml,
     form.whatsappText,
     form.attachments,
+    form.defaultAssets,
     categoryRequiresAttachment,
     invalidVariables,
     logoVariableUsed,
@@ -585,10 +744,11 @@ export default function TemplateEditorPage() {
 
       if (
         categoryRequiresAttachment &&
-        !hasAttachment(form.attachments)
+        !hasAttachment(form.attachments) &&
+        !hasAttachment(form.defaultAssets)
       ) {
         e.attachments =
-          "This category requires an attachment before activation";
+          "This category requires at least one default asset before activation";
       }
 
       if (logoVariableUsed && !logoConfigured) {
@@ -617,6 +777,19 @@ export default function TemplateEditorPage() {
       const category = selectedCategory;
       const canSaveAsActive = Boolean(form.active && activationReady);
 
+      const defaultAssets = selectedAssets.map(normalizeAssetForTemplate);
+
+      const legacyAttachments = defaultAssets.map(asset => ({
+        documentId: asset.assetId,
+        assetId: asset.assetId,
+        name: asset.title,
+        fileUrl: asset.url,
+        url: asset.url,
+        documentType: asset.assetType || "",
+        categoryName: asset.categoryName || "",
+        version: asset.currentVersion || 1
+      }));
+
       await updateDoc(doc(db, "communicationTemplates", templateId), {
         ...form,
 
@@ -638,6 +811,17 @@ export default function TemplateEditorPage() {
         emailHtml: form.emailHtml || "",
         whatsappText: form.whatsappText || "",
 
+        defaultAssets,
+        defaultAssetIds: defaultAssets
+          .map(asset => asset.assetId)
+          .filter(Boolean),
+        defaultAssetTitles: defaultAssets
+          .map(asset => asset.title)
+          .filter(Boolean),
+        hasDefaultAssets: defaultAssets.length > 0,
+
+        attachments: legacyAttachments,
+
         active: canSaveAsActive,
         status: canSaveAsActive ? "active" : "draft",
 
@@ -651,6 +835,15 @@ export default function TemplateEditorPage() {
 
       setForm(prev => ({
         ...prev,
+        defaultAssets,
+        defaultAssetIds: defaultAssets
+          .map(asset => asset.assetId)
+          .filter(Boolean),
+        defaultAssetTitles: defaultAssets
+          .map(asset => asset.title)
+          .filter(Boolean),
+        hasDefaultAssets: defaultAssets.length > 0,
+        attachments: legacyAttachments,
         active: canSaveAsActive,
         status: canSaveAsActive ? "active" : "draft"
       }));
@@ -778,10 +971,11 @@ export default function TemplateEditorPage() {
                 </h1>
 
                 <span
-                  className={`text-xs rounded-full px-3 py-1 border ${displayActive
+                  className={`text-xs rounded-full px-3 py-1 border ${
+                    displayActive
                       ? "bg-green-50 text-green-700 border-green-100"
                       : "bg-amber-50 text-amber-700 border-amber-100"
-                    }`}
+                  }`}
                 >
                   {displayActive ? "Active" : "Draft"}
                 </span>
@@ -857,10 +1051,11 @@ export default function TemplateEditorPage() {
                     </label>
 
                     <select
-                      className={`${inputClass} ${errors.categoryId
+                      className={`${inputClass} ${
+                        errors.categoryId
                           ? "border-red-500 focus:border-red-500 focus:ring-red-200"
                           : ""
-                        }`}
+                      }`}
                       disabled={isViewOnly}
                       value={form.categoryId || ""}
                       onChange={e => updateCategory(e.target.value)}
@@ -880,7 +1075,7 @@ export default function TemplateEditorPage() {
 
                     {categoryRequiresAttachment && (
                       <p className="text-[11px] text-amber-700 mt-1">
-                        Attachment is mandatory for this category.
+                        Default asset is mandatory for this category.
                       </p>
                     )}
                   </div>
@@ -951,10 +1146,11 @@ export default function TemplateEditorPage() {
                         type="button"
                         disabled={isViewOnly}
                         onClick={() => setEmailEditorMode("design")}
-                        className={`px-4 py-2 text-xs font-medium ${emailEditorMode === "design"
+                        className={`px-4 py-2 text-xs font-medium ${
+                          emailEditorMode === "design"
                             ? "bg-blue-50 text-blue-700"
                             : "text-gray-500 hover:bg-gray-50"
-                          }`}
+                        }`}
                       >
                         Design Editor
                       </button>
@@ -963,10 +1159,11 @@ export default function TemplateEditorPage() {
                         type="button"
                         disabled={isViewOnly}
                         onClick={() => setEmailEditorMode("html")}
-                        className={`px-4 py-2 text-xs font-medium border-l border-gray-200 ${emailEditorMode === "html"
+                        className={`px-4 py-2 text-xs font-medium border-l border-gray-200 ${
+                          emailEditorMode === "html"
                             ? "bg-blue-50 text-blue-700"
                             : "text-gray-500 hover:bg-gray-50"
-                          }`}
+                        }`}
                       >
                         HTML Source
                       </button>
@@ -986,8 +1183,9 @@ export default function TemplateEditorPage() {
                       </label>
 
                       <div
-                        className={`bg-white rounded-lg ${errors.emailHtml ? "border border-red-500" : ""
-                          }`}
+                        className={`bg-white rounded-lg ${
+                          errors.emailHtml ? "border border-red-500" : ""
+                        }`}
                         onFocus={() => setActiveField("email")}
                       >
                         <ReactQuill
@@ -1029,13 +1227,15 @@ export default function TemplateEditorPage() {
     <td>
       <h2>Hello {{spocName}}</h2>
       <p>We are happy to connect with {{agencyName}}.</p>
+      {{assetLinksHtml}}
     </td>
   </tr>
 </table>`}
-                        className={`${inputClass} min-h-[360px] resize-y font-mono text-xs leading-5 ${errors.emailHtml
+                        className={`${inputClass} min-h-[360px] resize-y font-mono text-xs leading-5 ${
+                          errors.emailHtml
                             ? "border-red-500 focus:border-red-500 focus:ring-red-200"
                             : ""
-                          }`}
+                        }`}
                       />
 
                       {errors.emailHtml && (
@@ -1043,8 +1243,8 @@ export default function TemplateEditorPage() {
                       )}
 
                       <p className="text-[11px] text-gray-500">
-                        For images in email, use a public absolute URL. Firebase
-                        Storage download URLs are supported.
+                        For images or asset links in email, use public absolute
+                        URLs. Firebase Storage download URLs are supported.
                       </p>
                     </div>
                   )}
@@ -1069,63 +1269,136 @@ export default function TemplateEditorPage() {
                 </Surface>
               )}
 
-              {/* ATTACHMENT */}
+              {/* DEFAULT ASSETS */}
               <Surface
-                title="Attachment"
-                subtitle="Attach documents like company profile, pitch deck, or offer PDF."
+                title="Default Assets"
+                subtitle="Select assets from Document Library that should auto-load when this template is used."
               >
-                <div>
-                  <label className="text-xs font-medium text-gray-700">
-                    Select Document
-                  </label>
+                {selectedAssets.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 p-5 text-center">
+                    <p className="text-sm font-medium text-gray-700">
+                      No default assets selected
+                    </p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Add company profile, promotional packages, destination images,
+                      or other approved assets.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {selectedAssets.map(asset => (
+                      <div
+                        key={asset.assetId}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 bg-gray-50 px-3 py-2"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-gray-800">
+                            {asset.title}
+                          </p>
 
-                  <select
-                    className={`${inputClass} ${errors.attachments
-                        ? "border-red-500 focus:border-red-500 focus:ring-red-200"
-                        : ""
-                      }`}
-                    disabled={isViewOnly}
-                    value={form.attachments?.[0]?.documentId || ""}
-                    onChange={e => {
-                      const selectedDocument = documents.find(
-                        x => x.id === e.target.value
-                      );
+                          <p className="text-xs text-gray-500 truncate">
+                            {asset.categoryName || asset.assetType || "Asset"} · v
+                            {asset.currentVersion || 1}
+                          </p>
 
-                      update(
-                        "attachments",
-                        selectedDocument
-                          ? [
-                            {
-                              documentId: selectedDocument.id,
-                              name:
-                                selectedDocument.name ||
-                                selectedDocument.title ||
-                                "Document",
-                              fileUrl:
-                                selectedDocument.fileUrl ||
-                                selectedDocument.url ||
-                                "",
-                              documentType:
-                                selectedDocument.type ||
-                                selectedDocument.documentType ||
-                                ""
-                            }
-                          ]
-                          : []
-                      );
-                    }}
-                  >
-                    <option value="">No attachment</option>
-                    {documents.map(d => (
-                      <option key={d.id} value={d.id}>
-                        {d.name || d.title || "Untitled Document"}
-                      </option>
+                          {asset.url && (
+                            <p className="text-[11px] text-gray-400 truncate mt-0.5">
+                              {asset.url}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex shrink-0 items-center gap-2">
+                          {asset.url && (
+                            <a
+                              href={asset.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-blue-600 hover:underline"
+                            >
+                              View
+                            </a>
+                          )}
+
+                          {!isViewOnly && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nextAssets = selectedAssets.filter(
+                                  item => item.assetId !== asset.assetId
+                                );
+
+                                update("defaultAssets", nextAssets);
+                              }}
+                              className="text-xs text-red-600 hover:underline"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                      </div>
                     ))}
-                  </select>
+                  </div>
+                )}
 
-                  {errors.attachments && (
-                    <p className={errorText}>{errors.attachments}</p>
-                  )}
+                {!isViewOnly && (
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAssetPickerOpen(true)}
+                      className="rounded-lg bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                    >
+                      Select Assets from Library
+                    </button>
+
+                    {selectedAssets.length > 0 && (
+                      <>
+                        {form.channels?.email && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              update(
+                                "emailHtml",
+                                form.emailHtml
+                                  ? `${form.emailHtml}<br/>{{assetLinksHtml}}`
+                                  : "{{assetLinksHtml}}"
+                              );
+                            }}
+                            className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-200"
+                          >
+                            Insert Email Asset Block
+                          </button>
+                        )}
+
+                        {form.channels?.whatsapp && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              update(
+                                "whatsappText",
+                                form.whatsappText
+                                  ? `${form.whatsappText}\n\n{{assetLinks}}`
+                                  : "{{assetLinks}}"
+                              );
+                            }}
+                            className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-200"
+                          >
+                            Insert WhatsApp Asset Links
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {errors.attachments && (
+                  <p className={errorText}>{errors.attachments}</p>
+                )}
+
+                <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                  Use <strong>{"{{assetLinksHtml}}"}</strong> inside Email
+                  templates and <strong>{"{{assetLinks}}"}</strong> inside
+                  WhatsApp templates.
                 </div>
               </Surface>
             </div>
@@ -1147,10 +1420,11 @@ export default function TemplateEditorPage() {
                       </span>
 
                       <span
-                        className={`text-[11px] rounded-full px-2 py-0.5 ${item.done
+                        className={`text-[11px] rounded-full px-2 py-0.5 ${
+                          item.done
                             ? "bg-green-50 text-green-700"
                             : "bg-gray-100 text-gray-500"
-                          }`}
+                        }`}
                       >
                         {item.done ? "Done" : "Pending"}
                       </span>
@@ -1164,12 +1438,13 @@ export default function TemplateEditorPage() {
                       type="button"
                       disabled={!form.active && !activationReady}
                       onClick={() => update("active", !form.active)}
-                      className={`w-full rounded-lg px-4 py-2.5 text-sm font-medium transition ${form.active
+                      className={`w-full rounded-lg px-4 py-2.5 text-sm font-medium transition ${
+                        form.active
                           ? "bg-amber-50 text-amber-700 border border-amber-100 hover:bg-amber-100"
                           : activationReady
                             ? "bg-green-600 text-white hover:bg-green-700"
                             : "bg-gray-100 text-gray-400 cursor-not-allowed"
-                        }`}
+                      }`}
                     >
                       {form.active
                         ? "Move to Draft"
@@ -1192,10 +1467,11 @@ export default function TemplateEditorPage() {
                     <button
                       type="button"
                       onClick={() => setPreviewMode("email")}
-                      className={`flex-1 px-3 py-2 text-xs ${previewMode === "email"
+                      className={`flex-1 px-3 py-2 text-xs ${
+                        previewMode === "email"
                           ? "bg-gray-100 text-gray-900"
                           : "text-gray-500 hover:bg-gray-50"
-                        }`}
+                      }`}
                     >
                       Email
                     </button>
@@ -1205,10 +1481,11 @@ export default function TemplateEditorPage() {
                     <button
                       type="button"
                       onClick={() => setPreviewMode("whatsapp")}
-                      className={`flex-1 px-3 py-2 text-xs ${previewMode === "whatsapp"
+                      className={`flex-1 px-3 py-2 text-xs ${
+                        previewMode === "whatsapp"
                           ? "bg-gray-100 text-gray-900"
                           : "text-gray-500 hover:bg-gray-50"
-                        }`}
+                      }`}
                     >
                       WhatsApp
                     </button>
@@ -1315,6 +1592,17 @@ export default function TemplateEditorPage() {
         </div>
       </main>
 
+      <AssetPickerModal
+        open={assetPickerOpen}
+        onClose={() => setAssetPickerOpen(false)}
+        selectedAssets={selectedAssets}
+        title="Select Default Assets for Template"
+        onConfirm={assets => {
+          const normalizedAssets = assets.map(normalizeAssetForTemplate);
+          update("defaultAssets", normalizedAssets);
+        }}
+      />
+
       <style jsx global>{`
         .ql-container {
           min-height: 220px;
@@ -1380,10 +1668,11 @@ function Input({
         disabled={disabled}
         onFocus={onFocus}
         onChange={e => onChange(e.target.value)}
-        className={`${inputClass} ${error
+        className={`${inputClass} ${
+          error
             ? "border-red-500 focus:border-red-500 focus:ring-red-200"
             : ""
-          }`}
+        }`}
       />
 
       {error && <p className={errorText}>{error}</p>}
@@ -1412,10 +1701,11 @@ function Textarea({
         value={value ?? ""}
         onFocus={onFocus}
         onChange={e => onChange(e.target.value)}
-        className={`${inputClass} min-h-[150px] resize-y ${error
+        className={`${inputClass} min-h-[150px] resize-y ${
+          error
             ? "border-red-500 focus:border-red-500 focus:ring-red-200"
             : ""
-          }`}
+        }`}
       />
 
       {error && <p className={errorText}>{error}</p>}
@@ -1429,24 +1719,27 @@ function ChannelCard({ label, desc, active, disabled, onClick }) {
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={`text-left border rounded-xl px-4 py-3 transition disabled:opacity-60 disabled:cursor-not-allowed ${active
+      className={`text-left border rounded-xl px-4 py-3 transition disabled:opacity-60 disabled:cursor-not-allowed ${
+        active
           ? "border-blue-200 bg-blue-50"
           : "border-gray-200 bg-white hover:bg-gray-50"
-        }`}
+      }`}
     >
       <div className="flex items-center justify-between gap-3">
         <p
-          className={`text-sm font-medium ${active ? "text-blue-800" : "text-gray-800"
-            }`}
+          className={`text-sm font-medium ${
+            active ? "text-blue-800" : "text-gray-800"
+          }`}
         >
           {label}
         </p>
 
         <span
-          className={`w-3 h-3 rounded-full border ${active
+          className={`w-3 h-3 rounded-full border ${
+            active
               ? "border-blue-600 bg-blue-600"
               : "border-gray-300 bg-white"
-            }`}
+          }`}
         />
       </div>
 

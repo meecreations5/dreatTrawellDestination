@@ -14,12 +14,15 @@ import {
 import {
   AlertCircle,
   CheckCircle2,
+  Eye,
   FileText,
   Mail,
   MapPin,
   MessageCircle,
+  Package,
   Send,
   Sparkles,
+  Trash2,
   UserRound,
   X
 } from "lucide-react";
@@ -36,6 +39,7 @@ import {
 } from "@/lib/signatureUtils";
 
 import EngagementChip from "@/components/engagement/EngagementChip";
+import AssetPickerModal from "@/components/documents/AssetPickerModal";
 
 /* =========================
    TEMPLATE COMPILER
@@ -59,6 +63,25 @@ function getFirstValue(...values) {
       value => typeof value === "string" && value.trim().length > 0
     )?.trim() || ""
   );
+}
+
+function escapeHtml(value = "") {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function stripHtml(value = "") {
+  return String(value || "")
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function getUserUid(user) {
@@ -94,14 +117,165 @@ function getSpocLabel(spoc) {
   return contact ? `${name} — ${contact}` : name;
 }
 
+function getAssetTitle(asset) {
+  return getFirstValue(
+    asset?.title,
+    asset?.name,
+    asset?.fileName,
+    asset?.currentFileName,
+    "Asset"
+  );
+}
+
+function getAssetUrl(asset) {
+  return getFirstValue(
+    asset?.url,
+    asset?.currentUrl,
+    asset?.externalUrl,
+    asset?.downloadUrl,
+    asset?.fileUrl
+  );
+}
+
+function getAssetLabel(asset) {
+  const title = getAssetTitle(asset);
+  const category = getFirstValue(asset?.categoryName, asset?.assetType);
+
+  return category ? `${title} (${category})` : title;
+}
+
+function normalizeAsset(asset) {
+  return {
+    assetId: asset?.assetId || asset?.id || asset?.documentId || "",
+    title: getAssetTitle(asset),
+    url: getAssetUrl(asset),
+
+    categoryId: asset?.categoryId || "",
+    categoryName: asset?.categoryName || "",
+    categorySlug: asset?.categorySlug || "",
+
+    assetType: asset?.assetType || asset?.documentType || "document",
+    usageType: asset?.usageType || "",
+    visibility: asset?.visibility || "team",
+
+    currentVersion: asset?.currentVersion || asset?.version || 1,
+
+    fileName: asset?.fileName || asset?.currentFileName || "",
+    fileSize: asset?.fileSize || asset?.currentFileSize || null,
+    fileType: asset?.fileType || asset?.currentFileType || "",
+    fileExtension:
+      asset?.fileExtension || asset?.currentFileExtension || "",
+
+    destinationId: asset?.destinationId || "",
+    destinationName: asset?.destinationName || "",
+
+    sharedAs: asset?.sharedAs || "file_link"
+  };
+}
+
+function normalizeAssets(assets = []) {
+  if (!Array.isArray(assets)) return [];
+
+  const map = new Map();
+
+  assets.forEach(asset => {
+    const normalized = normalizeAsset(asset);
+
+    if (!normalized.assetId && !normalized.url) return;
+
+    const key = normalized.assetId || normalized.url;
+    map.set(key, normalized);
+  });
+
+  return Array.from(map.values());
+}
+
+function buildAssetLinksText(assets = []) {
+  const usableAssets = normalizeAssets(assets).filter(asset =>
+    getAssetUrl(asset)
+  );
+
+  if (!usableAssets.length) return "";
+
+  return [
+    "Shared Assets:",
+    ...usableAssets.map((asset, index) => {
+      return `${index + 1}. ${getAssetLabel(asset)}\n${getAssetUrl(asset)}`;
+    })
+  ].join("\n");
+}
+
+function buildAssetLinksHtml(assets = []) {
+  const usableAssets = normalizeAssets(assets).filter(asset =>
+    getAssetUrl(asset)
+  );
+
+  if (!usableAssets.length) return "";
+
+  const items = usableAssets
+    .map(asset => {
+      const title = escapeHtml(getAssetTitle(asset));
+      const category = escapeHtml(
+        getFirstValue(asset?.categoryName, asset?.assetType, "Asset")
+      );
+      const url = escapeHtml(getAssetUrl(asset));
+
+      return `
+        <tr>
+          <td style="padding:10px 0;border-bottom:1px solid #e5e7eb;">
+            <div style="font-size:14px;font-weight:600;color:#111827;">
+              ${title}
+            </div>
+            <div style="font-size:12px;color:#6b7280;margin-top:2px;">
+              ${category}
+            </div>
+          </td>
+          <td style="padding:10px 0;border-bottom:1px solid #e5e7eb;text-align:right;">
+            <a href="${url}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-size:12px;font-weight:600;padding:8px 12px;border-radius:8px;">
+              View Asset
+            </a>
+          </td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  return `
+    <div style="margin:18px 0;padding:14px;border:1px solid #e5e7eb;border-radius:12px;background:#f9fafb;">
+      <div style="font-size:15px;font-weight:700;color:#111827;margin-bottom:8px;">
+        Shared Assets
+      </div>
+      <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse;">
+        ${items}
+      </table>
+    </div>
+  `;
+}
+
 function templateSupportsChannel(template, channel) {
   if (!template) return false;
 
+  if (
+    template.deleted === true ||
+    template.isDeleted === true ||
+    template.archived === true
+  ) {
+    return false;
+  }
+
   if (channel === "email") {
+    if (template.channels && template.channels.email === false) {
+      return false;
+    }
+
     return Boolean(template.emailHtml || template.emailSubject);
   }
 
   if (channel === "whatsapp") {
+    if (template.channels && template.channels.whatsapp === false) {
+      return false;
+    }
+
     return Boolean(template.whatsappText);
   }
 
@@ -130,6 +304,7 @@ function buildSignatureMember({ user, profile, branding }) {
     email: getFirstValue(
       profile?.email,
       user?.email,
+      branding?.companyEmail,
       branding?.supportEmail
     ),
 
@@ -138,6 +313,7 @@ function buildSignatureMember({ user, profile, branding }) {
       profile?.phone,
       user?.mobile,
       user?.phone,
+      branding?.companyPhone,
       branding?.supportMobile
     ),
 
@@ -183,6 +359,29 @@ function buildSignatureMember({ user, profile, branding }) {
   };
 }
 
+function injectAssetsPlaceholderIfNeeded({ base, channel, hasAssets }) {
+  if (!hasAssets) return base;
+
+  if (
+    base.includes("{{assetLinks}}") ||
+    base.includes("{{assetLinksHtml}}")
+  ) {
+    return base;
+  }
+
+  const assetPlaceholder =
+    channel === "email" ? "{{assetLinksHtml}}" : "{{assetLinks}}";
+
+  if (base.includes("{{signature}}")) {
+    return base.replace(
+      "{{signature}}",
+      `${assetPlaceholder}${channel === "email" ? "<br/>" : "\n\n"}{{signature}}`
+    );
+  }
+
+  return `${base}${channel === "email" ? "<br/><br/>" : "\n\n"}${assetPlaceholder}`;
+}
+
 function appendSignatureIfNeeded({ base, compiled, signature }) {
   if (!signature) return compiled;
 
@@ -223,13 +422,15 @@ export default function SendCommunicationModal({ agent, onClose }) {
   const [sending, setSending] = useState(false);
   const [sendStatus, setSendStatus] = useState("");
   const [previewMode, setPreviewMode] = useState("message");
+  const [assetPickerOpen, setAssetPickerOpen] = useState(false);
 
   const [form, setForm] = useState({
     spocIndex: 0,
     channel: "email",
     templateId: "",
     body: "",
-    destinationIds: []
+    destinationIds: [],
+    sharedAssets: []
   });
 
   const uid = getUserUid(user);
@@ -267,10 +468,17 @@ export default function SendCommunicationModal({ agent, onClose }) {
         if (!mounted) return;
 
         setTemplates(
-          tplSnap.docs.map(d => ({
-            id: d.id,
-            ...d.data()
-          }))
+          tplSnap.docs
+            .map(d => ({
+              id: d.id,
+              ...d.data()
+            }))
+            .filter(
+              item =>
+                item.deleted !== true &&
+                item.isDeleted !== true &&
+                item.archived !== true
+            )
         );
 
         setDestinations(
@@ -313,6 +521,10 @@ export default function SendCommunicationModal({ agent, onClose }) {
   const spocs = agent?.spocs || [];
   const spoc = spocs[form.spocIndex] || null;
 
+  const selectedAssets = useMemo(() => {
+    return normalizeAssets(form.sharedAssets);
+  }, [form.sharedAssets]);
+
   const filteredTemplates = useMemo(() => {
     return templates.filter(template =>
       templateSupportsChannel(template, form.channel)
@@ -334,7 +546,8 @@ export default function SendCommunicationModal({ agent, onClose }) {
       setForm(prev => ({
         ...prev,
         templateId: "",
-        body: ""
+        body: "",
+        sharedAssets: []
       }));
     }
   }, [form.templateId, filteredTemplates]);
@@ -346,6 +559,14 @@ export default function SendCommunicationModal({ agent, onClose }) {
   const destinationNames = selectedDestinations
     .map(d => d.name)
     .join(", ");
+
+  const assetLinksText = useMemo(() => {
+    return buildAssetLinksText(selectedAssets);
+  }, [selectedAssets]);
+
+  const assetLinksHtml = useMemo(() => {
+    return buildAssetLinksHtml(selectedAssets);
+  }, [selectedAssets]);
 
   const signatureMember = useMemo(() => {
     return buildSignatureMember({
@@ -365,6 +586,42 @@ export default function SendCommunicationModal({ agent, onClose }) {
     return `\n\n${buildWhatsAppSignatureText(signatureMember)}`;
   }, [form.channel, signatureMember]);
 
+  const templateVars = useMemo(() => {
+    return {
+      spocName: getSpocName(spoc),
+      agencyName: agent?.agencyName || agent?.name || "",
+      agentCode: agent?.agentCode || agent?.code || "",
+      destination: destinationNames,
+      teamMemberName: getUserName(user, profile),
+
+      companyName: branding?.companyName || "",
+      companyEmail: branding?.companyEmail || branding?.supportEmail || "",
+      companyPhone: branding?.companyPhone || branding?.supportMobile || "",
+      companyLogoUrl: branding?.companyLogoUrl || "",
+
+      body: form.body,
+      assetLinks: assetLinksText,
+      assetLinksHtml,
+      signature
+    };
+  }, [
+    spoc,
+    agent,
+    destinationNames,
+    user,
+    profile,
+    branding,
+    form.body,
+    assetLinksText,
+    assetLinksHtml,
+    signature
+  ]);
+
+  const finalSubject = useMemo(() => {
+    const baseSubject = selectedTemplate?.emailSubject || "Communication";
+    return compileTemplate(baseSubject, templateVars);
+  }, [selectedTemplate, templateVars]);
+
   const finalMessage = useMemo(() => {
     if (!spoc || !user) return "";
 
@@ -382,6 +639,7 @@ export default function SendCommunicationModal({ agent, onClose }) {
 Hi {{spocName}},<br/><br/>
 {{body}}<br/><br/>
 ${destinationNames ? "📍 Destination: {{destination}}<br/>" : ""}
+{{assetLinksHtml}}
 {{signature}}
 `
           : `
@@ -389,18 +647,20 @@ Hi {{spocName}},
 
 {{body}}
 
-${destinationNames ? "📍 Destination: {{destination}}\n" : ""}
+${destinationNames ? "📍 Destination: {{destination}}\n\n" : ""}
+{{assetLinks}}
+
 {{signature}}
 `;
     }
 
-    const compiled = compileTemplate(base, {
-      spocName: getSpocName(spoc),
-      destination: destinationNames,
-      teamMemberName: getUserName(user, profile),
-      body: form.body,
-      signature
+    base = injectAssetsPlaceholderIfNeeded({
+      base,
+      channel: form.channel,
+      hasAssets: selectedAssets.length > 0
     });
+
+    const compiled = compileTemplate(base, templateVars);
 
     return appendSignatureIfNeeded({
       base,
@@ -410,11 +670,11 @@ ${destinationNames ? "📍 Destination: {{destination}}\n" : ""}
   }, [
     selectedTemplate,
     form.channel,
-    form.body,
     destinationNames,
     spoc,
     user,
-    profile,
+    selectedAssets.length,
+    templateVars,
     signature
   ]);
 
@@ -438,8 +698,47 @@ ${destinationNames ? "📍 Destination: {{destination}}\n" : ""}
   }
 
   /* =========================
-     SEND
+     ACTIONS
   ========================== */
+  const removeAsset = assetId => {
+    setForm(prev => ({
+      ...prev,
+      sharedAssets: (prev.sharedAssets || []).filter(
+        item => item.assetId !== assetId
+      )
+    }));
+  };
+
+  const selectTemplate = template => {
+    const templateAssets = normalizeAssets(template?.defaultAssets || []);
+
+    setForm(prev => ({
+      ...prev,
+      templateId: template.id,
+      body: "",
+      sharedAssets: templateAssets
+    }));
+  };
+
+  const selectCustomMessage = () => {
+    setForm(prev => ({
+      ...prev,
+      templateId: "",
+      body: "",
+      sharedAssets: []
+    }));
+  };
+
+  const changeChannel = channel => {
+    setForm(prev => ({
+      ...prev,
+      channel,
+      templateId: "",
+      body: "",
+      sharedAssets: []
+    }));
+  };
+
   const send = async () => {
     if (!selectedTemplate && !form.body.trim()) {
       alert("Message required");
@@ -464,24 +763,31 @@ ${destinationNames ? "📍 Destination: {{destination}}\n" : ""}
     setSending(true);
 
     try {
+      let communicationStatus = "completed";
+      let sendResult = null;
+
       if (form.channel === "email") {
         setSendStatus("Sending email...");
 
         await sendEmailViaBrevo({
           toEmail: spoc.email,
           toName: getSpocName(spoc),
-          subject: selectedTemplate?.emailSubject || "Communication",
+          subject: finalSubject || "Communication",
           html: finalMessage
         });
+
+        communicationStatus = "completed";
       }
 
       if (form.channel === "whatsapp") {
         setSendStatus("Opening WhatsApp...");
 
-        await sendWhatsAppWeb({
+        sendResult = await sendWhatsAppWeb({
           mobile: spoc.mobile,
           message: finalMessage
         });
+
+        communicationStatus = sendResult?.status || "whatsapp_opened";
       }
 
       setSendStatus("Saving engagement...");
@@ -490,30 +796,57 @@ ${destinationNames ? "📍 Destination: {{destination}}\n" : ""}
 
       await addDoc(collection(db, "engagements"), {
         entityType: "travelAgent",
+        engagementType: "communication_sent",
+
         agentId: agent.id,
-        agentName: agent.agencyName,
+        agentName: agent.agencyName || agent.name || "",
+        travelAgentName: agent.agencyName || agent.name || "",
+        agencyName: agent.agencyName || agent.name || "",
+
         spoc,
 
         channel: form.channel,
+        direction: "outbound",
 
         subject:
           form.channel === "email"
-            ? selectedTemplate?.emailSubject || null
+            ? finalSubject || null
             : null,
+
+        message:
+          form.channel === "email"
+            ? stripHtml(finalMessage)
+            : finalMessage,
 
         messageHtml:
           form.channel === "email" ? finalMessage : null,
 
         messageText:
-          form.channel === "whatsapp" ? finalMessage : null,
+          form.channel === "whatsapp"
+            ? finalMessage
+            : stripHtml(finalMessage),
 
         templateId: form.templateId || null,
+        templateName: selectedTemplate?.name || null,
 
         destinationIds: selectedDestinations.map(d => d.id),
         destinationNames: selectedDestinations.map(d => d.name),
 
         destinationRefId: primary.id,
         destinationName: primary.name,
+
+        sharedAssets: selectedAssets,
+        sharedAssetIds: selectedAssets
+          .map(asset => asset.assetId)
+          .filter(Boolean),
+        sharedAssetTitles: selectedAssets
+          .map(asset => asset.title)
+          .filter(Boolean),
+        assetShareCount: selectedAssets.length,
+        hasSharedAssets: selectedAssets.length > 0,
+        assetLinksText,
+        assetLinksHtml:
+          form.channel === "email" ? assetLinksHtml : "",
 
         signatureIncluded: Boolean(signature),
         signatureSource: Boolean(signature)
@@ -531,7 +864,12 @@ ${destinationNames ? "📍 Destination: {{destination}}\n" : ""}
           signatureEnabled: signatureMember.signatureEnabled !== false
         },
 
-        status: "completed",
+        status: communicationStatus,
+        sendStatus: communicationStatus,
+        sendResult: sendResult || null,
+
+        deleted: false,
+        isDeleted: false,
 
         createdByUid: uid,
         createdByName: getUserName(user, profile),
@@ -571,7 +909,8 @@ ${destinationNames ? "📍 Destination: {{destination}}\n" : ""}
                 </h2>
 
                 <p className="text-xs text-gray-500 mt-0.5">
-                  Compose, preview and send with your profile signature.
+                  Compose, preview, attach assets and send with your profile
+                  signature.
                 </p>
               </div>
             </div>
@@ -648,14 +987,7 @@ ${destinationNames ? "📍 Destination: {{destination}}\n" : ""}
                   icon={<Mail size={18} />}
                   title="Email"
                   description="Send via Brevo"
-                  onClick={() =>
-                    setForm({
-                      ...form,
-                      channel: "email",
-                      templateId: "",
-                      body: ""
-                    })
-                  }
+                  onClick={() => changeChannel("email")}
                 />
 
                 <ChannelCard
@@ -663,14 +995,7 @@ ${destinationNames ? "📍 Destination: {{destination}}\n" : ""}
                   icon={<MessageCircle size={18} />}
                   title="WhatsApp"
                   description="Open WhatsApp Web"
-                  onClick={() =>
-                    setForm({
-                      ...form,
-                      channel: "whatsapp",
-                      templateId: "",
-                      body: ""
-                    })
-                  }
+                  onClick={() => changeChannel("whatsapp")}
                 />
               </div>
 
@@ -693,7 +1018,7 @@ ${destinationNames ? "📍 Destination: {{destination}}\n" : ""}
                 title="Template"
                 description={`Showing ${
                   form.channel === "email" ? "Email" : "WhatsApp"
-                } templates only.`}
+                } templates only. Default assets will auto-load if configured.`}
               />
 
               <div className="flex gap-3 flex-wrap">
@@ -701,13 +1026,7 @@ ${destinationNames ? "📍 Destination: {{destination}}\n" : ""}
                   label="Custom Message"
                   icon="✏️"
                   active={!form.templateId}
-                  onClick={() =>
-                    setForm({
-                      ...form,
-                      templateId: "",
-                      body: ""
-                    })
-                  }
+                  onClick={selectCustomMessage}
                 />
 
                 {filteredTemplates.map(t => (
@@ -716,23 +1035,23 @@ ${destinationNames ? "📍 Destination: {{destination}}\n" : ""}
                     label={t.name}
                     icon={form.channel === "email" ? "✉️" : "💬"}
                     active={form.templateId === t.id}
-                    onClick={() =>
-                      setForm({
-                        ...form,
-                        templateId: t.id,
-                        body: ""
-                      })
-                    }
+                    onClick={() => selectTemplate(t)}
                   />
                 ))}
 
                 {filteredTemplates.length === 0 && (
                   <div className="w-full rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-700">
-                    No {form.channel === "email" ? "email" : "WhatsApp"} templates available.
-                    You can still use Custom Message.
+                    No {form.channel === "email" ? "email" : "WhatsApp"}{" "}
+                    templates available. You can still use Custom Message.
                   </div>
                 )}
               </div>
+
+              {selectedTemplate?.hasDefaultAssets && (
+                <p className="text-xs text-blue-600">
+                  This template has default assets. They are loaded below.
+                </p>
+              )}
             </section>
 
             {/* DESTINATIONS */}
@@ -769,13 +1088,85 @@ ${destinationNames ? "📍 Destination: {{destination}}\n" : ""}
               )}
             </section>
 
+            {/* ASSETS */}
+            <section className="space-y-2">
+              <SectionTitle
+                icon={<Package size={16} />}
+                title="Assets"
+                description="Select company profile, promotion packages, destination images or other approved assets."
+              />
+
+              {selectedAssets.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 p-4 text-center">
+                  <p className="text-sm font-medium text-gray-700">
+                    No assets selected
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Asset links will be added automatically to Email or
+                    WhatsApp.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {selectedAssets.map(asset => (
+                    <div
+                      key={asset.assetId || asset.url}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 bg-gray-50 px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-gray-800">
+                          {getAssetTitle(asset)}
+                        </p>
+                        <p className="text-xs text-gray-500 truncate">
+                          {asset.categoryName || asset.assetType || "Asset"} · v
+                          {asset.currentVersion || 1}
+                        </p>
+                      </div>
+
+                      <div className="flex shrink-0 items-center gap-2">
+                        {getAssetUrl(asset) && (
+                          <a
+                            href={getAssetUrl(asset)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            View
+                          </a>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => removeAsset(asset.assetId)}
+                          className="inline-flex items-center gap-1 text-xs text-red-600 hover:underline"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setAssetPickerOpen(true)}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+              >
+                <Package className="h-4 w-4" />
+                Select Assets from Library
+              </button>
+            </section>
+
             {/* MESSAGE */}
             {!selectedTemplate && (
               <section className="space-y-2">
                 <SectionTitle
                   icon={<Sparkles size={16} />}
                   title="Message"
-                  description="Write the main content. Signature is added automatically."
+                  description="Write the main content. Signature and asset links are added automatically."
                 />
 
                 <textarea
@@ -862,11 +1253,45 @@ ${destinationNames ? "📍 Destination: {{destination}}\n" : ""}
                   />
 
                   <SummaryItem
+                    label="Assets"
+                    value={
+                      selectedAssets.length
+                        ? `${selectedAssets.length} selected`
+                        : "No assets"
+                    }
+                  />
+
+                  <SummaryItem
                     label="Signature"
                     value={signature ? "Included" : "Not included"}
                   />
                 </div>
               </section>
+
+              {/* SELECTED ASSETS SUMMARY */}
+              {selectedAssets.length > 0 && (
+                <section className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+                  <p className="text-sm font-semibold text-gray-900 mb-3">
+                    Selected Assets
+                  </p>
+
+                  <div className="space-y-2">
+                    {selectedAssets.map(asset => (
+                      <div
+                        key={asset.assetId || asset.url}
+                        className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2"
+                      >
+                        <p className="text-xs font-semibold text-gray-900 truncate">
+                          {getAssetTitle(asset)}
+                        </p>
+                        <p className="text-[11px] text-gray-500 truncate mt-0.5">
+                          {getAssetUrl(asset)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
 
               {/* PREVIEW MODE */}
               <section className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
@@ -973,6 +1398,19 @@ ${destinationNames ? "📍 Destination: {{destination}}\n" : ""}
             </button>
           </div>
         </div>
+
+        <AssetPickerModal
+          open={assetPickerOpen}
+          onClose={() => setAssetPickerOpen(false)}
+          selectedAssets={selectedAssets}
+          title="Select Assets for Communication"
+          onConfirm={assets =>
+            setForm(prev => ({
+              ...prev,
+              sharedAssets: normalizeAssets(assets)
+            }))
+          }
+        />
       </div>
     </div>
   );

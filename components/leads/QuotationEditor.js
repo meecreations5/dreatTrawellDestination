@@ -1233,10 +1233,13 @@ function buildCleanQuotationData({
         cleanString(source.packageDetails?.basis) ||
         "on DBL/Twin Sharing",
 
-      packagePricing: cleanPackagePrice(
-        source.packageDetails?.packagePricing ||
-        createDefaultPackagePricing(source.packageDetails?.currency || "USD")
-      ),
+      packagePricing: {
+        ...cleanPackagePrice(
+          source.packageDetails?.packagePricing ||
+          createDefaultPackagePricing(packageCurrency)
+        ),
+        currency: packageCurrency
+      },
 
       hotelPart: cleanPackagePart(source.packageDetails?.hotelPart),
 
@@ -1393,7 +1396,7 @@ async function logQuotationCommunication({
         totalAmount: customerAmountNumber,
         customerQuotedAmount: customerAmountNumber,
         customerQuoteAmount: customerAmountNumber,
-        customerQuoteCurrency: selectedVendorCurrency || "INR",
+        customerQuoteCurrency: "INR",
 
         vendorCost: hasVendorCost ? vendorCostNumber : null,
         selectedVendorCost: hasVendorCost ? vendorCostNumber : null,
@@ -1674,6 +1677,8 @@ export default function QuotationEditor({
     quotationData?.packageDetails?.currency ||
     selectedVendorCurrency ||
     "INR";
+
+  const internalQuoteCurrency = "INR";
 
   const quotationPricingMode =
     initialPricingSnapshot.quotationPricingMode || "direct";
@@ -2433,6 +2438,14 @@ export default function QuotationEditor({
             currency: value
           },
 
+          hotelPart: {
+            ...(prev.packageDetails?.hotelPart || {})
+          },
+
+          landPart: {
+            ...(prev.packageDetails?.landPart || {})
+          },
+
           landPricing: {
             ...(prev.packageDetails?.landPricing || createDefaultLandPricing(value)),
 
@@ -3021,7 +3034,7 @@ export default function QuotationEditor({
 
         customerQuotedAmount: customerAmountNumber || 0,
         customerQuoteAmount: customerAmountNumber || 0,
-        customerQuoteCurrency,
+        customerQuoteCurrency: internalQuoteCurrency,
 
         vendorCost: hasVendorCost ? vendorCostNumber : null,
         selectedVendorCost: hasVendorCost ? vendorCostNumber : null,
@@ -3155,7 +3168,7 @@ export default function QuotationEditor({
 
         customerQuotedAmount: customerAmountNumber || 0,
         customerQuoteAmount: customerAmountNumber || 0,
-        customerQuoteCurrency,
+        customerQuoteCurrency: internalQuoteCurrency,
 
         vendorCost: hasVendorCost ? vendorCostNumber : null,
         selectedVendorCost: hasVendorCost ? vendorCostNumber : null,
@@ -3313,7 +3326,7 @@ export default function QuotationEditor({
         totalAmount: customerAmountNumber,
         customerQuotedAmount: customerAmountNumber,
         customerQuoteAmount: customerAmountNumber,
-        customerQuoteCurrency,
+        customerQuoteCurrency: internalQuoteCurrency,
 
         vendorCost: safeVendorCost,
         selectedVendorCost: safeVendorCost,
@@ -3365,7 +3378,7 @@ export default function QuotationEditor({
 
       latestQuotationAmount: customerAmountNumber,
       latestCustomerQuoteAmount: customerAmountNumber,
-      latestCustomerQuoteCurrency: selectedVendorCurrency,
+      latestCustomerQuoteCurrency: internalQuoteCurrency,
 
       latestVendorCost: safeVendorCost,
       latestSelectedVendorCost: safeVendorCost,
@@ -3400,7 +3413,7 @@ export default function QuotationEditor({
           finalQuotationRevision: safeRevision,
           finalQuotationAmount: customerAmountNumber,
           finalCustomerQuoteAmount: customerAmountNumber,
-          finalCustomerQuoteCurrency: selectedVendorCurrency,
+          finalCustomerQuoteCurrency: internalQuoteCurrency,
 
           finalVendorCost: safeVendorCost,
           finalSelectedVendorCost: safeVendorCost,
@@ -6382,6 +6395,7 @@ export default function QuotationEditor({
           marginPercent === null ? "—" : `${marginPercent.toFixed(1)}%`
         }
         isDraftSend={Boolean(draftQuotationId)}
+        vendorCostingMode={vendorCostingMode}
       />
     </>
   );

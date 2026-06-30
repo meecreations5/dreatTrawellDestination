@@ -17,6 +17,7 @@ import {
   CheckCircle2,
   ExternalLink,
   MessageCircle,
+  Package,
   TrendingUp,
   UserRound
 } from "lucide-react";
@@ -109,6 +110,27 @@ const normalize = value =>
     .toLowerCase();
 
 /* =========================
+   COMMON HELPERS
+========================= */
+function getFirstValue(...values) {
+  return (
+    values.find(
+      value => typeof value === "string" && value.trim().length > 0
+    )?.trim() || ""
+  );
+}
+
+function stripHtml(value = "") {
+  return String(value || "")
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/* =========================
    FIELD HELPERS
 ========================= */
 const getAgentId = engagement =>
@@ -143,7 +165,9 @@ const getDestinationName = engagement =>
   engagement?.destinationName ||
   engagement?.destination?.name ||
   engagement?.destination ||
-  "";
+  Array.isArray(engagement?.destinationNames)
+    ? engagement.destinationNames.join(", ")
+    : "";
 
 const getAgentEmail = engagement =>
   engagement?.agentEmail ||
@@ -196,6 +220,94 @@ const getChannelLabel = channel => {
 };
 
 /* =========================
+   ASSET HELPERS
+========================= */
+function getAssetTitle(asset) {
+  return getFirstValue(
+    asset?.title,
+    asset?.name,
+    asset?.fileName,
+    asset?.currentFileName,
+    "Asset"
+  );
+}
+
+function getAssetUrl(asset) {
+  return getFirstValue(
+    asset?.url,
+    asset?.currentUrl,
+    asset?.externalUrl,
+    asset?.downloadUrl,
+    asset?.fileUrl
+  );
+}
+
+function getSharedAssets(engagement) {
+  const assets = Array.isArray(engagement?.sharedAssets)
+    ? engagement.sharedAssets
+    : [];
+
+  const normalizedAssets = assets
+    .map(asset => ({
+      assetId: asset?.assetId || asset?.id || asset?.documentId || "",
+      title: getAssetTitle(asset),
+      url: getAssetUrl(asset),
+      categoryName: asset?.categoryName || "",
+      assetType: asset?.assetType || asset?.documentType || "",
+      usageType: asset?.usageType || "",
+      currentVersion: asset?.currentVersion || asset?.version || 1
+    }))
+    .filter(asset => asset.assetId || asset.url || asset.title);
+
+  const unique = new Map();
+
+  normalizedAssets.forEach(asset => {
+    const key = asset.assetId || asset.url || asset.title;
+    unique.set(key, asset);
+  });
+
+  return Array.from(unique.values());
+}
+
+function getSharedAssetCount(engagement) {
+  const storedCount = Number(engagement?.assetShareCount || 0);
+  if (storedCount > 0) return storedCount;
+
+  return getSharedAssets(engagement).length;
+}
+
+function getSharedAssetSearchText(engagement) {
+  const assets = getSharedAssets(engagement);
+
+  const assetText = assets
+    .map(asset =>
+      [
+        asset.title,
+        asset.categoryName,
+        asset.assetType,
+        asset.usageType,
+        asset.url
+      ]
+        .map(normalize)
+        .join(" ")
+    )
+    .join(" ");
+
+  return [
+    assetText,
+    Array.isArray(engagement?.sharedAssetTitles)
+      ? engagement.sharedAssetTitles.join(" ")
+      : "",
+    Array.isArray(engagement?.sharedAssetIds)
+      ? engagement.sharedAssetIds.join(" ")
+      : "",
+    engagement?.assetLinksText || ""
+  ]
+    .map(normalize)
+    .join(" ");
+}
+
+/* =========================
    ROUTES
 ========================= */
 const getTravelAgentProfileHref = engagement => {
@@ -215,7 +327,9 @@ const getLeadCreateHref = engagement => {
   if (agentId) params.set("travelAgentId", agentId);
   if (engagement?.id) params.set("sourceEngagementId", engagement.id);
 
-  return `/leads/create?${params.toString()}`;
+  const qs = params.toString();
+
+  return qs ? `/leads/create?${qs}` : "/leads/create";
 };
 
 /* =========================
@@ -273,7 +387,7 @@ function getProfileCompletion(engagement) {
 ========================= */
 function MiniStatCard({ icon: Icon, label, value, hint }) {
   return (
-    <div className="rounded-2xl border border-gray-200 bg-white p-4 ">
+    <div className="rounded-2xl border border-gray-200 bg-white p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-medium text-gray-500">
@@ -299,8 +413,6 @@ function MiniStatCard({ icon: Icon, label, value, hint }) {
 
 /* =========================
    AGENT PROFILE STATUS BAR
-   Only profile link + status.
-   No duplicate CTA buttons here.
 ========================= */
 function AgentProfileStatusBar({ engagement }) {
   const agentName = getAgentName(engagement) || "Travel Agent";
@@ -408,10 +520,12 @@ export default function MyEngagementsPage() {
     const unsub = onSnapshot(
       q,
       snap => {
-        const rows = snap.docs.map(d => ({
-          id: d.id,
-          ...d.data()
-        }));
+        const rows = snap.docs
+          .map(d => ({
+            id: d.id,
+            ...d.data()
+          }))
+          .filter(item => item.deleted !== true && item.isDeleted !== true);
 
         setEngagements(rows);
         setLoadingList(false);
@@ -505,14 +619,23 @@ export default function MyEngagementsPage() {
         const searchableText = [
           e.subject,
           e.message,
+          e.messageText,
+          stripHtml(e.messageHtml),
+          e.customRemark,
           e.outcomeCode,
           e.outcomeLabel,
           e.nextAction,
+          e.status,
+          e.sendStatus,
           e.channel,
+          e.direction,
+          e.meetingModeLabel,
+          e.templateName,
           agentName,
           spocName,
           destinationName,
-          e.createdByName
+          e.createdByName,
+          getSharedAssetSearchText(e)
         ]
           .map(normalize)
           .join(" ");
@@ -547,15 +670,20 @@ export default function MyEngagementsPage() {
       (a, b) => b[1] - a[1]
     )[0];
 
+    const filteredAssetCount = filteredEngagements.reduce((sum, e) => {
+      return sum + getSharedAssetCount(e);
+    }, 0);
+
     return {
       total: engagements.length,
       filtered: filteredEngagements.length,
       today: todaysCount,
       topChannel: topChannel
         ? `${getChannelLabel(topChannel[0])} (${topChannel[1]})`
-        : "—"
+        : "—",
+      sharedAssets: filteredAssetCount
     };
-  }, [engagements, filteredEngagements.length]);
+  }, [engagements, filteredEngagements]);
 
   /* =========================
      GROUP BY DATE
@@ -591,13 +719,14 @@ export default function MyEngagementsPage() {
   if (loading || loadingList) {
     return (
       <main className="min-h-screen bg-gray-50">
-        <div className="max-w-9xl mx-auto px-4 py-6 space-y-4">
-          <div className="rounded-3xl border border-gray-200 bg-white p-6 ">
+        <div className="max-w-screen-2xl mx-auto px-4 py-6 space-y-4">
+          <div className="rounded-3xl border border-gray-200 bg-white p-6">
             <div className="h-6 w-52 bg-gray-200 rounded mb-3 animate-pulse" />
             <div className="h-4 w-80 bg-gray-100 rounded animate-pulse" />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+            <CardSkeleton />
             <CardSkeleton />
             <CardSkeleton />
             <CardSkeleton />
@@ -613,9 +742,9 @@ export default function MyEngagementsPage() {
 
   return (
     <main className="min-h-screen bg-gray-50">
-      <div className="max-w-9xl mx-auto px-4 py-6 space-y-6">
+      <div className="max-w-screen-2xl mx-auto px-4 py-6 space-y-6">
         {/* ================= HERO HEADER ================= */}
-        <section className="rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700  overflow-hidden">
+        <section className="rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 overflow-hidden">
           <div className="p-5 md:p-6">
             <div className="flex items-start gap-4">
               <div className="h-12 w-12 rounded-2xl bg-white/15 text-white flex items-center justify-center shrink-0">
@@ -633,8 +762,8 @@ export default function MyEngagementsPage() {
                 </h1>
 
                 <p className="mt-1 text-sm text-blue-100 max-w-2xl leading-6">
-                  View your engagement history with travel agents and quickly
-                  open agent profiles with profile completion status.
+                  View your engagement history, shared assets, package links,
+                  destination communication and travel agent profile status.
                 </p>
               </div>
             </div>
@@ -642,7 +771,7 @@ export default function MyEngagementsPage() {
         </section>
 
         {/* ================= KPI STRIP ================= */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+        <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
           <MiniStatCard
             icon={BarChart3}
             label="Total Engagements"
@@ -670,6 +799,13 @@ export default function MyEngagementsPage() {
             value={summary.topChannel}
             hint="Most used channel"
           />
+
+          <MiniStatCard
+            icon={Package}
+            label="Shared Assets"
+            value={summary.sharedAssets}
+            hint="Assets in filtered records"
+          />
         </section>
 
         {/* ================= MAIN GRID ================= */}
@@ -689,14 +825,14 @@ export default function MyEngagementsPage() {
             )}
 
             {!error && filteredEngagements.length === 0 && (
-              <div className="rounded-3xl border border-gray-200 bg-white p-10 ">
+              <div className="rounded-3xl border border-gray-200 bg-white p-10">
                 <EmptyState
                   icon="📭"
                   title="No engagements found"
                   description={
                     engagements.length === 0
                       ? "You have not created any engagements yet."
-                      : "Try changing your date range, search text or filters."
+                      : "Try changing your date range, search text, asset name or filters."
                   }
                 />
               </div>
@@ -709,7 +845,7 @@ export default function MyEngagementsPage() {
                     {/* DATE HEADER */}
                     <div className="sticky top-0 z-10 bg-gray-50/90 backdrop-blur py-2">
                       <div className="flex items-center gap-3">
-                        <div className="rounded-full border border-gray-200 bg-white px-3 py-1.5 ">
+                        <div className="rounded-full border border-gray-200 bg-white px-3 py-1.5">
                           <p className="text-xs font-semibold text-gray-700">
                             {group.label}
                           </p>
@@ -736,7 +872,7 @@ export default function MyEngagementsPage() {
                             <div key={e.id} className="relative sm:pl-10">
                               <div className="absolute left-[10px] top-6 h-3 w-3 rounded-full bg-white border-2 border-blue-500 hidden sm:block" />
 
-                              <div className="rounded-2xl border border-gray-200 bg-white  overflow-hidden hover:shadow-md transition-shadow">
+                              <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden hover:shadow-md transition-shadow">
                                 <AgentProfileStatusBar engagement={e} />
 
                                 <EngagementCard
@@ -750,11 +886,12 @@ export default function MyEngagementsPage() {
                                     phone: getAgentPhone(e),
                                     city: getAgentCity(e),
                                     profileComplete: profile.complete,
-                                    profileCompletionPercentage: profile.percentage,
+                                    profileCompletionPercentage:
+                                      profile.percentage,
                                     missingProfileFields: profile.missing
                                   }}
                                   agentProfileHref={getTravelAgentProfileHref(e)}
-                                  // viewEngagementHref={getViewEngagementHref(e)}
+                                  viewEngagementHref={getViewEngagementHref(e)}
                                   leadCreateHref={getLeadCreateHref(e)}
                                   showSendCommunication={false}
                                 />
