@@ -13,6 +13,7 @@ import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 
 import EngagementChip from "@/components/engagement/EngagementChip";
+import AssetPickerModal from "@/components/documents/AssetPickerModal";
 
 export default function EngagementForm({ agent }) {
   const { user, loading } = useAuth();

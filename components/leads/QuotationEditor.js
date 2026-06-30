@@ -1194,6 +1194,13 @@ function buildCleanQuotationData({
       ? buildDestinationTemplateSnapshot(destinationTemplate)
       : null);
 
+  const packageCurrency =
+    cleanString(source.packageDetails?.currency) ||
+    cleanString(source.packageDetails?.packagePricing?.currency) ||
+    "USD";
+
+
+
   return {
     leadCode: source.leadCode || lead?.leadCode || "",
 
@@ -1209,7 +1216,7 @@ function buildCleanQuotationData({
     },
 
     packageDetails: {
-      currency: cleanString(source.packageDetails?.currency) || "USD",
+      currency: packageCurrency,
 
       pricingDisplayMode:
         source.packageDetails?.pricingDisplayMode === "component_wise"
@@ -1662,6 +1669,11 @@ export default function QuotationEditor({
 
   const selectedVendorCurrency =
     initialPricingSnapshot.selectedVendorCurrency || "INR";
+
+  const customerQuoteCurrency =
+    quotationData?.packageDetails?.currency ||
+    selectedVendorCurrency ||
+    "INR";
 
   const quotationPricingMode =
     initialPricingSnapshot.quotationPricingMode || "direct";
@@ -2403,13 +2415,56 @@ export default function QuotationEditor({
   };
 
   const updatePackageCurrency = value => {
-    setQuotationData(prev => ({
-      ...prev,
-      packageDetails: {
-        ...(prev.packageDetails || {}),
-        currency: value
-      }
-    }));
+    setQuotationData(prev => {
+      const previousCurrency =
+        prev.packageDetails?.currency ||
+        prev.packageDetails?.packagePricing?.currency ||
+        "USD";
+
+      return {
+        ...prev,
+
+        packageDetails: {
+          ...(prev.packageDetails || {}),
+          currency: value,
+
+          packagePricing: {
+            ...(prev.packageDetails?.packagePricing || {}),
+            currency: value
+          },
+
+          landPricing: {
+            ...(prev.packageDetails?.landPricing || createDefaultLandPricing(value)),
+
+            pvt: {
+              ...(prev.packageDetails?.landPricing?.pvt || {}),
+              currency:
+                !prev.packageDetails?.landPricing?.pvt?.currency ||
+                  prev.packageDetails?.landPricing?.pvt?.currency === previousCurrency
+                  ? value
+                  : prev.packageDetails?.landPricing?.pvt?.currency
+            },
+
+            sic: {
+              ...(prev.packageDetails?.landPricing?.sic || {}),
+              currency:
+                !prev.packageDetails?.landPricing?.sic?.currency ||
+                  prev.packageDetails?.landPricing?.sic?.currency === previousCurrency
+                  ? value
+                  : prev.packageDetails?.landPricing?.sic?.currency
+            }
+          }
+        },
+
+        hotelInclusions: safeArray(prev.hotelInclusions).map(row => ({
+          ...row,
+          currency:
+            !row.currency || row.currency === previousCurrency
+              ? value
+              : row.currency
+        }))
+      };
+    });
   };
 
   const togglePackagePart = partKey => {
@@ -2966,7 +3021,7 @@ export default function QuotationEditor({
 
         customerQuotedAmount: customerAmountNumber || 0,
         customerQuoteAmount: customerAmountNumber || 0,
-        customerQuoteCurrency: selectedVendorCurrency,
+        customerQuoteCurrency,
 
         vendorCost: hasVendorCost ? vendorCostNumber : null,
         selectedVendorCost: hasVendorCost ? vendorCostNumber : null,
@@ -3100,7 +3155,7 @@ export default function QuotationEditor({
 
         customerQuotedAmount: customerAmountNumber || 0,
         customerQuoteAmount: customerAmountNumber || 0,
-        customerQuoteCurrency: selectedVendorCurrency,
+        customerQuoteCurrency,
 
         vendorCost: hasVendorCost ? vendorCostNumber : null,
         selectedVendorCost: hasVendorCost ? vendorCostNumber : null,
@@ -3258,7 +3313,7 @@ export default function QuotationEditor({
         totalAmount: customerAmountNumber,
         customerQuotedAmount: customerAmountNumber,
         customerQuoteAmount: customerAmountNumber,
-        customerQuoteCurrency: selectedVendorCurrency,
+        customerQuoteCurrency,
 
         vendorCost: safeVendorCost,
         selectedVendorCost: safeVendorCost,
@@ -3475,7 +3530,7 @@ export default function QuotationEditor({
           totalAmount: customerAmountNumber,
           customerQuotedAmount: customerAmountNumber,
           customerQuoteAmount: customerAmountNumber,
-          customerQuoteCurrency: selectedVendorCurrency,
+          customerQuoteCurrency,
           quotationPricingMode,
           vendorQuoteFinalized,
 
@@ -3637,7 +3692,7 @@ export default function QuotationEditor({
           revision,
           quotationData: finalQuotationData || cleanPreviewQuotationData,
           customerQuotedAmount: customerAmountNumber,
-          customerQuoteCurrency: selectedVendorCurrency,
+          customerQuoteCurrency,
           whatsappSignatureText,
           isFinalQuotation,
           emailAlsoSent: emailSent
@@ -3744,7 +3799,7 @@ export default function QuotationEditor({
     revision: draftRevision,
     quotationData: cleanPreviewQuotationData,
     customerQuotedAmount: customerAmountNumber,
-    customerQuoteCurrency: selectedVendorCurrency,
+    customerQuoteCurrency,
     whatsappSignatureText: previewWhatsappSignatureText,
     isFinalQuotation,
     emailAlsoSent: sendEmail && hasEmail

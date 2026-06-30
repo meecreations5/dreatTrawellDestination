@@ -19,6 +19,7 @@ import {
   MapPin,
   MessageSquare,
   Monitor,
+  Package,
   StickyNote,
   UserRound,
   Video
@@ -27,6 +28,7 @@ import {
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import EngagementChip from "@/components/engagement/EngagementChip";
+import AssetPickerModal from "@/components/documents/AssetPickerModal";
 
 const CHANNELS = [
   { key: "call", label: "Call", icon: "📞" },
@@ -75,7 +77,9 @@ function getInitialForm() {
     meetingLocation: "",
     meetingLink: "",
 
-    customRemark: ""
+    customRemark: "",
+
+    sharedAssets: []
   };
 }
 
@@ -93,6 +97,22 @@ function getUserName(user) {
     user?.displayName,
     user?.email,
     "Team Member"
+  );
+}
+
+function getUserEmail(user) {
+  return getFirstValue(
+    user?.email,
+    user?.workEmail,
+    user?.officialEmail
+  );
+}
+
+function getUserRole(user) {
+  return getFirstValue(
+    user?.role,
+    user?.designation,
+    user?.jobTitle
   );
 }
 
@@ -137,6 +157,7 @@ export default function EngagementForm({ agent }) {
 
   const [saving, setSaving] = useState(false);
   const [showInternalNote, setShowInternalNote] = useState(false);
+  const [assetPickerOpen, setAssetPickerOpen] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -151,27 +172,30 @@ export default function EngagementForm({ agent }) {
         const snap = await getDocs(
           query(
             collection(db, "users"),
-            where("active", "==", true),
-            where("role", "in", ["team", "admin"])
+            where("active", "==", true)
           )
         );
 
         if (!mounted) return;
 
         setTeam(
-          snap.docs.map(d => {
-            const data = d.data();
+          snap.docs
+            .map(d => {
+              const data = d.data();
 
-            return {
-              uid: d.id,
-              name: getFirstValue(
-                data.name,
-                data.displayName,
-                data.email,
-                "Team Member"
-              )
-            };
-          })
+              return {
+                uid: d.id,
+                name: getFirstValue(
+                  data.name,
+                  data.displayName,
+                  data.email,
+                  "Team Member"
+                ),
+                email: data.email || "",
+                role: data.role || data.designation || ""
+              };
+            })
+            .sort((a, b) => a.name.localeCompare(b.name))
         );
       } catch (error) {
         console.error("Failed to load team:", error);
@@ -328,7 +352,17 @@ export default function EngagementForm({ agent }) {
       const assignee = team.find(t => t.uid === form.assignedToUid);
 
       const destinationRefId = selectedDestination?.id || "";
+      const destinationId =
+        selectedDestination?.destinationId ||
+        selectedDestination?.id ||
+        "";
+
       const destinationName = selectedDestination?.name || "";
+
+      const destinationCode =
+        selectedDestination?.code ||
+        selectedDestination?.destinationCode ||
+        "";
 
       const messageText = form.message.trim();
 
@@ -340,12 +374,10 @@ export default function EngagementForm({ agent }) {
         : null;
 
       const subject = isMeeting
-        ? `${getMeetingModeLabel(form.meetingMode)} meeting with ${
-            agent.agencyName || agent.name || "Travel Agent"
-          }`
-        : `${getChannelLabel(form.channel)} engagement with ${
-            agent.agencyName || agent.name || "Travel Agent"
-          }`;
+        ? `${getMeetingModeLabel(form.meetingMode)} meeting with ${agent.agencyName || agent.name || "Travel Agent"
+        }`
+        : `${getChannelLabel(form.channel)} engagement with ${agent.agencyName || agent.name || "Travel Agent"
+        }`;
 
       const status =
         meetingAtDate || scheduledAtDate ? "scheduled" : "completed";
@@ -356,6 +388,8 @@ export default function EngagementForm({ agent }) {
 
         agentId: agent.id,
         agentName: agent.agencyName || agent.name || "",
+        travelAgentName: agent.agencyName || agent.name || "",
+        agencyName: agent.agencyName || agent.name || "",
 
         spoc,
 
@@ -368,7 +402,9 @@ export default function EngagementForm({ agent }) {
         messageText,
         messageHtml: null,
 
+        destinationId: destinationId || null,
         destinationRefId: destinationRefId || null,
+        destinationCode: destinationCode || null,
         destinationName: destinationName || null,
         destinationIds: destinationRefId ? [destinationRefId] : [],
         destinationNames: destinationName ? [destinationName] : [],
@@ -381,17 +417,22 @@ export default function EngagementForm({ agent }) {
           ? getMeetingModeLabel(form.meetingMode)
           : null,
         meetingAt: meetingAtDate,
+        tentativeMeetingDate: meetingAtDate,
+
         meetingLocation:
           isMeeting && form.meetingMode === "offline"
             ? form.meetingLocation.trim()
             : "",
+
         meetingLink:
           isMeeting && form.meetingMode === "online"
             ? form.meetingLink.trim()
             : "",
+
         isOnlineMeeting: isMeeting
           ? form.meetingMode === "online"
           : false,
+
         isOfflineMeeting: isMeeting
           ? form.meetingMode === "offline"
           : false,
@@ -399,17 +440,36 @@ export default function EngagementForm({ agent }) {
         customRemark: form.customRemark.trim(),
 
         scheduledAt: scheduledAtDate,
+        nextActionDate: scheduledAtDate,
+        nextFollowUpDate: scheduledAtDate,
+        followUpDate: scheduledAtDate,
         requiresFollowUp: Boolean(scheduledAtDate),
 
         status,
 
         assignedToUid: assignee?.uid || user.uid,
         assignedToName: assignee?.name || getUserName(user),
+        assignedToEmail: assignee?.email || getUserEmail(user),
+        assignedToRole: assignee?.role || getUserRole(user),
 
         leadId: null,
 
+        sharedAssets: form.sharedAssets || [],
+        sharedAssetIds: (form.sharedAssets || [])
+          .map(asset => asset.assetId)
+          .filter(Boolean),
+        sharedAssetTitles: (form.sharedAssets || [])
+          .map(asset => asset.title)
+          .filter(Boolean),
+        assetShareCount: form.sharedAssets?.length || 0,
+        hasSharedAssets: Boolean(form.sharedAssets?.length),
+
+        deleted: false,
+        isDeleted: false,
+
         createdByUid: user.uid,
         createdByName: getUserName(user),
+        createdByEmail: getUserEmail(user),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
@@ -422,7 +482,8 @@ export default function EngagementForm({ agent }) {
         channel: prev.channel,
         direction: prev.direction,
         destinationRefId: prev.destinationRefId,
-        destinationName: prev.destinationName
+        destinationName: prev.destinationName,
+        sharedAssets: []
       }));
 
       setShowInternalNote(false);
@@ -586,10 +647,9 @@ export default function EngagementForm({ agent }) {
                     }
                     className={`
                       rounded-xl border p-3 text-left transition
-                      ${
-                        form.meetingMode === mode.key
-                          ? "border-blue-500 bg-blue-50 text-blue-700"
-                          : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                      ${form.meetingMode === mode.key
+                        ? "border-blue-500 bg-blue-50 text-blue-700"
+                        : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
                       }
                     `}
                   >
@@ -722,6 +782,104 @@ export default function EngagementForm({ agent }) {
               }
             />
           </Field>
+        </SectionCard>
+
+        {/* SHARED ASSETS */}
+        <SectionCard
+          icon={<Package size={16} />}
+          title="Shared Assets"
+          description="Attach company profile, promotion packages, destination images, or other approved assets."
+        >
+          {form.sharedAssets.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-gray-200 bg-white p-4 text-center">
+              <p className="text-sm font-medium text-gray-700">
+                No assets selected
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                Select assets from Document Library to track what was shared.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {form.sharedAssets.map(asset => (
+                <div
+                  key={asset.assetId}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 bg-white px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-gray-800">
+                      {asset.title}
+                    </p>
+                    <p className="text-xs text-gray-500 truncate">
+                      {asset.categoryName || "Asset"} · v
+                      {asset.currentVersion || 1}
+                    </p>
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-2">
+                    {asset.url && (
+                      <a
+                        href={asset.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-blue-600 hover:underline"
+                      >
+                        View
+                      </a>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setForm(prev => ({
+                          ...prev,
+                          sharedAssets: prev.sharedAssets.filter(
+                            item => item.assetId !== asset.assetId
+                          )
+                        }))
+                      }
+                      className="text-xs text-red-600 hover:underline"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setAssetPickerOpen(true)}
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+            >
+              <Package className="h-4 w-4" />
+              Select Assets
+            </button>
+
+            {form.sharedAssets.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  const links = form.sharedAssets
+                    .filter(asset => asset.url)
+                    .map(asset => `${asset.title}: ${asset.url}`)
+                    .join("\n");
+
+                  setForm(prev => ({
+                    ...prev,
+                    message: prev.message
+                      ? `${prev.message}\n\nShared Assets:\n${links}`
+                      : `Shared Assets:\n${links}`
+                  }));
+                }}
+                className="inline-flex items-center gap-2 rounded-lg bg-gray-100 px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-200"
+              >
+                Add Links to Summary
+              </button>
+            )}
+          </div>
         </SectionCard>
 
         {/* OUTCOME + FOLLOWUP */}
@@ -865,7 +1023,22 @@ export default function EngagementForm({ agent }) {
           )}
         </button>
       </div>
-    </div>
+
+      <AssetPickerModal
+        open={assetPickerOpen}
+        onClose={() => setAssetPickerOpen(false)}
+        selectedAssets={form.sharedAssets || []}
+        title="Select Assets to Share"
+        onConfirm={assets =>
+          setForm(prev => ({
+            ...prev,
+            sharedAssets: assets
+          }))
+        }
+      />
+
+
+    </div >
   );
 }
 
@@ -917,10 +1090,9 @@ function ContactStatus({ label, value, valid }) {
     <div
       className={`
         rounded-lg border px-3 py-2
-        ${
-          valid
-            ? "border-green-200 bg-green-50"
-            : "border-orange-200 bg-orange-50"
+        ${valid
+          ? "border-green-200 bg-green-50"
+          : "border-orange-200 bg-orange-50"
         }
       `}
     >
