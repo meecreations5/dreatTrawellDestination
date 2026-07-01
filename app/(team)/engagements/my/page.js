@@ -161,13 +161,38 @@ const getSpocName = engagement =>
   engagement?.travelAgent?.spocName ||
   "";
 
-const getDestinationName = engagement =>
-  engagement?.destinationName ||
-  engagement?.destination?.name ||
-  engagement?.destination ||
-  Array.isArray(engagement?.destinationNames)
-    ? engagement.destinationNames.join(", ")
-    : "";
+const getDestinationName = (engagement = {}) => {
+  if (Array.isArray(engagement?.destinationNames)) {
+    return engagement.destinationNames
+      .filter(Boolean)
+      .join(", ");
+  }
+
+  if (Array.isArray(engagement?.destinations)) {
+    return engagement.destinations
+      .map(item =>
+        typeof item === "string"
+          ? item
+          : item?.name || item?.destinationName || ""
+      )
+      .filter(Boolean)
+      .join(", ");
+  }
+
+  if (typeof engagement?.destinationName === "string") {
+    return engagement.destinationName;
+  }
+
+  if (typeof engagement?.destination?.name === "string") {
+    return engagement.destination.name;
+  }
+
+  if (typeof engagement?.destination === "string") {
+    return engagement.destination;
+  }
+
+  return "";
+};
 
 const getAgentEmail = engagement =>
   engagement?.agentEmail ||
