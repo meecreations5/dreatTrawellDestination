@@ -7,8 +7,11 @@ import {
   collection,
   doc as firestoreDoc,
   getDocs,
+  increment,
+  query,
   serverTimestamp,
-  updateDoc
+  updateDoc,
+  where
 } from "firebase/firestore";
 import {
   getDownloadURL,
@@ -21,7 +24,9 @@ import CheckFiles from "./CheckFiles";
 import AssetCategoryManager from "./AssetCategoryManager";
 import {
   Archive,
+  Check,
   CheckCircle2,
+  Copy,
   Download,
   Eye,
   Folder,
@@ -44,6 +49,28 @@ const ASSET_TYPES = [
   { value: "other", label: "Other" }
 ];
 
+const USAGE_TYPES = [
+  { value: "", label: "Select Usage Type" },
+  { value: "company_profile", label: "Company Profile" },
+  { value: "logo", label: "Logo" },
+  { value: "branding_document", label: "Branding Document" },
+  { value: "destination_image", label: "Destination Image" },
+  { value: "destination_video", label: "Destination Video" },
+  { value: "promotional_package", label: "Promotional Package" },
+  { value: "ongoing_promotion", label: "Ongoing Promotion" },
+  { value: "hotel_image", label: "Hotel Image" },
+  { value: "rate_sheet", label: "Rate Sheet" },
+  { value: "terms_conditions", label: "Terms & Conditions" },
+  { value: "payment_details", label: "Payment Details" },
+  { value: "agent_onboarding", label: "Agent Onboarding Kit" },
+  { value: "quotation_attachment", label: "Quotation Attachment" },
+  { value: "social_media_creative", label: "Social Media Creative" },
+  { value: "festival_creative", label: "Festival Creative" },
+  { value: "vendor_contract", label: "Vendor Contract" },
+  { value: "training_sop", label: "Training / SOP" },
+  { value: "other", label: "Other" }
+];
+
 const VISIBILITY_OPTIONS = [
   { value: "adminOnly", label: "Admin Only" },
   { value: "team", label: "Team" },
@@ -54,6 +81,22 @@ const VISIBILITY_OPTIONS = [
 const STATUS_OPTIONS = [
   { value: "active", label: "Active" },
   { value: "draft", label: "Draft" }
+];
+
+const AUDIENCE_OPTIONS = [
+  { value: "travel_agent", label: "Travel Agent" },
+  { value: "internal_team", label: "Internal Team" },
+  { value: "vendor", label: "Vendor" },
+  { value: "customer", label: "Customer" },
+  { value: "all", label: "All" }
+];
+
+const CHANNEL_USAGE_OPTIONS = [
+  { value: "email", label: "Email" },
+  { value: "whatsapp", label: "WhatsApp" },
+  { value: "quotation", label: "Quotation" },
+  { value: "engagement", label: "Engagement" },
+  { value: "social", label: "Social Media" }
 ];
 
 const ALLOWED_EXTENSIONS = [
@@ -72,12 +115,28 @@ const ALLOWED_EXTENSIONS = [
   "mov"
 ];
 
+const ALLOWED_MIME_TYPES = [
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "video/mp4",
+  "video/quicktime"
+];
+
 const MAX_FILE_SIZE_MB = 50;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 /* =========================
    UI HELPERS
 ========================= */
+
 function Surface({ title, subtitle, action, children }) {
   return (
     <section className="bg-white rounded-2xl border border-gray-100 shadow-sm">
@@ -149,7 +208,15 @@ function Textarea({ label, value, onChange, error, required, ...props }) {
   );
 }
 
-function Select({ label, value, onChange, error, required, children, ...props }) {
+function Select({
+  label,
+  value,
+  onChange,
+  error,
+  required,
+  children,
+  ...props
+}) {
   return (
     <div className="space-y-1.5">
       <label className="text-xs font-medium text-gray-600">
@@ -193,6 +260,14 @@ function StatusBadge({ status }) {
     );
   }
 
+  if (status === "deleted") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700">
+        Deleted
+      </span>
+    );
+  }
+
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2.5 py-1 text-xs font-medium text-green-700">
       <CheckCircle2 className="h-3.5 w-3.5" />
@@ -201,9 +276,27 @@ function StatusBadge({ status }) {
   );
 }
 
+function ApprovalBadge({ approved }) {
+  if (approved === false) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700">
+        Not Approved
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
+      <CheckCircle2 className="h-3.5 w-3.5" />
+      Approved
+    </span>
+  );
+}
+
 /* =========================
    HELPERS
 ========================= */
+
 function createSlug(value = "") {
   return value
     .toLowerCase()
@@ -220,13 +313,28 @@ function getFileExtension(fileName = "") {
   return fileName.split(".").pop()?.toLowerCase() || "";
 }
 
-function validateFile(file) {
+function isValidUrl(value = "") {
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol);
+  } catch {
+    return false;
+  }
+}
+
+function validateFile(file, assetType = "document") {
+  if (assetType === "link") return "";
+
   if (!file) return "File required";
 
   const extension = getFileExtension(file.name);
 
   if (!ALLOWED_EXTENSIONS.includes(extension)) {
     return `Allowed files: ${ALLOWED_EXTENSIONS.join(", ")}`;
+  }
+
+  if (file.type && !ALLOWED_MIME_TYPES.includes(file.type)) {
+    return "Invalid file type selected.";
   }
 
   if (file.size > MAX_FILE_SIZE_BYTES) {
@@ -281,6 +389,22 @@ function formatDate(value) {
   }
 }
 
+function formatDateOnly(value) {
+  if (!value) return "—";
+
+  try {
+    const date = value?.toDate ? value.toDate() : new Date(`${value}T00:00:00`);
+
+    return date.toLocaleDateString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric"
+    });
+  } catch {
+    return "—";
+  }
+}
+
 function getEffectiveStatus(asset) {
   if (asset.status) return asset.status;
   if (asset.active === false) return "draft";
@@ -291,10 +415,21 @@ function getAssetTypeLabel(value) {
   return ASSET_TYPES.find(type => type.value === value)?.label || "Other";
 }
 
+function getUsageTypeLabel(value) {
+  return USAGE_TYPES.find(type => type.value === value)?.label || "Not Set";
+}
+
 function getVisibilityLabel(value) {
   return (
     VISIBILITY_OPTIONS.find(option => option.value === value)?.label ||
     "Team"
+  );
+}
+
+function getAudienceLabel(value) {
+  return (
+    AUDIENCE_OPTIONS.find(option => option.value === value)?.label ||
+    "Travel Agent"
   );
 }
 
@@ -309,26 +444,60 @@ function isImageAsset(asset) {
   );
 }
 
+function isExpired(asset) {
+  if (!asset.validTo) return false;
+
+  const endDate = new Date(`${asset.validTo}T23:59:59`);
+  if (Number.isNaN(endDate.getTime())) return false;
+
+  return endDate < new Date();
+}
+
+function getDestinationLabel(asset) {
+  return asset.destinationName || "All Destinations";
+}
+
+function getChannelUsage(asset) {
+  return Array.isArray(asset.channelUsage) ? asset.channelUsage : [];
+}
+
+function defaultFormState(categoryId = "") {
+  return {
+    name: "",
+    description: "",
+    categoryId,
+    assetType: "document",
+    usageType: "",
+    visibility: "team",
+    status: "active",
+    tagsText: "",
+    versionNote: "",
+    file: null,
+
+    destinationId: "",
+    destinationName: "",
+    validFrom: "",
+    validTo: "",
+    approvedForUse: true,
+    channelUsage: ["email", "whatsapp", "engagement"],
+    audience: "travel_agent",
+    priority: "",
+    externalUrl: ""
+  };
+}
+
 export default function DocumentsPage() {
   const { user } = useAuth(true);
 
   const [documents, setDocuments] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [destinations, setDestinations] = useState([]);
 
   const [loading, setLoading] = useState(true);
   const [categoryLoading, setCategoryLoading] = useState(true);
+  const [destinationLoading, setDestinationLoading] = useState(true);
 
-  const [form, setForm] = useState({
-    name: "",
-    description: "",
-    categoryId: "",
-    assetType: "document",
-    visibility: "team",
-    status: "active",
-    tagsText: "",
-    versionNote: "",
-    file: null
-  });
+  const [form, setForm] = useState(defaultFormState());
 
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
@@ -339,17 +508,24 @@ export default function DocumentsPage() {
   const [uploadingDocId, setUploadingDocId] = useState("");
   const [deletingDocId, setDeletingDocId] = useState("");
   const [previewAsset, setPreviewAsset] = useState(null);
+  const [copiedAssetId, setCopiedAssetId] = useState("");
 
   const [filters, setFilters] = useState({
     search: "",
     categoryId: "all",
     status: "all",
     assetType: "all",
-    visibility: "all"
+    usageType: "all",
+    visibility: "all",
+    destinationId: "all",
+    approval: "all",
+    channelUsage: "all"
   });
 
   const actor =
     user?.email || user?.displayName || user?.uid || "system";
+
+  const isDevelopment = process.env.NODE_ENV === "development";
 
   /* =========================
      LOAD CATEGORIES
@@ -365,7 +541,12 @@ export default function DocumentsPage() {
           id: item.id,
           ...item.data()
         }))
-        .filter(category => category.archived !== true)
+        .filter(
+          category =>
+            category.deleted !== true &&
+            category.isDeleted !== true &&
+            category.archived !== true
+        )
         .sort((a, b) => {
           const orderA = Number(a.sortOrder || 9999);
           const orderB = Number(b.sortOrder || 9999);
@@ -392,6 +573,36 @@ export default function DocumentsPage() {
   };
 
   /* =========================
+     LOAD DESTINATIONS
+  ========================= */
+  const fetchDestinations = async () => {
+    setDestinationLoading(true);
+
+    try {
+      const snap = await getDocs(
+        query(collection(db, "destinations"), where("active", "==", true))
+      );
+
+      const rows = snap.docs
+        .map(item => ({
+          id: item.id,
+          ...item.data()
+        }))
+        .filter(item => item.deleted !== true && item.isDeleted !== true)
+        .sort((a, b) =>
+          String(a.name || "").localeCompare(String(b.name || ""))
+        );
+
+      setDestinations(rows);
+    } catch (error) {
+      console.error(error);
+      setPageError("Unable to load destinations.");
+    } finally {
+      setDestinationLoading(false);
+    }
+  };
+
+  /* =========================
      LOAD ASSETS
   ========================= */
   const fetchDocs = async () => {
@@ -405,7 +616,7 @@ export default function DocumentsPage() {
           id: item.id,
           ...item.data()
         }))
-        .filter(item => item.deleted !== true);
+        .filter(item => item.deleted !== true && item.isDeleted !== true);
 
       rows.sort((a, b) => {
         const aTime =
@@ -434,6 +645,7 @@ export default function DocumentsPage() {
     if (!user?.isAdmin) return;
 
     fetchCategories();
+    fetchDestinations();
     fetchDocs();
   }, [user?.isAdmin]);
 
@@ -447,6 +659,10 @@ export default function DocumentsPage() {
     return categories.find(category => category.id === form.categoryId) || null;
   }, [categories, form.categoryId]);
 
+  const selectedDestination = useMemo(() => {
+    return destinations.find(item => item.id === form.destinationId) || null;
+  }, [destinations, form.destinationId]);
+
   /* =========================
      STATS
   ========================= */
@@ -459,9 +675,44 @@ export default function DocumentsPage() {
         .length,
       archived: documents.filter(
         item => getEffectiveStatus(item) === "archived"
-      ).length
+      ).length,
+      approved: documents.filter(item => item.approvedForUse !== false).length,
+      expired: documents.filter(item => isExpired(item)).length
     };
   }, [documents]);
+
+  /* =========================
+     CHANNEL TOGGLES
+  ========================= */
+  const toggleFormChannelUsage = value => {
+    setForm(prev => {
+      const current = Array.isArray(prev.channelUsage)
+        ? prev.channelUsage
+        : [];
+
+      const exists = current.includes(value);
+
+      return {
+        ...prev,
+        channelUsage: exists
+          ? current.filter(item => item !== value)
+          : [...current, value]
+      };
+    });
+  };
+
+  const toggleAssetChannelUsage = async (asset, value) => {
+    const current = getChannelUsage(asset);
+    const exists = current.includes(value);
+
+    const next = exists
+      ? current.filter(item => item !== value)
+      : [...current, value];
+
+    await saveMeta(asset, {
+      channelUsage: next
+    });
+  };
 
   /* =========================
      UPLOAD VERSION
@@ -492,6 +743,7 @@ export default function DocumentsPage() {
       storagePath,
       url,
       versionNote: versionNote?.trim() || "",
+      isExternalLink: false,
       createdBy: actor,
       createdAt: serverTimestamp()
     });
@@ -504,6 +756,7 @@ export default function DocumentsPage() {
       currentFileType: file.type || "",
       currentFileExtension: getFileExtension(file.name),
       currentStoragePath: storagePath,
+      isExternalLink: false,
       updatedBy: actor,
       updatedAt: serverTimestamp()
     });
@@ -521,13 +774,33 @@ export default function DocumentsPage() {
     const description = form.description.trim();
     const tags = parseTags(form.tagsText);
     const category = categories.find(item => item.id === form.categoryId);
+    const isLink = form.assetType === "link";
 
     if (!name) nextErrors.name = "Asset title is required";
     if (!form.categoryId) nextErrors.categoryId = "Category is required";
-    if (form.categoryId && !category) nextErrors.categoryId = "Category not found";
+    if (form.categoryId && !category) {
+      nextErrors.categoryId = "Category not found";
+    }
 
-    const fileError = validateFile(form.file);
-    if (fileError) nextErrors.file = fileError;
+    if (form.validFrom && form.validTo) {
+      const from = new Date(`${form.validFrom}T00:00:00`);
+      const to = new Date(`${form.validTo}T23:59:59`);
+
+      if (from > to) {
+        nextErrors.validTo = "Valid To cannot be before Valid From";
+      }
+    }
+
+    if (isLink) {
+      if (!form.externalUrl.trim()) {
+        nextErrors.externalUrl = "External URL is required";
+      } else if (!isValidUrl(form.externalUrl.trim())) {
+        nextErrors.externalUrl = "Enter a valid http/https URL";
+      }
+    } else {
+      const fileError = validateFile(form.file, form.assetType);
+      if (fileError) nextErrors.file = fileError;
+    }
 
     setErrors(nextErrors);
 
@@ -538,8 +811,9 @@ export default function DocumentsPage() {
 
     try {
       const categorySlug = category.slug || createSlug(category.name);
+      const destinationName = selectedDestination?.name || "";
 
-      const refDoc = await addDoc(collection(db, "documents"), {
+      const basePayload = {
         name,
         title: name,
         description,
@@ -550,22 +824,30 @@ export default function DocumentsPage() {
 
         type: categorySlug,
         assetType: form.assetType,
+        usageType: form.usageType,
 
         visibility: form.visibility,
         status: form.status,
         active: form.status === "active",
         archived: false,
         deleted: false,
+        isDeleted: false,
+
+        destinationId: form.destinationId || "",
+        destinationName,
+
+        validFrom: form.validFrom || "",
+        validTo: form.validTo || "",
+
+        approvedForUse: Boolean(form.approvedForUse),
+        channelUsage: Array.isArray(form.channelUsage)
+          ? form.channelUsage
+          : [],
+
+        audience: form.audience || "travel_agent",
+        priority: form.priority ? Number(form.priority) : null,
 
         tags,
-
-        currentVersion: 0,
-        currentUrl: "",
-        currentFileName: "",
-        currentFileSize: null,
-        currentFileType: "",
-        currentFileExtension: "",
-        currentStoragePath: "",
 
         downloadCount: 0,
 
@@ -573,27 +855,48 @@ export default function DocumentsPage() {
         createdAt: serverTimestamp(),
         updatedBy: actor,
         updatedAt: serverTimestamp()
+      };
+
+      const refDoc = await addDoc(collection(db, "documents"), {
+        ...basePayload,
+
+        currentVersion: isLink ? 1 : 0,
+        currentUrl: isLink ? form.externalUrl.trim() : "",
+        currentFileName: isLink ? name : "",
+        currentFileSize: isLink ? null : null,
+        currentFileType: isLink ? "external/link" : "",
+        currentFileExtension: isLink ? "url" : "",
+        currentStoragePath: "",
+
+        externalUrl: isLink ? form.externalUrl.trim() : "",
+        isExternalLink: isLink
       });
 
-      await uploadVersion({
-        documentId: refDoc.id,
-        version: 1,
-        file: form.file,
-        category,
-        versionNote: form.versionNote
-      });
+      if (isLink) {
+        await addDoc(collection(db, "documents", refDoc.id, "versions"), {
+          version: 1,
+          fileName: name,
+          fileSize: null,
+          fileType: "external/link",
+          fileExtension: "url",
+          storagePath: "",
+          url: form.externalUrl.trim(),
+          versionNote: form.versionNote?.trim() || "Initial link",
+          isExternalLink: true,
+          createdBy: actor,
+          createdAt: serverTimestamp()
+        });
+      } else {
+        await uploadVersion({
+          documentId: refDoc.id,
+          version: 1,
+          file: form.file,
+          category,
+          versionNote: form.versionNote
+        });
+      }
 
-      setForm({
-        name: "",
-        description: "",
-        categoryId: activeCategories[0]?.id || "",
-        assetType: "document",
-        visibility: "team",
-        status: "active",
-        tagsText: "",
-        versionNote: "",
-        file: null
-      });
+      setForm(defaultFormState(activeCategories[0]?.id || ""));
 
       setErrors({});
       await fetchDocs();
@@ -628,12 +931,66 @@ export default function DocumentsPage() {
         payload.archived = updates.status === "archived";
       }
 
+      if (updates.destinationId !== undefined) {
+        const destination = destinations.find(
+          item => item.id === updates.destinationId
+        );
+
+        payload.destinationName = destination?.name || "";
+      }
+
+      if (updates.currentUrl !== undefined && asset.assetType === "link") {
+        payload.externalUrl = updates.currentUrl;
+        payload.currentFileName = asset.title || asset.name || "External Link";
+        payload.currentFileType = "external/link";
+        payload.currentFileExtension = "url";
+        payload.isExternalLink = true;
+      }
+
       await updateDoc(firestoreDoc(db, "documents", asset.id), payload);
 
       await fetchDocs();
     } catch (error) {
       console.error(error);
       setPageError("Unable to update asset.");
+    }
+  };
+
+  /* =========================
+     DOWNLOAD TRACKING
+  ========================= */
+  const handleDownload = async asset => {
+    if (!asset.currentUrl) return;
+
+    window.open(asset.currentUrl, "_blank", "noopener,noreferrer");
+
+    try {
+      await updateDoc(firestoreDoc(db, "documents", asset.id), {
+        downloadCount: increment(1),
+        lastDownloadedAt: serverTimestamp(),
+        lastDownloadedBy: actor,
+        updatedAt: serverTimestamp()
+      });
+
+      await fetchDocs();
+    } catch (error) {
+      console.error("Download count update failed:", error);
+    }
+  };
+
+  const copyAssetLink = async asset => {
+    if (!asset.currentUrl) return;
+
+    try {
+      await navigator.clipboard.writeText(asset.currentUrl);
+      setCopiedAssetId(asset.id);
+
+      window.setTimeout(() => {
+        setCopiedAssetId("");
+      }, 1600);
+    } catch (error) {
+      console.error(error);
+      alert("Unable to copy link.");
     }
   };
 
@@ -656,6 +1013,7 @@ export default function DocumentsPage() {
     try {
       await updateDoc(firestoreDoc(db, "documents", asset.id), {
         deleted: true,
+        isDeleted: true,
         deletedBy: actor,
         deletedAt: serverTimestamp(),
 
@@ -695,7 +1053,7 @@ export default function DocumentsPage() {
   ========================= */
   const uploadNewVersion = async asset => {
     const file = versionFiles[asset.id];
-    const fileError = validateFile(file);
+    const fileError = validateFile(file, asset.assetType);
 
     if (fileError) {
       setPageError(fileError);
@@ -750,6 +1108,7 @@ export default function DocumentsPage() {
     return documents.filter(asset => {
       const status = getEffectiveStatus(asset);
       const tags = Array.isArray(asset.tags) ? asset.tags : [];
+      const channelUsage = getChannelUsage(asset);
 
       const matchesSearch =
         !search ||
@@ -758,6 +1117,9 @@ export default function DocumentsPage() {
         asset.description?.toLowerCase().includes(search) ||
         asset.categoryName?.toLowerCase().includes(search) ||
         asset.currentFileName?.toLowerCase().includes(search) ||
+        asset.usageType?.toLowerCase().includes(search) ||
+        asset.destinationName?.toLowerCase().includes(search) ||
+        asset.currentUrl?.toLowerCase().includes(search) ||
         tags.some(tag => tag.toLowerCase().includes(search));
 
       const matchesCategory =
@@ -771,16 +1133,37 @@ export default function DocumentsPage() {
         filters.assetType === "all" ||
         asset.assetType === filters.assetType;
 
+      const matchesUsageType =
+        filters.usageType === "all" ||
+        asset.usageType === filters.usageType;
+
       const matchesVisibility =
         filters.visibility === "all" ||
         asset.visibility === filters.visibility;
+
+      const matchesDestination =
+        filters.destinationId === "all" ||
+        asset.destinationId === filters.destinationId;
+
+      const matchesApproval =
+        filters.approval === "all" ||
+        (filters.approval === "approved" && asset.approvedForUse !== false) ||
+        (filters.approval === "notApproved" && asset.approvedForUse === false);
+
+      const matchesChannelUsage =
+        filters.channelUsage === "all" ||
+        channelUsage.includes(filters.channelUsage);
 
       return (
         matchesSearch &&
         matchesCategory &&
         matchesStatus &&
         matchesAssetType &&
-        matchesVisibility
+        matchesUsageType &&
+        matchesVisibility &&
+        matchesDestination &&
+        matchesApproval &&
+        matchesChannelUsage
       );
     });
   }, [documents, filters]);
@@ -796,7 +1179,8 @@ export default function DocumentsPage() {
             Repository & Asset Library
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            Create categories and store documents, presentations, images, contracts, templates, and other company assets.
+            Store approved sales assets, branding documents, promotional packages,
+            destination images, rate sheets, and shareable campaign files.
           </p>
         </div>
 
@@ -807,7 +1191,7 @@ export default function DocumentsPage() {
         )}
 
         {/* KPI */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
           <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
             <p className="text-xs text-gray-500">Total Assets</p>
             <p className="text-2xl font-semibold text-gray-900 mt-1">
@@ -835,16 +1219,30 @@ export default function DocumentsPage() {
               {stats.archived}
             </p>
           </div>
+
+          <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+            <p className="text-xs text-gray-500">Approved</p>
+            <p className="text-2xl font-semibold text-emerald-700 mt-1">
+              {stats.approved}
+            </p>
+          </div>
+
+          <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+            <p className="text-xs text-gray-500">Expired</p>
+            <p className="text-2xl font-semibold text-red-700 mt-1">
+              {stats.expired}
+            </p>
+          </div>
         </div>
 
         {/* CATEGORY MANAGER */}
-        <AssetCategoryManager />
+        <AssetCategoryManager onChange={fetchCategories} />
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
           {/* CREATE ASSET */}
           <Surface
             title="Upload Asset"
-            subtitle="Upload the first version of a new repository asset."
+            subtitle="Upload a new sales, branding, destination, or promotion asset."
           >
             <div className="space-y-4">
               <Input
@@ -852,7 +1250,7 @@ export default function DocumentsPage() {
                 required
                 value={form.name}
                 error={errors.name}
-                placeholder="Example: DreamTrawell Company Profile 2026"
+                placeholder="Example: Dubai Summer Offer 2026"
                 onChange={value =>
                   setForm(prev => ({
                     ...prev,
@@ -915,7 +1313,8 @@ export default function DocumentsPage() {
                   onChange={value =>
                     setForm(prev => ({
                       ...prev,
-                      assetType: value
+                      assetType: value,
+                      file: value === "link" ? null : prev.file
                     }))
                   }
                 >
@@ -927,6 +1326,48 @@ export default function DocumentsPage() {
                 </Select>
 
                 <Select
+                  label="Usage Type"
+                  value={form.usageType}
+                  onChange={value =>
+                    setForm(prev => ({
+                      ...prev,
+                      usageType: value
+                    }))
+                  }
+                >
+                  {USAGE_TYPES.map(type => (
+                    <option key={type.value} value={type.value}>
+                      {type.label}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+
+              <Select
+                label="Destination"
+                value={form.destinationId}
+                disabled={destinationLoading}
+                onChange={value => {
+                  const destination = destinations.find(item => item.id === value);
+
+                  setForm(prev => ({
+                    ...prev,
+                    destinationId: value,
+                    destinationName: destination?.name || ""
+                  }));
+                }}
+              >
+                <option value="">All Destinations</option>
+
+                {destinations.map(destination => (
+                  <option key={destination.id} value={destination.id}>
+                    {destination.name}
+                  </option>
+                ))}
+              </Select>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Select
                   label="Visibility"
                   value={form.visibility}
                   onChange={value =>
@@ -937,6 +1378,23 @@ export default function DocumentsPage() {
                   }
                 >
                   {VISIBILITY_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+
+                <Select
+                  label="Audience"
+                  value={form.audience}
+                  onChange={value =>
+                    setForm(prev => ({
+                      ...prev,
+                      audience: value
+                    }))
+                  }
+                >
+                  {AUDIENCE_OPTIONS.map(option => (
                     <option key={option.value} value={option.value}>
                       {option.label}
                     </option>
@@ -960,6 +1418,95 @@ export default function DocumentsPage() {
                   </option>
                 ))}
               </Select>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Input
+                  label="Valid From"
+                  type="date"
+                  value={form.validFrom}
+                  onChange={value =>
+                    setForm(prev => ({
+                      ...prev,
+                      validFrom: value
+                    }))
+                  }
+                />
+
+                <Input
+                  label="Valid To"
+                  type="date"
+                  value={form.validTo}
+                  error={errors.validTo}
+                  onChange={value =>
+                    setForm(prev => ({
+                      ...prev,
+                      validTo: value
+                    }))
+                  }
+                />
+              </div>
+
+              <Input
+                label="Priority"
+                type="number"
+                min="1"
+                value={form.priority}
+                placeholder="Example: 1"
+                onChange={value =>
+                  setForm(prev => ({
+                    ...prev,
+                    priority: value
+                  }))
+                }
+              />
+
+              <div className="rounded-xl border border-gray-100 bg-gray-50 p-3 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold text-gray-800">
+                      Approved for Team Use
+                    </p>
+                    <p className="text-[11px] text-gray-500">
+                      Only approved active assets should be used in templates and communication.
+                    </p>
+                  </div>
+
+                  <input
+                    type="checkbox"
+                    checked={form.approvedForUse}
+                    onChange={e =>
+                      setForm(prev => ({
+                        ...prev,
+                        approvedForUse: e.target.checked
+                      }))
+                    }
+                    className="h-4 w-4"
+                  />
+                </div>
+
+                <div>
+                  <p className="text-xs font-semibold text-gray-800 mb-2">
+                    Allowed Channels
+                  </p>
+
+                  <div className="flex flex-wrap gap-2">
+                    {CHANNEL_USAGE_OPTIONS.map(option => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => toggleFormChannelUsage(option.value)}
+                        className={`rounded-full border px-3 py-1 text-xs font-medium ${
+                          form.channelUsage.includes(option.value)
+                            ? "border-blue-200 bg-blue-50 text-blue-700"
+                            : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
 
               <Input
                 label="Tags"
@@ -985,47 +1532,65 @@ export default function DocumentsPage() {
                 }
               />
 
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-gray-600">
-                  Upload File <span className="text-red-500">*</span>
-                </label>
+              {form.assetType === "link" ? (
+                <Input
+                  label="External URL"
+                  required
+                  value={form.externalUrl}
+                  error={errors.externalUrl}
+                  placeholder="https://..."
+                  onChange={value =>
+                    setForm(prev => ({
+                      ...prev,
+                      externalUrl: value
+                    }))
+                  }
+                />
+              ) : (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-gray-600">
+                    Upload File <span className="text-red-500">*</span>
+                  </label>
 
-                <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-center hover:bg-gray-100">
-                  <UploadCloud className="h-7 w-7 text-gray-400 mb-2" />
+                  <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-center hover:bg-gray-100">
+                    <UploadCloud className="h-7 w-7 text-gray-400 mb-2" />
 
-                  <span className="text-sm font-medium text-gray-700">
-                    {form.file ? form.file.name : "Choose file"}
-                  </span>
+                    <span className="text-sm font-medium text-gray-700">
+                      {form.file ? form.file.name : "Choose file"}
+                    </span>
 
-                  <span className="text-xs text-gray-500 mt-1">
-                    PDF, PPT, DOC, Excel, images, videos up to {MAX_FILE_SIZE_MB} MB
-                  </span>
+                    <span className="text-xs text-gray-500 mt-1">
+                      PDF, PPT, DOC, Excel, images, videos up to {MAX_FILE_SIZE_MB} MB
+                    </span>
 
-                  <input
-                    type="file"
-                    accept=".pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.webp,.mp4,.mov"
-                    className="hidden"
-                    onChange={e => {
-                      const file = e.target.files?.[0] || null;
-                      const fileError = file ? validateFile(file) : "File required";
+                    <input
+                      type="file"
+                      accept=".pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.webp,.mp4,.mov"
+                      className="hidden"
+                      onChange={e => {
+                        const file = e.target.files?.[0] || null;
+                        const fileError = file
+                          ? validateFile(file, form.assetType)
+                          : "File required";
 
-                      setForm(prev => ({
-                        ...prev,
-                        file: fileError ? null : file
-                      }));
+                        setForm(prev => ({
+                          ...prev,
+                          file: fileError ? null : file
+                        }));
 
-                      setErrors(prev => ({
-                        ...prev,
-                        file: fileError
-                      }));
-                    }}
-                  />
-                </label>
+                        setErrors(prev => ({
+                          ...prev,
+                          file: fileError
+                        }));
+                      }}
+                    />
+                  </label>
 
-                {errors.file && (
-                  <p className="text-xs text-red-600">{errors.file}</p>
-                )}
-              </div>
+                  {errors.file && (
+                    <p className="text-xs text-red-600">{errors.file}</p>
+                  )}
+                </div>
+              )}
 
               <button
                 onClick={createDocument}
@@ -1033,7 +1598,7 @@ export default function DocumentsPage() {
                 className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
               >
                 <UploadCloud className="h-4 w-4" />
-                {saving ? "Uploading..." : "Create Asset v1"}
+                {saving ? "Uploading..." : "Create Asset"}
               </button>
 
               {!categoryLoading && activeCategories.length === 0 && (
@@ -1056,8 +1621,8 @@ export default function DocumentsPage() {
               }
             >
               {/* FILTERS */}
-              <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-5">
-                <div className="relative md:col-span-2">
+              <div className="grid grid-cols-1 md:grid-cols-4 xl:grid-cols-8 gap-3 mb-5">
+                <div className="relative md:col-span-2 xl:col-span-2">
                   <Search className="h-4 w-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
 
                   <input
@@ -1068,7 +1633,7 @@ export default function DocumentsPage() {
                         search: e.target.value
                       }))
                     }
-                    placeholder="Search title, tag, file"
+                    placeholder="Search title, tag, destination, package"
                     className="mui-input pl-9"
                   />
                 </div>
@@ -1124,6 +1689,57 @@ export default function DocumentsPage() {
                     </option>
                   ))}
                 </select>
+
+                <select
+                  value={filters.usageType}
+                  onChange={e =>
+                    setFilters(prev => ({
+                      ...prev,
+                      usageType: e.target.value
+                    }))
+                  }
+                  className="mui-input"
+                >
+                  <option value="all">All Usage</option>
+                  {USAGE_TYPES.filter(item => item.value).map(type => (
+                    <option key={type.value} value={type.value}>
+                      {type.label}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={filters.destinationId}
+                  onChange={e =>
+                    setFilters(prev => ({
+                      ...prev,
+                      destinationId: e.target.value
+                    }))
+                  }
+                  className="mui-input"
+                >
+                  <option value="all">All Destinations</option>
+                  {destinations.map(destination => (
+                    <option key={destination.id} value={destination.id}>
+                      {destination.name}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={filters.approval}
+                  onChange={e =>
+                    setFilters(prev => ({
+                      ...prev,
+                      approval: e.target.value
+                    }))
+                  }
+                  className="mui-input"
+                >
+                  <option value="all">All Approval</option>
+                  <option value="approved">Approved</option>
+                  <option value="notApproved">Not Approved</option>
+                </select>
               </div>
 
               {loading ? (
@@ -1154,6 +1770,9 @@ export default function DocumentsPage() {
                     const isDeleting = deletingDocId === asset.id;
                     const canPreviewImage =
                       isImageAsset(asset) && Boolean(asset.currentUrl);
+                    const expired = isExpired(asset);
+                    const channelUsage = getChannelUsage(asset);
+                    const copied = copiedAssetId === asset.id;
 
                     return (
                       <div
@@ -1168,6 +1787,13 @@ export default function DocumentsPage() {
                           <div className="min-w-0 flex-1 space-y-3">
                             <div className="flex flex-wrap items-center gap-2">
                               <StatusBadge status={status} />
+                              <ApprovalBadge approved={asset.approvedForUse} />
+
+                              {expired && (
+                                <span className="rounded-full bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700">
+                                  Expired
+                                </span>
+                              )}
 
                               <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
                                 {asset.categoryName || "Uncategorized"}
@@ -1175,6 +1801,14 @@ export default function DocumentsPage() {
 
                               <span className="rounded-full bg-purple-50 px-2.5 py-1 text-xs font-medium text-purple-700">
                                 {getAssetTypeLabel(asset.assetType)}
+                              </span>
+
+                              <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700">
+                                {getUsageTypeLabel(asset.usageType)}
+                              </span>
+
+                              <span className="rounded-full bg-cyan-50 px-2.5 py-1 text-xs font-medium text-cyan-700">
+                                {getDestinationLabel(asset)}
                               </span>
 
                               <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600">
@@ -1243,11 +1877,11 @@ export default function DocumentsPage() {
                               </button>
                             )}
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
                               <div>
-                                <p className="text-gray-500">Current File</p>
+                                <p className="text-gray-500">Current File / Link</p>
                                 <p className="font-medium text-gray-800 truncate">
-                                  {asset.currentFileName || "No file name"}
+                                  {asset.currentFileName || asset.currentUrl || "No file name"}
                                 </p>
                               </div>
 
@@ -1259,6 +1893,27 @@ export default function DocumentsPage() {
                               </div>
 
                               <div>
+                                <p className="text-gray-500">Downloads</p>
+                                <p className="font-medium text-gray-800">
+                                  {asset.downloadCount || 0}
+                                </p>
+                              </div>
+
+                              <div>
+                                <p className="text-gray-500">Valid From</p>
+                                <p className="font-medium text-gray-800">
+                                  {formatDateOnly(asset.validFrom)}
+                                </p>
+                              </div>
+
+                              <div>
+                                <p className="text-gray-500">Valid To</p>
+                                <p className="font-medium text-gray-800">
+                                  {formatDateOnly(asset.validTo)}
+                                </p>
+                              </div>
+
+                              <div>
                                 <p className="text-gray-500">Updated</p>
                                 <p className="font-medium text-gray-800">
                                   {formatDate(asset.updatedAt || asset.createdAt)}
@@ -1266,9 +1921,23 @@ export default function DocumentsPage() {
                               </div>
 
                               <div>
+                                <p className="text-gray-500">Audience</p>
+                                <p className="font-medium text-gray-800">
+                                  {getAudienceLabel(asset.audience)}
+                                </p>
+                              </div>
+
+                              <div>
                                 <p className="text-gray-500">Updated By</p>
                                 <p className="font-medium text-gray-800 truncate">
                                   {asset.updatedBy || asset.createdBy || "—"}
+                                </p>
+                              </div>
+
+                              <div>
+                                <p className="text-gray-500">Priority</p>
+                                <p className="font-medium text-gray-800">
+                                  {asset.priority || "—"}
                                 </p>
                               </div>
                             </div>
@@ -1285,9 +1954,22 @@ export default function DocumentsPage() {
                                 ))}
                               </div>
                             )}
+
+                            {channelUsage.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5">
+                                {channelUsage.map(channel => (
+                                  <span
+                                    key={channel}
+                                    className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700"
+                                  >
+                                    {channel}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </div>
 
-                          <div className="flex flex-col gap-2 lg:w-56">
+                          <div className="flex flex-col gap-2 lg:w-64">
                             <select
                               value={asset.categoryId || ""}
                               disabled={isArchived}
@@ -1325,6 +2007,42 @@ export default function DocumentsPage() {
                             </select>
 
                             <select
+                              value={asset.usageType || ""}
+                              disabled={isArchived}
+                              onChange={e =>
+                                saveMeta(asset, {
+                                  usageType: e.target.value
+                                })
+                              }
+                              className="mui-input text-xs"
+                            >
+                              {USAGE_TYPES.map(type => (
+                                <option key={type.value} value={type.value}>
+                                  {type.label}
+                                </option>
+                              ))}
+                            </select>
+
+                            <select
+                              value={asset.destinationId || ""}
+                              disabled={isArchived}
+                              onChange={e =>
+                                saveMeta(asset, {
+                                  destinationId: e.target.value
+                                })
+                              }
+                              className="mui-input text-xs"
+                            >
+                              <option value="">All Destinations</option>
+
+                              {destinations.map(destination => (
+                                <option key={destination.id} value={destination.id}>
+                                  {destination.name}
+                                </option>
+                              ))}
+                            </select>
+
+                            <select
                               value={asset.visibility || "team"}
                               disabled={isArchived}
                               onChange={e =>
@@ -1335,6 +2053,23 @@ export default function DocumentsPage() {
                               className="mui-input text-xs"
                             >
                               {VISIBILITY_OPTIONS.map(option => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+
+                            <select
+                              value={asset.audience || "travel_agent"}
+                              disabled={isArchived}
+                              onChange={e =>
+                                saveMeta(asset, {
+                                  audience: e.target.value
+                                })
+                              }
+                              className="mui-input text-xs"
+                            >
+                              {AUDIENCE_OPTIONS.map(option => (
                                 <option key={option.value} value={option.value}>
                                   {option.label}
                                 </option>
@@ -1356,6 +2091,48 @@ export default function DocumentsPage() {
                               <option value="archived">Archived</option>
                             </select>
 
+                            <div className="grid grid-cols-2 gap-2">
+                              <input
+                                type="date"
+                                value={asset.validFrom || ""}
+                                disabled={isArchived}
+                                onChange={e =>
+                                  saveMeta(asset, {
+                                    validFrom: e.target.value
+                                  })
+                                }
+                                className="mui-input text-xs"
+                              />
+
+                              <input
+                                type="date"
+                                value={asset.validTo || ""}
+                                disabled={isArchived}
+                                onChange={e =>
+                                  saveMeta(asset, {
+                                    validTo: e.target.value
+                                  })
+                                }
+                                className="mui-input text-xs"
+                              />
+                            </div>
+
+                            <input
+                              type="number"
+                              min="1"
+                              defaultValue={asset.priority || ""}
+                              disabled={isArchived}
+                              onBlur={e =>
+                                saveMeta(asset, {
+                                  priority: e.target.value
+                                    ? Number(e.target.value)
+                                    : null
+                                })
+                              }
+                              placeholder="Priority"
+                              className="mui-input text-xs"
+                            />
+
                             <input
                               defaultValue={formatTags(asset.tags)}
                               disabled={isArchived}
@@ -1367,6 +2144,67 @@ export default function DocumentsPage() {
                               placeholder="tags comma separated"
                               className="mui-input text-xs"
                             />
+
+                            {asset.assetType === "link" && (
+                              <input
+                                defaultValue={asset.currentUrl || ""}
+                                disabled={isArchived}
+                                onBlur={e => {
+                                  const nextUrl = e.target.value.trim();
+
+                                  if (!nextUrl) return;
+
+                                  if (!isValidUrl(nextUrl)) {
+                                    setPageError("Enter a valid http/https URL.");
+                                    return;
+                                  }
+
+                                  if (nextUrl !== asset.currentUrl) {
+                                    saveMeta(asset, {
+                                      currentUrl: nextUrl
+                                    });
+                                  }
+                                }}
+                                placeholder="External URL"
+                                className="mui-input text-xs"
+                              />
+                            )}
+
+                            <div className="rounded-xl border border-gray-100 bg-gray-50 p-3 space-y-2">
+                              <label className="flex items-center justify-between gap-3 text-xs text-gray-700">
+                                <span>Approved for Use</span>
+                                <input
+                                  type="checkbox"
+                                  checked={asset.approvedForUse !== false}
+                                  disabled={isArchived}
+                                  onChange={e =>
+                                    saveMeta(asset, {
+                                      approvedForUse: e.target.checked
+                                    })
+                                  }
+                                />
+                              </label>
+
+                              <div className="flex flex-wrap gap-1.5">
+                                {CHANNEL_USAGE_OPTIONS.map(option => (
+                                  <button
+                                    key={option.value}
+                                    type="button"
+                                    disabled={isArchived}
+                                    onClick={() =>
+                                      toggleAssetChannelUsage(asset, option.value)
+                                    }
+                                    className={`rounded-full border px-2 py-0.5 text-[11px] font-medium disabled:opacity-60 ${
+                                      getChannelUsage(asset).includes(option.value)
+                                        ? "border-blue-200 bg-blue-50 text-blue-700"
+                                        : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                                    }`}
+                                  >
+                                    {option.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
 
                             {asset.currentUrl ? (
                               <>
@@ -1381,15 +2219,32 @@ export default function DocumentsPage() {
                                   </button>
                                 )}
 
-                                <a
-                                  href={asset.currentUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
+                                <button
+                                  type="button"
+                                  onClick={() => handleDownload(asset)}
                                   className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
                                 >
                                   <Download className="h-3.5 w-3.5" />
-                                  Download
-                                </a>
+                                  Open / Download
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => copyAssetLink(asset)}
+                                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                                >
+                                  {copied ? (
+                                    <>
+                                      <Check className="h-3.5 w-3.5 text-green-600" />
+                                      Copied
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Copy className="h-3.5 w-3.5" />
+                                      Copy Link
+                                    </>
+                                  )}
+                                </button>
                               </>
                             ) : (
                               <button
@@ -1437,7 +2292,7 @@ export default function DocumentsPage() {
                           </div>
                         </div>
 
-                        {!isArchived && (
+                        {!isArchived && asset.assetType !== "link" && (
                           <div className="mt-4 rounded-xl border border-gray-100 bg-gray-50 p-3">
                             <div className="flex flex-col gap-3">
                               <div>
@@ -1531,21 +2386,20 @@ export default function DocumentsPage() {
                   {formatBytes(previewAsset.currentFileSize)}
                 </p>
 
-                <a
-                  href={previewAsset.currentUrl}
-                  target="_blank"
-                  rel="noreferrer"
+                <button
+                  type="button"
+                  onClick={() => handleDownload(previewAsset)}
                   className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700"
                 >
                   <Download className="h-3.5 w-3.5" />
-                  Download Image
-                </a>
+                  Open / Download Image
+                </button>
               </div>
             </div>
           </div>
         )}
 
-        <CheckFiles />
+        {isDevelopment && <CheckFiles />}
       </div>
     </main>
   );

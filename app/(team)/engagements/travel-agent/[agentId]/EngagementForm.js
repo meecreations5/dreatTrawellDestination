@@ -1029,6 +1029,8 @@ export default function EngagementForm({ agent }) {
         onClose={() => setAssetPickerOpen(false)}
         selectedAssets={form.sharedAssets || []}
         title="Select Assets to Share"
+        channel={form.channel === "whatsapp" ? "whatsapp" : "engagement"}
+        destinationId={form.destinationRefId || ""}
         onConfirm={assets =>
           setForm(prev => ({
             ...prev,

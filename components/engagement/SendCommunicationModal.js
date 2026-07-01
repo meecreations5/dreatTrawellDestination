@@ -493,9 +493,9 @@ export default function SendCommunicationModal({ agent, onClose }) {
         setProfile(
           userSnap?.exists()
             ? {
-                id: userSnap.id,
-                ...userSnap.data()
-              }
+              id: userSnap.id,
+              ...userSnap.data()
+            }
             : null
         );
       } catch (error) {
@@ -1016,9 +1016,8 @@ ${destinationNames ? "📍 Destination: {{destination}}\n\n" : ""}
               <SectionTitle
                 icon={<FileText size={16} />}
                 title="Template"
-                description={`Showing ${
-                  form.channel === "email" ? "Email" : "WhatsApp"
-                } templates only. Default assets will auto-load if configured.`}
+                description={`Showing ${form.channel === "email" ? "Email" : "WhatsApp"
+                  } templates only. Default assets will auto-load if configured.`}
               />
 
               <div className="flex gap-3 flex-wrap">
@@ -1309,11 +1308,10 @@ ${destinationNames ? "📍 Destination: {{destination}}\n\n" : ""}
                     <button
                       type="button"
                       onClick={() => setPreviewMode("message")}
-                      className={`px-3 py-1.5 ${
-                        previewMode === "message"
+                      className={`px-3 py-1.5 ${previewMode === "message"
                           ? "bg-blue-600 text-white"
                           : "bg-white text-gray-600 hover:bg-gray-50"
-                      }`}
+                        }`}
                     >
                       Message
                     </button>
@@ -1321,11 +1319,10 @@ ${destinationNames ? "📍 Destination: {{destination}}\n\n" : ""}
                     <button
                       type="button"
                       onClick={() => setPreviewMode("signature")}
-                      className={`px-3 py-1.5 ${
-                        previewMode === "signature"
+                      className={`px-3 py-1.5 ${previewMode === "signature"
                           ? "bg-blue-600 text-white"
                           : "bg-white text-gray-600 hover:bg-gray-50"
-                      }`}
+                        }`}
                     >
                       Signature
                     </button>
@@ -1404,6 +1401,8 @@ ${destinationNames ? "📍 Destination: {{destination}}\n\n" : ""}
           onClose={() => setAssetPickerOpen(false)}
           selectedAssets={selectedAssets}
           title="Select Assets for Communication"
+          channel={form.channel}
+          destinationId={selectedDestinations[0]?.id || ""}
           onConfirm={assets =>
             setForm(prev => ({
               ...prev,
@@ -1460,10 +1459,9 @@ function ChannelCard({ active, icon, title, description, onClick }) {
       onClick={onClick}
       className={`
         text-left rounded-xl border p-4 transition
-        ${
-          active
-            ? "border-blue-500 bg-blue-50 text-blue-700"
-            : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+        ${active
+          ? "border-blue-500 bg-blue-50 text-blue-700"
+          : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
         }
       `}
     >
@@ -1484,10 +1482,9 @@ function ContactStatus({ label, value, valid }) {
     <div
       className={`
         rounded-lg border px-3 py-2
-        ${
-          valid
-            ? "border-green-200 bg-green-50"
-            : "border-orange-200 bg-orange-50"
+        ${valid
+          ? "border-green-200 bg-green-50"
+          : "border-orange-200 bg-orange-50"
         }
       `}
     >
