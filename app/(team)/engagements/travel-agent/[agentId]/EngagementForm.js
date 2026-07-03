@@ -15,11 +15,14 @@ import {
   CalendarClock,
   CheckCircle2,
   Clock3,
+  ChevronDown,
+  ChevronUp,
   Loader2,
   MapPin,
   MessageSquare,
   Monitor,
   Package,
+  Sparkles,
   StickyNote,
   UserRound,
   Video
@@ -29,6 +32,16 @@ import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import EngagementChip from "@/components/engagement/EngagementChip";
 import AssetPickerModal from "@/components/documents/AssetPickerModal";
+
+import {
+  ENGAGEMENT_OUTCOME_OPTIONS,
+  getIntentFromEngagement,
+  getOutcomeLabel
+} from "@/lib/engagementIntentMap";
+
+/* =========================
+   OPTIONS
+========================= */
 
 const CHANNELS = [
   { key: "call", label: "Call", icon: "📞" },
@@ -47,14 +60,11 @@ const MEETING_MODES = [
   { key: "offline", label: "Offline", icon: "📍" }
 ];
 
-const OUTCOMES = [
-  { key: "call_not_picked", label: "Call Not Picked" },
-  { key: "intro_done", label: "Introduction Done" },
-  { key: "profile_shared", label: "Company Profile Shared" },
-  { key: "meeting_scheduled", label: "Meeting Scheduled" },
-  { key: "followup_required", label: "Follow-up Required" },
-  { key: "general_update", label: "General Update" }
-];
+const OUTCOMES = ENGAGEMENT_OUTCOME_OPTIONS;
+
+/* =========================
+   FORM DEFAULT
+========================= */
 
 function getInitialForm() {
   return {
@@ -82,6 +92,10 @@ function getInitialForm() {
     sharedAssets: []
   };
 }
+
+/* =========================
+   HELPERS
+========================= */
 
 function getFirstValue(...values) {
   return (
@@ -129,9 +143,9 @@ function getSpocLabel(spoc) {
   const designation = getFirstValue(spoc.designation);
   const contact = getFirstValue(spoc.email, spoc.mobile);
 
-  if (designation && contact) return `${name} — ${designation} — ${contact}`;
-  if (designation) return `${name} — ${designation}`;
-  if (contact && contact !== name) return `${name} — ${contact}`;
+  if (designation && contact) return `${name} - ${designation} - ${contact}`;
+  if (designation) return `${name} - ${designation}`;
+  if (contact && contact !== name) return `${name} - ${contact}`;
 
   return name;
 }
@@ -140,15 +154,43 @@ function getChannelLabel(channel) {
   return CHANNELS.find(c => c.key === channel)?.label || channel;
 }
 
-function getOutcomeLabel(outcomeCode) {
-  return OUTCOMES.find(o => o.key === outcomeCode)?.label || "";
-}
-
 function getMeetingModeLabel(mode) {
   return MEETING_MODES.find(m => m.key === mode)?.label || "";
 }
 
-export default function EngagementForm({ agent }) {
+function toLocalDateTimeValue(dateValue) {
+  const date = dateValue instanceof Date ? dateValue : new Date(dateValue);
+
+  if (Number.isNaN(date.getTime())) return "";
+
+  const offset = date.getTimezoneOffset();
+  const local = new Date(date.getTime() - offset * 60 * 1000);
+
+  return local.toISOString().slice(0, 16);
+}
+
+function getSuggestedDateTime(days = 1) {
+  const date = new Date();
+
+  date.setDate(date.getDate() + Number(days || 1));
+  date.setHours(11, 0, 0, 0);
+
+  return toLocalDateTimeValue(date);
+}
+
+function getAssetKey(asset) {
+  return asset?.assetId || asset?.id || asset?.url || asset?.title;
+}
+
+/* =========================
+   COMPONENT
+========================= */
+
+export default function EngagementForm({
+  agent,
+  onSaved,
+  onClose
+}) {
   const { user, loading } = useAuth();
 
   const [team, setTeam] = useState([]);
@@ -156,13 +198,19 @@ export default function EngagementForm({ agent }) {
   const [form, setForm] = useState(null);
 
   const [saving, setSaving] = useState(false);
+  const [showAssets, setShowAssets] = useState(false);
   const [showInternalNote, setShowInternalNote] = useState(false);
+  const [showAdvancedFollowUp, setShowAdvancedFollowUp] = useState(false);
   const [assetPickerOpen, setAssetPickerOpen] = useState(false);
 
   useEffect(() => {
     if (!user) return;
     setForm(getInitialForm());
   }, [user]);
+
+  /* =========================
+     LOAD TEAM
+  ========================== */
 
   useEffect(() => {
     let mounted = true;
@@ -209,6 +257,10 @@ export default function EngagementForm({ agent }) {
     };
   }, []);
 
+  /* =========================
+     LOAD DESTINATIONS
+  ========================== */
+
   useEffect(() => {
     let mounted = true;
 
@@ -224,10 +276,14 @@ export default function EngagementForm({ agent }) {
         if (!mounted) return;
 
         setDestinations(
-          snap.docs.map(d => ({
-            id: d.id,
-            ...d.data()
-          }))
+          snap.docs
+            .map(d => ({
+              id: d.id,
+              ...d.data()
+            }))
+            .sort((a, b) =>
+              String(a.name || "").localeCompare(String(b.name || ""))
+            )
         );
       } catch (error) {
         console.error("Failed to load destinations:", error);
@@ -246,13 +302,38 @@ export default function EngagementForm({ agent }) {
 
   const selectedDestination = useMemo(() => {
     if (!form?.destinationRefId) return null;
+
     return destinations.find(d => d.id === form.destinationRefId) || null;
   }, [destinations, form?.destinationRefId]);
 
   const isMeeting = form?.channel === "meeting";
 
+  const smartIntent = useMemo(() => {
+    if (!form) return null;
+
+    return getIntentFromEngagement({
+      channel: form.channel,
+      direction: form.direction,
+      outcomeCode: form.outcomeCode,
+      hasDestination: Boolean(form.destinationRefId),
+      hasSharedAssets: Boolean(form.sharedAssets?.length),
+      scheduledAt: form.scheduledAt,
+      isMeeting
+    });
+  }, [
+    form?.channel,
+    form?.direction,
+    form?.outcomeCode,
+    form?.destinationRefId,
+    form?.sharedAssets,
+    form?.scheduledAt,
+    isMeeting
+  ]);
+
   const followUpRequired =
-    form?.outcomeCode === "followup_required" || Boolean(form?.scheduledAt);
+    form?.outcomeCode === "followup_required" ||
+    Boolean(form?.scheduledAt) ||
+    Boolean(smartIntent?.followUpRecommended);
 
   const hasValidEmail = Boolean(selectedSpoc?.email);
   const hasValidMobile = Boolean(selectedSpoc?.mobile);
@@ -271,7 +352,7 @@ export default function EngagementForm({ agent }) {
       ? `${getMeetingModeLabel(form.meetingMode)} meeting will be saved as scheduled.`
       : "Add tentative meeting date and mode."
     : followUpRequired
-      ? "This will be saved as a scheduled follow-up."
+      ? "This will be saved with smart follow-up context."
       : "This will be saved as completed engagement.";
 
   if (loading || !user || !form) {
@@ -293,10 +374,12 @@ export default function EngagementForm({ agent }) {
       <div className="bg-white rounded-xl shadow-card p-5 space-y-3">
         <div className="flex items-start gap-2">
           <AlertCircle size={18} className="text-orange-500 mt-0.5" />
+
           <div>
             <h2 className="text-sm font-semibold text-gray-900">
               No SPOC available
             </h2>
+
             <p className="text-xs text-gray-500 mt-1">
               Please add at least one SPOC to this travel agent before logging
               an engagement.
@@ -306,6 +389,64 @@ export default function EngagementForm({ agent }) {
       </div>
     );
   }
+
+  /* =========================
+     ACTIONS
+  ========================== */
+
+  const applySuggestedFollowUp = () => {
+    if (!smartIntent) return;
+
+    setForm(prev => ({
+      ...prev,
+      scheduledAt:
+        prev.scheduledAt ||
+        getSuggestedDateTime(smartIntent.followUpDays || 1)
+    }));
+
+    setShowAdvancedFollowUp(true);
+  };
+
+  const removeAsset = assetKey => {
+    setForm(prev => ({
+      ...prev,
+      sharedAssets: (prev.sharedAssets || []).filter(
+        asset => getAssetKey(asset) !== assetKey
+      )
+    }));
+  };
+
+  const appendAssetLinksToSummary = () => {
+    const links = (form.sharedAssets || [])
+      .filter(asset => asset.url)
+      .map(asset => `${asset.title}: ${asset.url}`)
+      .join("\n");
+
+    if (!links) return;
+
+    setForm(prev => ({
+      ...prev,
+      message: prev.message
+        ? `${prev.message}\n\nShared Assets:\n${links}`
+        : `Shared Assets:\n${links}`
+    }));
+  };
+
+  const resetAfterSave = () => {
+    setForm(prev => ({
+      ...getInitialForm(),
+      spocIndex: prev.spocIndex,
+      channel: prev.channel,
+      direction: prev.direction,
+      destinationRefId: prev.destinationRefId,
+      destinationName: prev.destinationName,
+      sharedAssets: []
+    }));
+
+    setShowAssets(false);
+    setShowInternalNote(false);
+    setShowAdvancedFollowUp(false);
+  };
 
   const submit = async () => {
     if (!form.message.trim()) {
@@ -352,6 +493,7 @@ export default function EngagementForm({ agent }) {
       const assignee = team.find(t => t.uid === form.assignedToUid);
 
       const destinationRefId = selectedDestination?.id || "";
+
       const destinationId =
         selectedDestination?.destinationId ||
         selectedDestination?.id ||
@@ -374,17 +516,32 @@ export default function EngagementForm({ agent }) {
         : null;
 
       const subject = isMeeting
-        ? `${getMeetingModeLabel(form.meetingMode)} meeting with ${agent.agencyName || agent.name || "Travel Agent"
-        }`
-        : `${getChannelLabel(form.channel)} engagement with ${agent.agencyName || agent.name || "Travel Agent"
-        }`;
+        ? `${getMeetingModeLabel(form.meetingMode)} meeting with ${
+            agent.agencyName || agent.name || "Travel Agent"
+          }`
+        : `${getChannelLabel(form.channel)} engagement with ${
+            agent.agencyName || agent.name || "Travel Agent"
+          }`;
 
       const status =
         meetingAtDate || scheduledAtDate ? "scheduled" : "completed";
 
-      await addDoc(collection(db, "engagements"), {
+      const finalIntent = getIntentFromEngagement({
+        channel: form.channel,
+        direction: form.direction,
+        outcomeCode: form.outcomeCode,
+        hasDestination: Boolean(destinationRefId),
+        hasSharedAssets: Boolean(form.sharedAssets?.length),
+        scheduledAt: form.scheduledAt,
+        isMeeting
+      });
+
+      const payload = {
         entityType: "travelAgent",
-        engagementType: "manual_log",
+
+        engagementType: finalIntent.engagementType,
+        activityType: "manual_log",
+        logType: "manual_engagement",
 
         agentId: agent.id,
         agentName: agent.agencyName || agent.name || "",
@@ -411,6 +568,20 @@ export default function EngagementForm({ agent }) {
 
         outcomeCode: form.outcomeCode,
         outcomeLabel: getOutcomeLabel(form.outcomeCode),
+
+        intentCode: finalIntent.intentCode,
+        intentName: finalIntent.intentName,
+        intentSource: "engagement_form",
+        intentReason: finalIntent.reason,
+
+        communicationReady: Boolean(finalIntent.communicationReady),
+        smartSuggestionEnabled: true,
+
+        suggestedNextAction: finalIntent.nextAction,
+        suggestedNextActionLabel: finalIntent.nextActionLabel,
+        suggestedFollowUpDays: finalIntent.followUpDays,
+        waitingOn: finalIntent.waitingOn,
+        communicationStatus: finalIntent.communicationStatus,
 
         meetingMode: isMeeting ? form.meetingMode : null,
         meetingModeLabel: isMeeting
@@ -472,21 +643,20 @@ export default function EngagementForm({ agent }) {
         createdByEmail: getUserEmail(user),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
-      });
+      };
+
+      const ref = await addDoc(collection(db, "engagements"), payload);
+
+      const savedEngagement = {
+        id: ref.id,
+        ...payload
+      };
 
       alert("Engagement saved");
 
-      setForm(prev => ({
-        ...getInitialForm(),
-        spocIndex: prev.spocIndex,
-        channel: prev.channel,
-        direction: prev.direction,
-        destinationRefId: prev.destinationRefId,
-        destinationName: prev.destinationName,
-        sharedAssets: []
-      }));
+      onSaved?.(savedEngagement);
 
-      setShowInternalNote(false);
+      resetAfterSave();
     } catch (error) {
       console.error("Failed to save engagement:", error);
       alert("Failed to save engagement");
@@ -494,6 +664,10 @@ export default function EngagementForm({ agent }) {
       setSaving(false);
     }
   };
+
+  /* =========================
+     UI
+  ========================== */
 
   return (
     <div
@@ -506,18 +680,19 @@ export default function EngagementForm({ agent }) {
       "
     >
       {/* HEADER */}
-      <div className="px-5 py-4 border-b bg-gradient-to-r from-blue-50 to-cyan-50">
+      <div className="px-5 py-4 border-b bg-gradient-to-r from-blue-50 via-cyan-50 to-white">
         <div className="flex items-start gap-3">
           <div className="h-10 w-10 rounded-xl bg-white border border-blue-100 text-blue-700 flex items-center justify-center">
             <MessageSquare size={18} />
           </div>
 
-          <div>
+          <div className="min-w-0">
             <h2 className="text-sm font-semibold text-gray-900">
-              New Engagement
+              Smart Engagement Logger
             </h2>
+
             <p className="text-xs text-gray-500 mt-1">
-              Log activity, follow-up, or tentative meeting details.
+              Log activity and prepare the next communication automatically.
             </p>
           </div>
         </div>
@@ -525,7 +700,9 @@ export default function EngagementForm({ agent }) {
 
       {/* BODY */}
       <div className="p-5 space-y-5 overflow-y-auto pb-28">
-        {/* SPOC */}
+        {/* STEP 1 */}
+        <StepLabel number="1" title="Who did you connect with?" />
+
         <SectionCard
           icon={<UserRound size={16} />}
           title="Contact Person"
@@ -565,10 +742,12 @@ export default function EngagementForm({ agent }) {
           </div>
         </SectionCard>
 
-        {/* ACTIVITY */}
+        {/* STEP 2 */}
+        <StepLabel number="2" title="What activity happened?" />
+
         <SectionCard
           icon={<Clock3 size={16} />}
-          title="Activity Type"
+          title="Activity"
           description="Select channel and direction."
         >
           <Field label="Channel">
@@ -647,9 +826,10 @@ export default function EngagementForm({ agent }) {
                     }
                     className={`
                       rounded-xl border p-3 text-left transition
-                      ${form.meetingMode === mode.key
-                        ? "border-blue-500 bg-blue-50 text-blue-700"
-                        : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                      ${
+                        form.meetingMode === mode.key
+                          ? "border-blue-500 bg-blue-50 text-blue-700"
+                          : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
                       }
                     `}
                   >
@@ -739,7 +919,9 @@ export default function EngagementForm({ agent }) {
           </SectionCard>
         )}
 
-        {/* DESTINATION + SUMMARY */}
+        {/* STEP 3 */}
+        <StepLabel number="3" title="What was discussed?" />
+
         <SectionCard
           icon={<MapPin size={16} />}
           title="Engagement Details"
@@ -784,17 +966,25 @@ export default function EngagementForm({ agent }) {
           </Field>
         </SectionCard>
 
-        {/* SHARED ASSETS */}
-        <SectionCard
+        {/* OPTIONAL ASSETS */}
+        <CollapsibleSection
           icon={<Package size={16} />}
           title="Shared Assets"
-          description="Attach company profile, promotion packages, destination images, or other approved assets."
+          description="Track assets only if they were actually shared."
+          open={showAssets}
+          onToggle={() => setShowAssets(prev => !prev)}
+          badge={
+            form.sharedAssets.length
+              ? `${form.sharedAssets.length} selected`
+              : ""
+          }
         >
           {form.sharedAssets.length === 0 ? (
             <div className="rounded-xl border border-dashed border-gray-200 bg-white p-4 text-center">
               <p className="text-sm font-medium text-gray-700">
                 No assets selected
               </p>
+
               <p className="text-xs text-gray-500 mt-1">
                 Select assets from Document Library to track what was shared.
               </p>
@@ -803,15 +993,16 @@ export default function EngagementForm({ agent }) {
             <div className="space-y-2">
               {form.sharedAssets.map(asset => (
                 <div
-                  key={asset.assetId}
+                  key={getAssetKey(asset)}
                   className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 bg-white px-3 py-2"
                 >
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium text-gray-800">
                       {asset.title}
                     </p>
+
                     <p className="text-xs text-gray-500 truncate">
-                      {asset.categoryName || "Asset"} · v
+                      {asset.categoryName || "Asset"} - v
                       {asset.currentVersion || 1}
                     </p>
                   </div>
@@ -830,14 +1021,7 @@ export default function EngagementForm({ agent }) {
 
                     <button
                       type="button"
-                      onClick={() =>
-                        setForm(prev => ({
-                          ...prev,
-                          sharedAssets: prev.sharedAssets.filter(
-                            item => item.assetId !== asset.assetId
-                          )
-                        }))
-                      }
+                      onClick={() => removeAsset(getAssetKey(asset))}
                       className="text-xs text-red-600 hover:underline"
                     >
                       Remove
@@ -861,32 +1045,22 @@ export default function EngagementForm({ agent }) {
             {form.sharedAssets.length > 0 && (
               <button
                 type="button"
-                onClick={() => {
-                  const links = form.sharedAssets
-                    .filter(asset => asset.url)
-                    .map(asset => `${asset.title}: ${asset.url}`)
-                    .join("\n");
-
-                  setForm(prev => ({
-                    ...prev,
-                    message: prev.message
-                      ? `${prev.message}\n\nShared Assets:\n${links}`
-                      : `Shared Assets:\n${links}`
-                  }));
-                }}
+                onClick={appendAssetLinksToSummary}
                 className="inline-flex items-center gap-2 rounded-lg bg-gray-100 px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-200"
               >
                 Add Links to Summary
               </button>
             )}
           </div>
-        </SectionCard>
+        </CollapsibleSection>
 
-        {/* OUTCOME + FOLLOWUP */}
+        {/* STEP 4 */}
+        <StepLabel number="4" title="What should happen next?" />
+
         <SectionCard
           icon={<CheckCircle2 size={16} />}
-          title="Outcome & Follow-up"
-          description="Mark result and schedule next action if needed."
+          title="Outcome & Smart Suggestion"
+          description="Outcome will decide the smart communication intent."
         >
           <Field label="Outcome">
             <select
@@ -909,6 +1083,14 @@ export default function EngagementForm({ agent }) {
             </select>
           </Field>
 
+          {smartIntent && form.outcomeCode && (
+            <SmartIntentCard
+              smartIntent={smartIntent}
+              scheduledAt={form.scheduledAt}
+              onApplyFollowUp={applySuggestedFollowUp}
+            />
+          )}
+
           <Field label="Schedule Follow-up">
             <input
               type="datetime-local"
@@ -930,7 +1112,7 @@ export default function EngagementForm({ agent }) {
               )}
           </Field>
 
-          {followUpRequired && (
+          {(followUpRequired || showAdvancedFollowUp) && (
             <Field label="Assign Follow-up To">
               <select
                 className="mui-input"
@@ -943,7 +1125,7 @@ export default function EngagementForm({ agent }) {
                 }
               >
                 <option value="">
-                  Assign to self — {getUserName(user)}
+                  Assign to self - {getUserName(user)}
                 </option>
 
                 {team.map(u => (
@@ -957,36 +1139,25 @@ export default function EngagementForm({ agent }) {
         </SectionCard>
 
         {/* INTERNAL NOTE */}
-        <div className="space-y-2">
-          {!showInternalNote ? (
-            <button
-              type="button"
-              onClick={() => setShowInternalNote(true)}
-              className="inline-flex items-center gap-2 text-xs text-blue-600 hover:underline"
-            >
-              <StickyNote size={14} />
-              Add internal note
-            </button>
-          ) : (
-            <SectionCard
-              icon={<StickyNote size={16} />}
-              title="Internal Note"
-              description="Private note visible only to your internal team."
-            >
-              <textarea
-                className="mui-input min-h-[80px]"
-                value={form.customRemark}
-                placeholder="Private note for internal team..."
-                onChange={e =>
-                  setForm({
-                    ...form,
-                    customRemark: e.target.value
-                  })
-                }
-              />
-            </SectionCard>
-          )}
-        </div>
+        <CollapsibleSection
+          icon={<StickyNote size={16} />}
+          title="Internal Note"
+          description="Private note visible only to your internal team."
+          open={showInternalNote}
+          onToggle={() => setShowInternalNote(prev => !prev)}
+        >
+          <textarea
+            className="mui-input min-h-[80px]"
+            value={form.customRemark}
+            placeholder="Private note for internal team..."
+            onChange={e =>
+              setForm({
+                ...form,
+                customRemark: e.target.value
+              })
+            }
+          />
+        </CollapsibleSection>
       </div>
 
       {/* FOOTER */}
@@ -995,33 +1166,45 @@ export default function EngagementForm({ agent }) {
           {footerStatus}
         </div>
 
-        <button
-          type="button"
-          onClick={submit}
-          disabled={saving}
-          className="
-            bg-blue-600 text-white
-            px-6 py-2.5
-            rounded-lg
-            text-sm font-medium
-            hover:bg-blue-700
-            disabled:opacity-60
-            inline-flex items-center gap-2
-            ml-auto
-          "
-        >
-          {saving ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Saving...
-            </>
-          ) : (
-            <>
-              <CheckCircle2 className="w-4 h-4" />
-              Save Engagement
-            </>
+        <div className="flex gap-2 ml-auto">
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="border border-gray-200 text-gray-700 px-4 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-60"
+            >
+              Cancel
+            </button>
           )}
-        </button>
+
+          <button
+            type="button"
+            onClick={submit}
+            disabled={saving}
+            className="
+              bg-blue-600 text-white
+              px-6 py-2.5
+              rounded-lg
+              text-sm font-medium
+              hover:bg-blue-700
+              disabled:opacity-60
+              inline-flex items-center gap-2
+            "
+          >
+            {saving ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              <>
+                <CheckCircle2 className="w-4 h-4" />
+                Save Engagement
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       <AssetPickerModal
@@ -1034,19 +1217,107 @@ export default function EngagementForm({ agent }) {
         onConfirm={assets =>
           setForm(prev => ({
             ...prev,
-            sharedAssets: assets
+            sharedAssets: assets || []
           }))
         }
       />
-
-
-    </div >
+    </div>
   );
 }
 
 /* =========================
-   HELPER COMPONENTS
+   UI COMPONENTS
 ========================= */
+
+function StepLabel({ number, title }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="h-6 w-6 rounded-full bg-blue-600 text-white text-xs font-semibold flex items-center justify-center">
+        {number}
+      </span>
+
+      <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+        {title}
+      </p>
+    </div>
+  );
+}
+
+function SmartIntentCard({
+  smartIntent,
+  scheduledAt,
+  onApplyFollowUp
+}) {
+  return (
+    <div className="rounded-xl border border-blue-100 bg-blue-50 p-3">
+      <div className="flex items-start gap-2">
+        <div className="h-8 w-8 rounded-lg bg-white text-blue-700 border border-blue-100 flex items-center justify-center shrink-0">
+          <Sparkles size={15} />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-semibold text-blue-700">
+            Smart Communication Intent
+          </p>
+
+          <p className="text-sm font-semibold text-gray-900 mt-0.5">
+            {smartIntent.intentName}
+          </p>
+
+          <p className="text-xs text-gray-600 mt-1">
+            {smartIntent.reason}
+          </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+            <MiniInfo
+              label="Next Action"
+              value={smartIntent.nextActionLabel}
+            />
+
+            <MiniInfo
+              label="Status"
+              value={smartIntent.communicationStatus}
+            />
+
+            <MiniInfo
+              label="Waiting On"
+              value={smartIntent.waitingOn}
+            />
+
+            <MiniInfo
+              label="Follow-up"
+              value={`${smartIntent.followUpDays} day(s)`}
+            />
+          </div>
+
+          {!scheduledAt && smartIntent.followUpRecommended && (
+            <button
+              type="button"
+              onClick={onApplyFollowUp}
+              className="mt-3 rounded-lg bg-white border border-blue-200 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50"
+            >
+              Apply suggested follow-up
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MiniInfo({ label, value }) {
+  return (
+    <div className="rounded-lg bg-white border border-blue-100 px-2 py-1.5">
+      <p className="text-[10px] text-gray-500">
+        {label}
+      </p>
+
+      <p className="text-[11px] font-semibold text-gray-800 break-words">
+        {value || "-"}
+      </p>
+    </div>
+  );
+}
 
 function Field({ label, children }) {
   return (
@@ -1087,14 +1358,73 @@ function SectionCard({ icon, title, description, children }) {
   );
 }
 
+function CollapsibleSection({
+  icon,
+  title,
+  description,
+  open,
+  onToggle,
+  badge,
+  children
+}) {
+  return (
+    <section className="rounded-xl border border-gray-200 bg-gray-50/60 overflow-hidden">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full p-4 flex items-start justify-between gap-3 text-left hover:bg-gray-50"
+      >
+        <div className="flex items-start gap-2">
+          <div className="text-gray-500 mt-0.5">
+            {icon}
+          </div>
+
+          <div>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-semibold text-gray-900">
+                {title}
+              </p>
+
+              {badge && (
+                <span className="rounded-full bg-blue-50 border border-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                  {badge}
+                </span>
+              )}
+            </div>
+
+            {description && (
+              <p className="text-xs text-gray-500 mt-0.5">
+                {description}
+              </p>
+            )}
+          </div>
+        </div>
+
+        {open ? (
+          <ChevronUp size={16} className="text-gray-400 mt-1" />
+        ) : (
+          <ChevronDown size={16} className="text-gray-400 mt-1" />
+        )}
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 space-y-3">
+          {children}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ContactStatus({ label, value, valid }) {
   return (
     <div
       className={`
         rounded-lg border px-3 py-2
-        ${valid
-          ? "border-green-200 bg-green-50"
-          : "border-orange-200 bg-orange-50"
+        ${
+          valid
+            ? "border-green-200 bg-green-50"
+            : "border-orange-200 bg-orange-50"
         }
       `}
     >

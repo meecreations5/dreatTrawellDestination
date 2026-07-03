@@ -55,7 +55,6 @@ const ATTENDANCE_COLLECTION = "attendance_sessions";
    COMMON HELPERS
 ========================== */
 
-
 function getGroupedAttentionRows(rows = []) {
   const map = new Map();
 
@@ -234,25 +233,37 @@ function getRangeWindow(range) {
   }
 
   const start = new Date(now);
+  const end = new Date(now);
 
   if (range === "today") {
     start.setHours(0, 0, 0, 0);
+    end.setHours(23, 59, 59, 999);
+  }
+
+  if (range === "yesterday") {
+    start.setDate(start.getDate() - 1);
+    start.setHours(0, 0, 0, 0);
+
+    end.setDate(end.getDate() - 1);
+    end.setHours(23, 59, 59, 999);
   }
 
   if (range === "week") {
     const day = start.getDay() || 7;
     start.setDate(start.getDate() - day + 1);
     start.setHours(0, 0, 0, 0);
+    end.setHours(23, 59, 59, 999);
   }
 
   if (range === "month") {
     start.setDate(1);
     start.setHours(0, 0, 0, 0);
+    end.setHours(23, 59, 59, 999);
   }
 
   return {
     start,
-    end: now
+    end
   };
 }
 
@@ -377,6 +388,7 @@ function getScoreClass(score) {
 function getRangeLabel(range) {
   return {
     today: "Today",
+    yesterday: "Yesterday",
     week: "This Week",
     month: "This Month",
     all: "All Time"
@@ -406,6 +418,8 @@ function getActiveLeads(leads = []) {
 /* =========================
    LEAD HELPERS
 ========================== */
+
+
 
 function getLeadDate(lead) {
   return (
@@ -1141,10 +1155,18 @@ export default function AdminDashboardGraph() {
   const [dataLoading, setDataLoading] = useState(true);
   const [dashboardError, setDashboardError] = useState("");
   const [selectedInsight, setSelectedInsight] = useState(null);
+  const [selectedMetricPanel, setSelectedMetricPanel] = useState(null);
 
   const openInsight = key => {
+    setSelectedMetricPanel(null);
     setSelectedInsight(key);
   };
+
+  const openMetricPanel = panel => {
+    setSelectedInsight(null);
+    setSelectedMetricPanel(panel);
+  };
+
 
   /* =========================
      AUTH REDIRECTION
@@ -1375,17 +1397,18 @@ export default function AdminDashboardGraph() {
     });
   }, [activeDashboardLeads, rangeWindow]);
 
-  const quotationPeriodLeads = useMemo(() => {
-    return getActiveLeads(activeDashboardLeads).filter(lead => {
-      return hasQuotationSent(lead) && isInSelectedRangeByDate(getQuotationDate(lead), rangeWindow);
-    });
-  }, [activeDashboardLeads, rangeWindow]);
 
   const paymentReceivedPeriodLeads = useMemo(() => {
     return getActiveLeads(activeDashboardLeads).filter(lead => {
       return getLeadReceivedAmount(lead) > 0 && isInSelectedRangeByDate(getPaymentDate(lead), rangeWindow);
     });
   }, [activeDashboardLeads, rangeWindow]);
+
+  const quoteValuePeriodLeads = useMemo(() => {
+    return getActiveLeads(periodLeads).filter(lead => {
+      return hasQuotationSent(lead) && getLeadQuotationAmount(lead) > 0;
+    });
+  }, [periodLeads]);
 
   /* =========================
      LEAD TOTALS
@@ -1399,7 +1422,7 @@ export default function AdminDashboardGraph() {
 
     const wonLeads = convertedPeriodLeads.length;
     const lostLeads = lostPeriodLeads.length;
-    const quoteSentLeads = quotationPeriodLeads.length;
+    const quoteSentLeads = quoteValuePeriodLeads.length;
 
     const uniqueAgents = new Set(
       leadRows
@@ -1446,7 +1469,7 @@ export default function AdminDashboardGraph() {
     userMap,
     convertedPeriodLeads,
     lostPeriodLeads,
-    quotationPeriodLeads
+    quoteValuePeriodLeads
   ]);
 
   /* =========================
@@ -1455,8 +1478,9 @@ export default function AdminDashboardGraph() {
 
   const financeTotals = useMemo(() => {
     const financeLeads = getActiveLeads(periodLeads);
+    const quotationValueLeads = getActiveLeads(quoteValuePeriodLeads);
 
-    const quotationValue = financeLeads.reduce((sum, lead) => {
+    const quotationValue = quotationValueLeads.reduce((sum, lead) => {
       return sum + getLeadQuotationAmount(lead);
     }, 0);
 
@@ -1465,6 +1489,10 @@ export default function AdminDashboardGraph() {
     }, 0);
 
     const grossProfit = financeLeads.reduce((sum, lead) => {
+      return sum + getLeadGrossProfit(lead);
+    }, 0);
+
+    const quotationGrossProfit = quotationValueLeads.reduce((sum, lead) => {
       return sum + getLeadGrossProfit(lead);
     }, 0);
 
@@ -1508,9 +1536,11 @@ export default function AdminDashboardGraph() {
       return sum + toAmount(lead?.vendorPaymentBalance);
     }, 0);
 
-    const quotationSent = financeLeads.filter(lead => {
-      return normalize(lead?.latestQuotationStatus) === "sent";
-    }).length;
+    // const quotationSent = financeLeads.filter(lead => {
+    //   return normalize(lead?.latestQuotationStatus) === "sent";
+    // }).length;
+
+    const quotationSent = quotationValueLeads.length;
 
     const customerFullyPaid = financeLeads.filter(lead => {
       return normalize(lead?.customerPaymentStatus) === "fully_paid";
@@ -1521,7 +1551,7 @@ export default function AdminDashboardGraph() {
     }).length;
 
     const marginPercent = quotationValue
-      ? Number(((grossProfit / quotationValue) * 100).toFixed(2))
+      ? Number(((quotationGrossProfit / quotationValue) * 100).toFixed(2))
       : 0;
 
     const lockedGrossProfit = convertedPeriodLeads.reduce((sum, lead) => {
@@ -1568,6 +1598,7 @@ export default function AdminDashboardGraph() {
       lockedQuotationValue,
       lockedVendorCost,
       lockedGrossProfitLeads,
+      quotationGrossProfit,
       pipelineGrossProfit,
       cashInHand: receivedAmount - vendorPaid,
       byDestinationRevenue: sumBy(
@@ -1610,7 +1641,7 @@ export default function AdminDashboardGraph() {
         lead => lead.vendorPaymentStatus || "Not Updated"
       )
     };
-  }, [periodLeads, userMap, convertedPeriodLeads]);
+  }, [periodLeads, userMap, convertedPeriodLeads, quoteValuePeriodLeads]);
 
   /* =========================
      VENDOR TOTALS
@@ -2153,12 +2184,16 @@ export default function AdminDashboardGraph() {
     activeTab
   ]);
 
+
+
   const insightPanels = useMemo(() => {
     const activeLeadRows = periodLeads.filter(isActiveLead);
 
-    const quotationRows = quotationPeriodLeads.filter(
-      lead => getLeadQuotationAmount(lead) > 0
-    );
+    // const quotationRows = quotationPeriodLeads.filter(
+    //   lead => getLeadQuotationAmount(lead) > 0
+    // );
+
+    const quotationRows = quoteValuePeriodLeads;
 
     const grossProfitRows = convertedPeriodLeads.filter(
       lead => getLeadGrossProfit(lead) !== 0
@@ -2314,16 +2349,262 @@ export default function AdminDashboardGraph() {
     };
   }, [
     periodLeads,
-    quotationPeriodLeads,
+    quoteValuePeriodLeads,
     convertedPeriodLeads,
     paymentReceivedPeriodLeads,
     attentionSummary.rows,
+    financeTotals,
     range
   ]);
 
-  const selectedInsightPanel = selectedInsight
-    ? insightPanels[selectedInsight]
-    : null;
+  const openLeadMetricDetail = (lead, metricKey) => {
+    if (!lead) return;
+
+    const metricMap = {
+      vendorRequests: {
+        title: `${lead.leadCode || "Lead"} - Vendor Requests`,
+        description: "Vendor request count for this lead.",
+        rows: [lead],
+        type: "lead",
+        amountLabel: "Vendor Requests",
+        amountGetter: item => Number(item.vendorRequestCount || 0),
+        amountFormatter: value => Number(value || 0)
+      },
+
+      vendorQuotes: {
+        title: `${lead.leadCode || "Lead"} - Vendor Quotes`,
+        description: "Vendor quote count for this lead.",
+        rows: [lead],
+        type: "lead",
+        amountLabel: "Vendor Quotes",
+        amountGetter: item => Number(item.vendorQuoteCount || 0),
+        amountFormatter: value => Number(value || 0)
+      },
+
+      vendorCost: {
+        title: `${lead.leadCode || "Lead"} - Vendor Cost`,
+        description: "Vendor cost for this lead.",
+        rows: [lead],
+        type: "lead",
+        amountLabel: "Vendor Cost",
+        amountGetter: getLeadVendorCost
+      },
+
+      vendorPaid: {
+        title: `${lead.leadCode || "Lead"} - Vendor Paid`,
+        description: "Vendor paid amount for this lead.",
+        rows: [lead],
+        type: "lead",
+        amountLabel: "Vendor Paid",
+        amountGetter: getLeadVendorPaidAmount
+      },
+
+      vendorBalance: {
+        title: `${lead.leadCode || "Lead"} - Vendor Balance`,
+        description: "Pending vendor payment balance for this lead.",
+        rows: [lead],
+        type: "lead",
+        amountLabel: "Vendor Balance",
+        amountGetter: getLeadVendorPaymentBalance
+      }
+    };
+
+    const panel = metricMap[metricKey];
+
+    if (!panel) return;
+
+    openMetricPanel(panel);
+  };
+
+  const openTeamMetricDetail = (teamRow, metricKey) => {
+    const leadRows = getActiveLeads(periodLeads);
+    const engagementRows = periodEngagements;
+    const attendanceRows = periodAttendance;
+
+    const createdLeadRows = leadRows.filter(lead => {
+      return isSameDashboardMember(teamRow, getLeadCreator(lead, userMap));
+    });
+
+    const ownedLeadRows = leadRows.filter(lead => {
+      return isSameDashboardMember(teamRow, getLeadOwner(lead, userMap));
+    });
+
+    const ownedEngagementRows = engagementRows.filter(item => {
+      return isSameDashboardMember(teamRow, getEngagementOwner(item, userMap));
+    });
+
+    const ownedAttendanceRows = attendanceRows.filter(record => {
+      return isSameDashboardMember(teamRow, getAttendanceUser(record, userMap));
+    });
+
+    const metricMap = {
+      newLeads: {
+        title: `${teamRow.name} - New Leads`,
+        description: "Leads created by this team member.",
+        rows: createdLeadRows,
+        type: "lead",
+        amountLabel: "Quotation",
+        amountGetter: getLeadQuotationAmount
+      },
+
+      assignedLeads: {
+        title: `${teamRow.name} - Assigned Leads`,
+        description: "Leads assigned to this team member.",
+        rows: ownedLeadRows.filter(hasLeadAssignee),
+        type: "lead",
+        amountLabel: "Quotation",
+        amountGetter: getLeadQuotationAmount
+      },
+
+      activeLeads: {
+        title: `${teamRow.name} - Active Leads`,
+        description: "Active leads owned by this team member.",
+        rows: ownedLeadRows.filter(isActiveLead),
+        type: "lead",
+        amountLabel: "Quotation",
+        amountGetter: getLeadQuotationAmount
+      },
+
+      quoteSentLeads: {
+        title: `${teamRow.name} - Quote Sent Leads`,
+        description: "Leads where quotation has been sent.",
+        rows: ownedLeadRows.filter(hasQuotationSent),
+        type: "lead",
+        amountLabel: "Quotation",
+        amountGetter: getLeadQuotationAmount
+      },
+
+      wonLeads: {
+        title: `${teamRow.name} - Won Leads`,
+        description: "Converted / deal won leads.",
+        rows: ownedLeadRows.filter(isWonLead),
+        type: "lead",
+        amountLabel: "Gross Profit",
+        amountGetter: getLeadGrossProfit,
+        dateGetter: getLeadWonDate
+      },
+
+      lostLeads: {
+        title: `${teamRow.name} - Lost Leads`,
+        description: "Lost / cancelled leads.",
+        rows: ownedLeadRows.filter(isLostLead),
+        type: "lead",
+        amountLabel: "Quotation",
+        amountGetter: getLeadQuotationAmount,
+        dateGetter: getLeadLostDate
+      },
+
+      quotationValue: {
+        title: `${teamRow.name} - Quotation Value`,
+        description: "Quotation value from leads owned by this team member.",
+        rows: ownedLeadRows.filter(lead => getLeadQuotationAmount(lead) > 0),
+        type: "lead",
+        amountLabel: "Quotation",
+        amountGetter: getLeadQuotationAmount
+      },
+
+      receivedAmount: {
+        title: `${teamRow.name} - Customer Received`,
+        description: "Customer / travel agent received amount.",
+        rows: ownedLeadRows.filter(lead => getLeadReceivedAmount(lead) > 0),
+        type: "lead",
+        amountLabel: "Received",
+        amountGetter: getLeadReceivedAmount
+      },
+
+      vendorPaid: {
+        title: `${teamRow.name} - Vendor Paid`,
+        description: "Vendor payment already paid.",
+        rows: ownedLeadRows.filter(lead => getLeadVendorPaidAmount(lead) > 0),
+        type: "lead",
+        amountLabel: "Vendor Paid",
+        amountGetter: getLeadVendorPaidAmount
+      },
+
+      grossProfit: {
+        title: `${teamRow.name} - Gross Profit`,
+        description: "Gross profit from owned leads.",
+        rows: ownedLeadRows.filter(lead => getLeadGrossProfit(lead) !== 0),
+        type: "lead",
+        amountLabel: "Gross Profit",
+        amountGetter: getLeadGrossProfit,
+        showGrossProfitBreakdown: true
+      },
+
+      engagements: {
+        title: `${teamRow.name} - Engagements`,
+        description: "All engagements done by this team member.",
+        rows: ownedEngagementRows,
+        type: "engagement"
+      },
+
+      calls: {
+        title: `${teamRow.name} - Calls`,
+        description: "Call engagements.",
+        rows: ownedEngagementRows.filter(item => normalize(item.channel) === "call"),
+        type: "engagement"
+      },
+
+      whatsapp: {
+        title: `${teamRow.name} - WhatsApp`,
+        description: "WhatsApp engagements.",
+        rows: ownedEngagementRows.filter(item => normalize(item.channel) === "whatsapp"),
+        type: "engagement"
+      },
+
+      emails: {
+        title: `${teamRow.name} - Emails`,
+        description: "Email engagements.",
+        rows: ownedEngagementRows.filter(item => normalize(item.channel) === "email"),
+        type: "engagement"
+      },
+
+      meetings: {
+        title: `${teamRow.name} - Meetings`,
+        description: "Meeting engagements.",
+        rows: ownedEngagementRows.filter(item => normalize(item.channel) === "meeting"),
+        type: "engagement"
+      },
+
+      completedEngagements: {
+        title: `${teamRow.name} - Completed Engagements`,
+        description: "Completed engagement activities.",
+        rows: ownedEngagementRows.filter(item => normalize(item.status) === "completed"),
+        type: "engagement"
+      },
+
+      attendanceDays: {
+        title: `${teamRow.name} - Attendance Days`,
+        description: "Attendance records for this team member.",
+        rows: ownedAttendanceRows,
+        type: "attendance"
+      },
+
+      checkIns: {
+        title: `${teamRow.name} - Check-ins`,
+        description: "Attendance records with check-in.",
+        rows: ownedAttendanceRows.filter(record => getFirstCheckIn(record)),
+        type: "attendance"
+      },
+
+      totalMinutes: {
+        title: `${teamRow.name} - Working Hours`,
+        description: "Attendance records with working duration.",
+        rows: ownedAttendanceRows.filter(record => getAttendanceMinutes(record) > 0),
+        type: "attendance"
+      }
+    };
+
+    const panel = metricMap[metricKey];
+
+    if (!panel) return;
+
+    openMetricPanel(panel);
+  };
+
+  const selectedInsightPanel = selectedMetricPanel || (
+    selectedInsight ? insightPanels[selectedInsight] : null
+  );
 
   /* =========================
      RENDER GUARDS
@@ -2445,6 +2726,7 @@ export default function AdminDashboardGraph() {
           <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl p-1  w-full md:w-auto">
             {[
               { key: "today", label: "Today" },
+              { key: "yesterday", label: "Yesterday" },
               { key: "week", label: "This Week" },
               { key: "month", label: "This Month" },
               { key: "all", label: "All" }
@@ -2783,7 +3065,7 @@ export default function AdminDashboardGraph() {
             onViewLead={leadId => router.push(`/admin/leads/${leadId}`)}
           />
 
-          <ManagementOverviewTable rows={teamRows} />
+          <ManagementOverviewTable rows={teamRows} onOpenMetric={openTeamMetricDetail} />
         </section>
       )}
 
@@ -2853,7 +3135,8 @@ export default function AdminDashboardGraph() {
             />
           </section>
 
-          <ManagementFinanceTable rows={teamRows} />
+          <ManagementFinanceTable rows={teamRows}
+            onOpenMetric={openTeamMetricDetail} />
         </section>
       )}
 
@@ -2905,7 +3188,7 @@ export default function AdminDashboardGraph() {
             <MiniBarList icon={Activity} tone="green" title="Leads by Source" rows={leadTotals.bySource} />
           </section>
 
-          <ManagementLeadsTable rows={teamRows} />
+          <ManagementLeadsTable rows={teamRows} onOpenMetric={openTeamMetricDetail} />
         </section>
       )}
 
@@ -2942,7 +3225,7 @@ export default function AdminDashboardGraph() {
             <MiniBarList icon={Wallet} tone="green" title="Vendor Payment Status" rows={financeTotals.byVendorPaymentStatus} />
           </section>
 
-          <ManagementVendorTable rows={periodLeads} />
+          <ManagementVendorTable rows={periodLeads} onOpenLeadMetric={openLeadMetricDetail} />
         </section>
       )}
 
@@ -2997,9 +3280,30 @@ export default function AdminDashboardGraph() {
             icon={Activity}
             tone="blue"
             title="Engagement by Channel"
-            description="Distribution of engagement activity by channel."
+            description="Distribution of calls, WhatsApp, emails and meetings for the selected period."
+            rightContent={
+              <span className="rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
+                {periodEngagements.length} Engagements
+              </span>
+            }
           >
-            <EngagementByChannelChart engagements={periodEngagements} />
+            <div className="min-h-[280px]">
+              {periodEngagements.length ? (
+                <EngagementByChannelChart engagements={periodEngagements} />
+              ) : (
+                <div className="flex min-h-[280px] items-center justify-center rounded-2xl border border-dashed border-gray-200 bg-gray-50">
+                  <div className="text-center">
+                    <Activity className="mx-auto h-8 w-8 text-gray-300" />
+                    <p className="mt-3 text-sm font-medium text-gray-700">
+                      No engagement activity
+                    </p>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Calls, WhatsApp, emails and meetings will appear here.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
           </ChartShell>
 
           <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -3007,7 +3311,7 @@ export default function AdminDashboardGraph() {
             <MiniBarList icon={Target} tone="blue" title="Engagement by Destination" rows={engagementTotals.byDestination} />
           </section>
 
-          <ManagementEngagementTable rows={teamRows} />
+          <ManagementEngagementTable rows={teamRows} onOpenMetric={openTeamMetricDetail} />
         </section>
       )}
 
@@ -3044,7 +3348,7 @@ export default function AdminDashboardGraph() {
             />
           </section>
 
-          <ManagementAttendanceTable rows={teamRows} />
+          <ManagementAttendanceTable rows={teamRows} onOpenMetric={openTeamMetricDetail} />
         </section>
       )}
 
@@ -3068,13 +3372,16 @@ export default function AdminDashboardGraph() {
             <MiniBarList icon={UserCheck} tone="green" title="Users by Role" rows={userTotals.byRole} />
           </section>
 
-          <ManagementTeamTable rows={teamRows} />
+          <ManagementTeamTable rows={teamRows} onOpenMetric={openTeamMetricDetail} />
         </section>
       )}
 
       <DashboardDetailDrawer
         panel={selectedInsightPanel}
-        onClose={() => setSelectedInsight(null)}
+        onClose={() => {
+          setSelectedInsight(null);
+          setSelectedMetricPanel(null);
+        }}
         onViewLead={leadId => router.push(`/admin/leads/${leadId}`)}
       />
     </main>
@@ -3613,27 +3920,37 @@ function ChartShell({
   const theme = KPI_TONES[tone] || KPI_TONES.slate;
 
   return (
-    <div
+    <section
       className={`
-        overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm
-        transition hover:shadow-md
+        group overflow-hidden rounded-2xl border border-gray-200 bg-white
+        shadow-sm transition-all duration-200
+        hover:border-gray-300 hover:shadow-md
         ${className}
       `}
     >
-      <div className="border-b border-gray-100 bg-gradient-to-r from-gray-50 via-white to-gray-50 px-4 py-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <div className={`rounded-xl p-2 shadow-sm ${theme.icon}`}>
-              <Icon className="h-4 w-4" />
-            </div>
+      <div className="border-b border-gray-100 bg-gradient-to-r from-gray-50 via-white to-gray-50 px-4 py-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex min-w-0 items-start gap-3">
+            {Icon ? (
+              <div
+                className={`
+                  flex h-10 w-10 shrink-0 items-center justify-center
+                  rounded-2xl shadow-sm ring-1 ring-black/5
+                  transition-transform duration-200 group-hover:scale-105
+                  ${theme.icon}
+                `}
+              >
+                <Icon className="h-4.5 w-4.5" />
+              </div>
+            ) : null}
 
-            <div>
-              <h2 className="text-sm font-semibold text-gray-900">
+            <div className="min-w-0">
+              <h2 className="truncate text-sm font-semibold text-gray-950">
                 {title}
               </h2>
 
               {description ? (
-                <p className="mt-0.5 text-xs text-gray-500">
+                <p className="mt-1 max-w-2xl text-xs leading-5 text-gray-500">
                   {description}
                 </p>
               ) : null}
@@ -3641,17 +3958,22 @@ function ChartShell({
           </div>
 
           {rightContent ? (
-            <div className="shrink-0">
+            <div className="flex shrink-0 items-center justify-end">
               {rightContent}
             </div>
           ) : null}
         </div>
       </div>
 
-      <div className={noPadding ? "" : "p-4"}>
+      <div
+        className={`
+          bg-white
+          ${noPadding ? "" : "p-4 sm:p-5"}
+        `}
+      >
         {children}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -3879,7 +4201,7 @@ function AttentionRequiredPanel({ rows, compact = false, onViewLead }) {
    TABLES
 ========================== */
 
-function ManagementOverviewTable({ rows }) {
+function ManagementOverviewTable({ rows, onOpenMetric }) {
   return (
     <DashboardTable
       icon={Users}
@@ -3907,13 +4229,61 @@ function ManagementOverviewTable({ rows }) {
               {row.department || row.email || "—"}
             </div>
           </td>
-          <td className="px-4 py-3 text-right">{row.newLeads}</td>
-          <td className="px-4 py-3 text-right text-green-700 font-medium">{row.wonLeads}</td>
-          <td className="px-4 py-3 text-right">{formatCurrency(row.quotationValue)}</td>
-          <td className="px-4 py-3 text-right font-medium">{formatCurrency(row.grossProfit)}</td>
-          <td className="px-4 py-3 text-right">{row.engagements}</td>
-          <td className="px-4 py-3 text-right font-medium">{formatDuration(row.totalMinutes)}</td>
-          <td className="px-4 py-3 text-right text-gray-600">{formatDateTime(row.lastActivityAt)}</td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.newLeads}
+              onClick={() => onOpenMetric?.(row, "newLeads")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.wonLeads}
+              tone="green"
+              onClick={() => onOpenMetric?.(row, "wonLeads")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.quotationValue}
+              display={formatCurrency(row.quotationValue)}
+              tone="purple"
+              onClick={() => onOpenMetric?.(row, "quotationValue")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.grossProfit}
+              display={formatCurrency(row.grossProfit)}
+              tone="emerald"
+              onClick={() => onOpenMetric?.(row, "grossProfit")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.engagements}
+              tone="blue"
+              onClick={() => onOpenMetric?.(row, "engagements")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.totalMinutes}
+              display={formatDuration(row.totalMinutes)}
+              tone="purple"
+              onClick={() => onOpenMetric?.(row, "totalMinutes")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right text-gray-600">
+            {formatDateTime(row.lastActivityAt)}
+          </td>
+
           <td className="px-4 py-3 text-right">
             <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs border ${getScoreClass(row.score)}`}>
               {getScoreLabel(row.score)}
@@ -3925,7 +4295,7 @@ function ManagementOverviewTable({ rows }) {
   );
 }
 
-function ManagementFinanceTable({ rows }) {
+function ManagementFinanceTable({ rows, onOpenMetric }) {
   return (
     <DashboardTable
       icon={CircleDollarSign}
@@ -3949,19 +4319,61 @@ function ManagementFinanceTable({ rows }) {
             <div className="font-medium text-gray-900">{row.name}</div>
             <div className="text-xs text-gray-500">{row.email || "—"}</div>
           </td>
-          <td className="px-4 py-3 text-right">{formatCurrency(row.quotationValue)}</td>
-          <td className="px-4 py-3 text-right text-green-700 font-medium">{formatCurrency(row.receivedAmount)}</td>
-          <td className="px-4 py-3 text-right">{formatCurrency(row.vendorPaid)}</td>
-          <td className="px-4 py-3 text-right font-semibold">{formatCurrency(row.grossProfit)}</td>
-          <td className="px-4 py-3 text-right">{row.wonLeads}</td>
-          <td className="px-4 py-3 text-right font-semibold">{row.score}</td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.quotationValue}
+              display={formatCurrency(row.quotationValue)}
+              tone="purple"
+              onClick={() => onOpenMetric?.(row, "quotationValue")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.receivedAmount}
+              display={formatCurrency(row.receivedAmount)}
+              tone="green"
+              onClick={() => onOpenMetric?.(row, "receivedAmount")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.vendorPaid}
+              display={formatCurrency(row.vendorPaid)}
+              tone="blue"
+              onClick={() => onOpenMetric?.(row, "vendorPaid")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.grossProfit}
+              display={formatCurrency(row.grossProfit)}
+              tone="emerald"
+              onClick={() => onOpenMetric?.(row, "grossProfit")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.wonLeads}
+              tone="green"
+              onClick={() => onOpenMetric?.(row, "wonLeads")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right font-semibold">
+            {row.score}
+          </td>
         </tr>
       ))}
     </DashboardTable>
   );
 }
 
-function ManagementVendorTable({ rows }) {
+function ManagementVendorTable({ rows, onOpenLeadMetric }) {
   const activeRows = getActiveLeads(rows);
 
   return (
@@ -3986,18 +4398,71 @@ function ManagementVendorTable({ rows }) {
       {activeRows.map(row => (
         <tr key={row.id} className="hover:bg-gray-50">
           <td className="px-4 py-3 text-left">
-            <div className="font-medium text-gray-900">{row.leadCode || row.id}</div>
-            <div className="text-xs text-gray-500">{row.agentName || row.agencyName || "—"}</div>
+            <div className="font-medium text-gray-900">
+              {row.leadCode || row.id}
+            </div>
+            <div className="text-xs text-gray-500">
+              {row.agentName || row.agencyName || "—"}
+            </div>
           </td>
-          <td className="px-4 py-3 text-right text-gray-600">{row.destinationName || "—"}</td>
-          <td className="px-4 py-3 text-right text-gray-600">{row.latestVendorName || row.latestSelectedVendorName || "—"}</td>
-          <td className="px-4 py-3 text-right">{Number(row.vendorRequestCount || 0)}</td>
-          <td className="px-4 py-3 text-right">{Number(row.vendorQuoteCount || 0)}</td>
-          <td className="px-4 py-3 text-right">{formatCurrency(getLeadVendorCost(row))}</td>
-          <td className="px-4 py-3 text-right">{formatCurrency(getLeadVendorPaidAmount(row))}</td>
-          <td className="px-4 py-3 text-right font-medium">{formatCurrency(row.vendorPaymentBalance)}</td>
+
           <td className="px-4 py-3 text-right text-gray-600">
-            {readableLabel(row.latestVendorQuoteStatus || row.latestVendorRequestStatus || "Pending")}
+            {row.destinationName || "—"}
+          </td>
+
+          <td className="px-4 py-3 text-right text-gray-600">
+            {row.latestVendorName || row.latestSelectedVendorName || "—"}
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={Number(row.vendorRequestCount || 0)}
+              tone="blue"
+              onClick={() => onOpenLeadMetric?.(row, "vendorRequests")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={Number(row.vendorQuoteCount || 0)}
+              tone="green"
+              onClick={() => onOpenLeadMetric?.(row, "vendorQuotes")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={getLeadVendorCost(row)}
+              display={formatCurrency(getLeadVendorCost(row))}
+              tone="purple"
+              onClick={() => onOpenLeadMetric?.(row, "vendorCost")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={getLeadVendorPaidAmount(row)}
+              display={formatCurrency(getLeadVendorPaidAmount(row))}
+              tone="green"
+              onClick={() => onOpenLeadMetric?.(row, "vendorPaid")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={getLeadVendorPaymentBalance(row)}
+              display={formatCurrency(getLeadVendorPaymentBalance(row))}
+              tone="amber"
+              onClick={() => onOpenLeadMetric?.(row, "vendorBalance")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right text-gray-600">
+            {readableLabel(
+              row.latestVendorQuoteStatus ||
+              row.latestVendorRequestStatus ||
+              "Pending"
+            )}
           </td>
         </tr>
       ))}
@@ -4005,7 +4470,7 @@ function ManagementVendorTable({ rows }) {
   );
 }
 
-function ManagementLeadsTable({ rows }) {
+function ManagementLeadsTable({ rows, onOpenMetric }) {
   return (
     <DashboardTable
       icon={LineChart}
@@ -4029,19 +4494,58 @@ function ManagementLeadsTable({ rows }) {
             <div className="font-medium text-gray-900">{row.name}</div>
             <div className="text-xs text-gray-500">{row.email || "—"}</div>
           </td>
-          <td className="px-4 py-3 text-right">{row.newLeads}</td>
-          <td className="px-4 py-3 text-right">{row.assignedLeads}</td>
-          <td className="px-4 py-3 text-right">{row.activeLeads}</td>
-          <td className="px-4 py-3 text-right">{row.quoteSentLeads}</td>
-          <td className="px-4 py-3 text-right text-green-700 font-medium">{row.wonLeads}</td>
-          <td className="px-4 py-3 text-right">{row.lostLeads}</td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.newLeads}
+              onClick={() => onOpenMetric?.(row, "newLeads")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.assignedLeads}
+              onClick={() => onOpenMetric?.(row, "assignedLeads")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.activeLeads}
+              onClick={() => onOpenMetric?.(row, "activeLeads")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.quoteSentLeads}
+              tone="purple"
+              onClick={() => onOpenMetric?.(row, "quoteSentLeads")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.wonLeads}
+              tone="green"
+              onClick={() => onOpenMetric?.(row, "wonLeads")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.lostLeads}
+              tone="red"
+              onClick={() => onOpenMetric?.(row, "lostLeads")}
+            />
+          </td>
         </tr>
       ))}
     </DashboardTable>
   );
 }
 
-function ManagementEngagementTable({ rows }) {
+function ManagementEngagementTable({ rows, onOpenMetric }) {
   return (
     <DashboardTable
       icon={Activity}
@@ -4066,13 +4570,58 @@ function ManagementEngagementTable({ rows }) {
             <div className="font-medium text-gray-900">{row.name}</div>
             <div className="text-xs text-gray-500">{row.email || "—"}</div>
           </td>
-          <td className="px-4 py-3 text-right">{row.engagements}</td>
-          <td className="px-4 py-3 text-right">{row.calls}</td>
-          <td className="px-4 py-3 text-right">{row.whatsapp}</td>
-          <td className="px-4 py-3 text-right">{row.emails}</td>
-          <td className="px-4 py-3 text-right">{row.meetings}</td>
-          <td className="px-4 py-3 text-right text-green-700 font-medium">{row.completedEngagements}</td>
-          <td className="px-4 py-3 text-right text-gray-600">{formatDateTime(row.lastActivityAt)}</td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.engagements}
+              tone="blue"
+              onClick={() => onOpenMetric?.(row, "engagements")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.calls}
+              tone="green"
+              onClick={() => onOpenMetric?.(row, "calls")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.whatsapp}
+              tone="emerald"
+              onClick={() => onOpenMetric?.(row, "whatsapp")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.emails}
+              tone="purple"
+              onClick={() => onOpenMetric?.(row, "emails")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.meetings}
+              tone="amber"
+              onClick={() => onOpenMetric?.(row, "meetings")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <ClickableTableMetric
+              value={row.completedEngagements}
+              tone="green"
+              onClick={() => onOpenMetric?.(row, "completedEngagements")}
+            />
+          </td>
+
+          <td className="px-4 py-3 text-right text-gray-600">
+            {formatDateTime(row.lastActivityAt)}
+          </td>
         </tr>
       ))}
     </DashboardTable>
@@ -4237,13 +4786,98 @@ function DashboardTable({
   );
 }
 
+function DrawerSummaryCard({ label, value, tone = "slate" }) {
+  const toneMap = {
+    emerald: "bg-emerald-50 text-emerald-800",
+    green: "bg-green-50 text-green-800",
+    amber: "bg-amber-50 text-amber-800",
+    red: "bg-red-50 text-red-800",
+    slate: "bg-gray-50 text-gray-900"
+  };
+
+  return (
+    <div className={`rounded-2xl p-3 ${toneMap[tone] || toneMap.slate}`}>
+      <p className="text-xs font-medium opacity-80">
+        {label}
+      </p>
+      <p className="mt-1 text-xl font-semibold">
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function isSameDashboardMember(member = {}, person = {}) {
+  const memberUid = normalize(member.uid);
+  const personUid = normalize(person.uid);
+
+  if (memberUid && personUid && memberUid === personUid) return true;
+
+  const memberEmail = normalize(member.email);
+  const personEmail = normalize(person.email);
+
+  if (memberEmail && personEmail && memberEmail === personEmail) return true;
+
+  const memberName = normalize(member.name);
+  const personName = normalize(person.name);
+
+  if (memberName && personName && memberName === personName) return true;
+
+  return false;
+}
+
+function ClickableTableMetric({
+  value,
+  display,
+  onClick,
+  tone = "blue",
+  disabled = false
+}) {
+  const text = display ?? value ?? 0;
+  const isDisabled = disabled || Number(value || 0) === 0;
+
+  if (isDisabled) {
+    return (
+      <span className="font-medium text-gray-400">
+        {text}
+      </span>
+    );
+  }
+
+  const toneMap = {
+    blue: "text-blue-700 hover:bg-blue-50",
+    green: "text-green-700 hover:bg-green-50",
+    red: "text-red-700 hover:bg-red-50",
+    amber: "text-amber-700 hover:bg-amber-50",
+    purple: "text-purple-700 hover:bg-purple-50",
+    emerald: "text-emerald-700 hover:bg-emerald-50",
+    slate: "text-gray-700 hover:bg-gray-50"
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`
+        inline-flex min-w-8 justify-end rounded-lg px-2 py-1 text-sm font-semibold transition
+        ${toneMap[tone] || toneMap.blue}
+      `}
+    >
+      {text}
+    </button>
+  );
+}
+
 function DashboardDetailDrawer({ panel, onClose, onViewLead }) {
   if (!panel) return null;
 
   const rows = Array.isArray(panel.rows) ? panel.rows : [];
+
   const totalAmount =
     panel.type === "lead" && panel.amountGetter
-      ? rows.reduce((sum, lead) => sum + Number(panel.amountGetter(lead) || 0), 0)
+      ? rows.reduce((sum, lead) => {
+        return sum + Number(panel.amountGetter(lead) || 0);
+      }, 0)
       : 0;
 
   return (
@@ -4278,72 +4912,33 @@ function DashboardDetailDrawer({ panel, onClose, onViewLead }) {
               </button>
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              <div className="rounded-2xl bg-gray-50 p-3">
-                <p className="text-xs font-medium text-gray-500">
-                  Total Records
-                </p>
-                <p className="mt-1 text-xl font-semibold text-gray-900">
-                  {rows.length}
-                </p>
-              </div>
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <DrawerSummaryCard
+                label="Total Records"
+                value={rows.length}
+              />
 
               {panel.summaryCards?.length ? (
-                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  {panel.summaryCards.map(card => {
-                    const toneMap = {
-                      emerald: "bg-emerald-50 text-emerald-800",
-                      green: "bg-green-50 text-green-800",
-                      amber: "bg-amber-50 text-amber-800",
-                      slate: "bg-gray-50 text-gray-900"
-                    };
-
-                    return (
-                      <div
-                        key={card.label}
-                        className={`rounded-2xl p-3 ${toneMap[card.tone] || toneMap.slate}`}
-                      >
-                        <p className="text-xs font-medium opacity-80">
-                          {card.label}
-                        </p>
-                        <p className="mt-1 text-lg font-semibold">
-                          {card.value}
-                        </p>
-                      </div>
-                    );
-                  })}
-                </div>
+                panel.summaryCards.map(card => (
+                  <DrawerSummaryCard
+                    key={card.label}
+                    label={card.label}
+                    value={card.value}
+                    tone={card.tone}
+                  />
+                ))
+              ) : panel.type === "lead" && panel.amountGetter ? (
+                <DrawerSummaryCard
+                  label={`Total ${panel.amountLabel || "Value"}`}
+                  value={formatCurrency(totalAmount)}
+                  tone="emerald"
+                />
               ) : (
-                <div className="mt-4 grid grid-cols-2 gap-3">
-                  <div className="rounded-2xl bg-gray-50 p-3">
-                    <p className="text-xs font-medium text-gray-500">
-                      Total Records
-                    </p>
-                    <p className="mt-1 text-xl font-semibold text-gray-900">
-                      {rows.length}
-                    </p>
-                  </div>
-
-                  {panel.type === "lead" && panel.amountGetter ? (
-                    <div className="rounded-2xl bg-emerald-50 p-3">
-                      <p className="text-xs font-medium text-emerald-700">
-                        Total {panel.amountLabel || "Value"}
-                      </p>
-                      <p className="mt-1 text-xl font-semibold text-emerald-800">
-                        {formatCurrency(totalAmount)}
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="rounded-2xl bg-red-50 p-3">
-                      <p className="text-xs font-medium text-red-700">
-                        Attention View
-                      </p>
-                      <p className="mt-1 text-xl font-semibold text-red-800">
-                        {rows.length}
-                      </p>
-                    </div>
-                  )}
-                </div>
+                <DrawerSummaryCard
+                  label="Attention View"
+                  value={rows.length}
+                  tone="red"
+                />
               )}
             </div>
           </div>
@@ -4376,7 +4971,9 @@ function DashboardDetailDrawer({ panel, onClose, onViewLead }) {
                         </p>
                       </div>
 
-                      <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${getSeverityClass(item.severity)}`}>
+                      <span
+                        className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${getSeverityClass(item.severity)}`}
+                      >
                         {readableLabel(item.severity)}
                       </span>
                     </div>
@@ -4408,12 +5005,120 @@ function DashboardDetailDrawer({ panel, onClose, onViewLead }) {
                   </div>
                 ))}
               </div>
+            ) : panel.type === "engagement" ? (
+              <div className="space-y-3">
+                {rows.map((item, index) => {
+                  const destinations = getEngagementDestinationList(item);
+
+                  return (
+                    <div
+                      key={item.id || `engagement-${index}`}
+                      className="rounded-2xl border border-gray-200 bg-white p-4"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-gray-900">
+                            {readableLabel(item.channel || "Engagement")}
+                          </p>
+
+                          <p className="mt-1 text-xs text-gray-500">
+                            {item.agentName ||
+                              item.agencyName ||
+                              item.customerName ||
+                              "Unknown Agent"}{" "}
+                            • {destinations.length ? destinations.join(", ") : "No Destination"}
+                          </p>
+                        </div>
+
+                        <span className="rounded-full bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-600">
+                          {readableLabel(item.status || "Open")}
+                        </span>
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-2 gap-3">
+                        <div className="rounded-xl bg-gray-50 p-3">
+                          <p className="text-[11px] font-medium text-gray-500">
+                            Channel
+                          </p>
+                          <p className="mt-1 truncate text-xs font-semibold text-gray-800">
+                            {readableLabel(item.channel || "Unknown")}
+                          </p>
+                        </div>
+
+                        <div className="rounded-xl bg-gray-50 p-3">
+                          <p className="text-[11px] font-medium text-gray-500">
+                            Date
+                          </p>
+                          <p className="mt-1 text-xs font-semibold text-gray-800">
+                            {formatDateTime(getEngagementDate(item))}
+                          </p>
+                        </div>
+                      </div>
+
+                      {item.subject || item.notes || item.remark || item.description ? (
+                        <p className="mt-3 text-xs leading-5 text-gray-500">
+                          {item.subject || item.notes || item.remark || item.description}
+                        </p>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : panel.type === "attendance" ? (
+              <div className="space-y-3">
+                {rows.map((record, index) => (
+                  <div
+                    key={record.id || `attendance-${index}`}
+                    className="rounded-2xl border border-gray-200 bg-white p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-gray-900">
+                          {getAttendanceRecordDate(record) || "Attendance Record"}
+                        </p>
+
+                        <p className="mt-1 text-xs text-gray-500">
+                          Status: {readableLabel(getAttendanceStatus(record))}
+                        </p>
+                      </div>
+
+                      <span className="rounded-full bg-purple-50 px-2.5 py-1 text-xs font-medium text-purple-700">
+                        {formatDuration(getAttendanceMinutes(record))}
+                      </span>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-2 gap-3">
+                      <div className="rounded-xl bg-gray-50 p-3">
+                        <p className="text-[11px] font-medium text-gray-500">
+                          First Check-in
+                        </p>
+                        <p className="mt-1 text-xs font-semibold text-gray-800">
+                          {formatDateTime(getFirstCheckIn(record))}
+                        </p>
+                      </div>
+
+                      <div className="rounded-xl bg-gray-50 p-3">
+                        <p className="text-[11px] font-medium text-gray-500">
+                          Last Check-out
+                        </p>
+                        <p className="mt-1 text-xs font-semibold text-gray-800">
+                          {formatDateTime(getLastCheckOut(record))}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             ) : (
               <div className="space-y-3">
                 {rows.map(lead => {
                   const amount = panel.amountGetter
                     ? Number(panel.amountGetter(lead) || 0)
                     : 0;
+
+                  const formattedAmount = panel.amountFormatter
+                    ? panel.amountFormatter(amount, lead)
+                    : formatCurrency(amount);
 
                   const dateValue = panel.dateGetter
                     ? panel.dateGetter(lead)
@@ -4431,8 +5136,11 @@ function DashboardDetailDrawer({ panel, onClose, onViewLead }) {
                           </p>
 
                           <p className="mt-1 text-xs text-gray-500">
-                            {lead.customerName || lead.agentName || lead.agencyName || "Unknown Client"} •{" "}
-                            {lead.destinationName || "Unknown Destination"}
+                            {lead.customerName ||
+                              lead.agentName ||
+                              lead.agencyName ||
+                              "Unknown Client"}{" "}
+                            • {lead.destinationName || "Unknown Destination"}
                           </p>
                         </div>
 
@@ -4447,7 +5155,9 @@ function DashboardDetailDrawer({ panel, onClose, onViewLead }) {
                             Assigned To
                           </p>
                           <p className="mt-1 truncate text-xs font-semibold text-gray-800">
-                            {lead.assignedToName || lead.assignedToEmail || "Unassigned"}
+                            {lead.assignedToName ||
+                              lead.assignedToEmail ||
+                              "Unassigned"}
                           </p>
                         </div>
 
@@ -4498,7 +5208,7 @@ function DashboardDetailDrawer({ panel, onClose, onViewLead }) {
                             {panel.amountLabel || "Value"}
                           </p>
                           <p className="text-sm font-semibold text-gray-900">
-                            {formatCurrency(amount)}
+                            {/* {formatCurrency(amount)} */} {formattedAmount}
                           </p>
                         </div>
 
@@ -4523,4 +5233,4 @@ function DashboardDetailDrawer({ panel, onClose, onViewLead }) {
       </aside>
     </div>
   );
-}
+} 

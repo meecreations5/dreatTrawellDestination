@@ -14,9 +14,9 @@ import {
   CalendarClock,
   Copy,
   Eye,
-  FileText,
   Mail,
   MessageCircle,
+  Package,
   Pencil,
   Percent,
   ReceiptText,
@@ -29,6 +29,7 @@ import {
 
 import { db } from "@/lib/firebase";
 import Card from "@/components/ui/Card";
+import QuotationAssetSummary from "@/components/leads/QuotationAssetSummary";
 
 /* =========================
    HELPERS
@@ -46,6 +47,11 @@ function toDate(value) {
   if (!value) return null;
   if (value?.toDate) return value.toDate();
   if (value instanceof Date) return value;
+
+  if (typeof value === "object" && typeof value.seconds === "number") {
+    const date = new Date(value.seconds * 1000);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
 
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
@@ -257,8 +263,55 @@ function getSelectedVendorQuotes(quotation) {
   );
 }
 
+function getQuotationAssetCount(quotation = {}) {
+  const metadata = quotation?.metadata || {};
+
+  const directAssets =
+    quotation?.sharedAssets ||
+    quotation?.quotationAssets ||
+    quotation?.latestQuotationSharedAssets ||
+    quotation?.finalQuotationSharedAssets ||
+    metadata.sharedAssets ||
+    metadata.quotationAssets ||
+    metadata.latestQuotationSharedAssets ||
+    metadata.finalQuotationSharedAssets ||
+    [];
+
+  if (Array.isArray(directAssets) && directAssets.length) {
+    return directAssets.length;
+  }
+
+  const savedCount = getNumber(
+    quotation?.assetShareCount ??
+      quotation?.latestQuotationAssetShareCount ??
+      quotation?.finalQuotationAssetShareCount ??
+      metadata.assetShareCount ??
+      metadata.latestQuotationAssetShareCount
+  );
+
+  if (savedCount !== null && savedCount > 0) {
+    return savedCount;
+  }
+
+  const hasAssetLinks = Boolean(
+    cleanString(
+      quotation?.assetLinksText ||
+        quotation?.latestQuotationAssetLinksText ||
+        quotation?.finalQuotationAssetLinksText ||
+        metadata.assetLinksText ||
+        metadata.latestQuotationAssetLinksText ||
+        quotation?.assetLinksHtml ||
+        quotation?.latestQuotationAssetLinksHtml ||
+        metadata.assetLinksHtml
+    )
+  );
+
+  return hasAssetLinks ? 1 : 0;
+}
+
 function createRevisionSeed(quotation) {
   const selectedVendorQuotes = getSelectedVendorQuotes(quotation);
+
   const selectedVendorQuoteIds = Array.isArray(quotation?.selectedVendorQuoteIds)
     ? quotation.selectedVendorQuoteIds
     : selectedVendorQuotes.map(item => item.vendorQuoteId);
@@ -279,6 +332,15 @@ function createRevisionSeed(quotation) {
     isFinalQuotation: false,
 
     sourceQuotationId: quotation?.id || quotation?.quotationId || "",
+
+    sharedAssets: quotation?.sharedAssets || quotation?.quotationAssets || [],
+    quotationAssets: quotation?.quotationAssets || quotation?.sharedAssets || [],
+    sharedAssetIds: quotation?.sharedAssetIds || [],
+    sharedAssetTitles: quotation?.sharedAssetTitles || [],
+    assetShareCount: quotation?.assetShareCount || 0,
+    hasSharedAssets: Boolean(quotation?.hasSharedAssets),
+    assetLinksText: quotation?.assetLinksText || "",
+    assetLinksHtml: quotation?.assetLinksHtml || "",
 
     pricingSnapshot: {
       quotationPricingMode: quotation?.quotationPricingMode || "direct",
@@ -428,7 +490,9 @@ function Metric({ icon: Icon, label, value, tone = "gray" }) {
           ? "bg-amber-50 border-amber-100 text-amber-700"
           : tone === "red"
             ? "bg-red-50 border-red-100 text-red-700"
-            : "bg-gray-50 border-gray-100 text-gray-600";
+            : tone === "blue"
+              ? "bg-blue-50 border-blue-100 text-blue-700"
+              : "bg-gray-50 border-gray-100 text-gray-600";
 
   return (
     <div className={`rounded-2xl border p-3 ${toneClass}`}>
@@ -449,7 +513,7 @@ function Metric({ icon: Icon, label, value, tone = "gray" }) {
 function EmptyState() {
   return (
     <div className="rounded-3xl border border-dashed border-gray-200 bg-gray-50 p-8 text-center">
-      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-gray-400 shadow-sm">
+      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-gray-400 ">
         <ReceiptText size={25} />
       </div>
 
@@ -576,6 +640,13 @@ function QuotationDetailsModal({ quotation, onClose }) {
                 vendorQuoteFinalized={quotation.vendorQuoteFinalized}
                 vendorCostingMode={vendorCostingMode}
               />
+
+              {getQuotationAssetCount(quotation) > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                  <Package size={12} />
+                  {getQuotationAssetCount(quotation)} Assets
+                </span>
+              )}
             </div>
 
             <h2 className="mt-2 text-lg font-semibold text-gray-900">
@@ -673,7 +744,9 @@ function QuotationDetailsModal({ quotation, onClose }) {
 
           <MultiVendorCostingBlock quotation={quotation} />
 
-          <div className="rounded-2xl border border-gray-200 bg-white p-5">
+          <QuotationAssetSummary quotation={quotation} />
+
+          <div className="mt-5 rounded-2xl border border-gray-200 bg-white p-5">
             <p className="mb-3 text-sm font-semibold text-gray-900">
               Customer Visible Quotation
             </p>
@@ -758,14 +831,15 @@ function QuotationCard({
 
   const selectedVendorQuotes = getSelectedVendorQuotes(quotation);
   const vendorCostingMode = getVendorCostingMode(quotation);
+  const assetCount = getQuotationAssetCount(quotation);
 
   return (
-    <div className="overflow-hidden rounded-3xl border border-gray-100 bg-white shadow-sm transition hover:border-blue-200">
+    <div className="overflow-hidden rounded-3xl border border-gray-100 bg-white  transition hover:border-blue-200">
       <div className="border-b border-gray-100 bg-gradient-to-r from-gray-50 to-blue-50 p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-gray-700 shadow-sm">
+              <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-gray-700 ">
                 Rev {quotation.revision || "—"}
               </span>
 
@@ -784,6 +858,13 @@ function QuotationCard({
               {vendorCostingMode === "multi_vendor" && selectedVendorQuotes.length > 0 && (
                 <span className="inline-flex items-center gap-1 rounded-full border border-purple-100 bg-purple-50 px-2.5 py-1 text-xs font-semibold text-purple-700">
                   {selectedVendorQuotes.length} vendors
+                </span>
+              )}
+
+              {assetCount > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                  <Package size={12} />
+                  {assetCount} Assets
                 </span>
               )}
             </div>
@@ -869,6 +950,10 @@ function QuotationCard({
         />
       </div>
 
+      <div className="px-4 pb-4">
+        <QuotationAssetSummary quotation={quotation} compact />
+      </div>
+
       <div className="border-t border-gray-100 bg-gray-50 px-4 py-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <ChannelBadges sentVia={quotation.sentVia || quotation.sendVia} />
@@ -937,21 +1022,29 @@ export default function QuotationHistory({
 
   const stats = useMemo(() => {
     const total = quotations.length;
+
     const draft = quotations.filter(
       item => item?.isDraft || item?.status === "draft"
     ).length;
+
     const sent = quotations.filter(
       item => item?.status === "sent"
     ).length;
+
     const finalQuote = quotations.filter(
       item => item?.isFinalQuotation || item?.status === "final"
     ).length;
+
+    const assets = quotations.reduce((sum, item) => {
+      return sum + Number(getQuotationAssetCount(item) || 0);
+    }, 0);
 
     return {
       total,
       draft,
       sent,
-      finalQuote
+      finalQuote,
+      assets
     };
   }, [quotations]);
 
@@ -969,11 +1062,11 @@ export default function QuotationHistory({
 
           <p className="mt-1 text-sm text-gray-500">
             Track drafts, sent quotes, final quotations, pricing mode, vendor cost,
-            profit and margin for this lead.
+            profit, margin and shared assets for this lead.
           </p>
         </div>
 
-        <div className="grid grid-cols-4 gap-2 text-center">
+        <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-5">
           <div className="rounded-2xl bg-gray-50 px-3 py-2">
             <p className="text-lg font-bold text-gray-900">{stats.total}</p>
             <p className="text-[11px] text-gray-500">Total</p>
@@ -992,6 +1085,11 @@ export default function QuotationHistory({
           <div className="rounded-2xl bg-green-50 px-3 py-2">
             <p className="text-lg font-bold text-green-700">{stats.finalQuote}</p>
             <p className="text-[11px] text-green-700">Final</p>
+          </div>
+
+          <div className="rounded-2xl bg-indigo-50 px-3 py-2">
+            <p className="text-lg font-bold text-indigo-700">{stats.assets}</p>
+            <p className="text-[11px] text-indigo-700">Assets</p>
           </div>
         </div>
       </div>

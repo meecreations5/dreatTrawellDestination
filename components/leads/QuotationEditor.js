@@ -1468,7 +1468,11 @@ async function logQuotationCommunication({
   selectedVendorName,
   selectedVendorQuoteId,
   selectedVendorRequestId,
-  selectedVendorCurrency
+  selectedVendorCurrency,
+
+  selectedQuotationAssets = [],
+  quotationAssetLinksText = "",
+  quotationAssetLinksHtml = ""
 }) {
   if (!leadId || !channel) return;
 
@@ -1511,6 +1515,19 @@ async function logQuotationCommunication({
 
         leadId,
         quotationId: quotationId || "",
+
+        sharedAssets: selectedQuotationAssets,
+        sharedAssetIds: selectedQuotationAssets
+          .map(asset => asset.assetId)
+          .filter(Boolean),
+        sharedAssetTitles: selectedQuotationAssets
+          .map(asset => asset.title)
+          .filter(Boolean),
+        assetShareCount: selectedQuotationAssets.length,
+        hasSharedAssets: selectedQuotationAssets.length > 0,
+        assetLinksText: quotationAssetLinksText || "",
+        assetLinksHtml: quotationAssetLinksHtml || "",
+
         revision: revision || "",
 
         itineraryHtml: itineraryHtml || "",
@@ -1788,6 +1805,7 @@ export default function QuotationEditor({
   const lastAutoSaveSnapshotRef = useRef("");
   const autoSaveSkipFirstRunRef = useRef(true);
   const hydratedQuotationSessionRef = useRef("");
+  const autoSavingRef = useRef(false);
 
   const [autoSaving, setAutoSaving] = useState(false);
 
@@ -1796,6 +1814,10 @@ export default function QuotationEditor({
     normalizeQuotationAssets(
       initialQuotation?.sharedAssets ||
       initialQuotation?.quotationAssets ||
+      initialQuotation?.metadata?.sharedAssets ||
+      initialQuotation?.metadata?.quotationAssets ||
+      initialQuotation?.latestQuotationSharedAssets ||
+      initialQuotation?.finalQuotationSharedAssets ||
       []
     )
   );
@@ -2176,7 +2198,7 @@ export default function QuotationEditor({
           ? ""
           : String(pricing.selectedVendorCost)
       );
-
+      setSharedAssets([]);
       setActiveTab("edit");
       return;
     }
@@ -2253,6 +2275,18 @@ export default function QuotationEditor({
     if (signatureUid) {
       setSelectedSignatureUid(signatureUid);
     }
+
+    setSharedAssets(
+      normalizeQuotationAssets(
+        initialQuotation?.sharedAssets ||
+        initialQuotation?.quotationAssets ||
+        initialQuotation?.metadata?.sharedAssets ||
+        initialQuotation?.metadata?.quotationAssets ||
+        initialQuotation?.latestQuotationSharedAssets ||
+        initialQuotation?.finalQuotationSharedAssets ||
+        []
+      )
+    );
 
     setActiveTab("edit");
   }, [
@@ -3125,7 +3159,7 @@ export default function QuotationEditor({
 
 
   const silentAutoSaveDraft = async () => {
-    if (saving || savingDraft || autoSaving) return;
+    if (saving || savingDraft || autoSaving || autoSavingRef.current) return;
     if (!lead?.id || isLegacyQuotation) return;
 
     const selectedSignatureBaseUser =
@@ -3150,6 +3184,7 @@ export default function QuotationEditor({
     const safeQuotationAssetLinksText = quotationAssetLinksText || "";
     const safeQuotationAssetLinksHtml = quotationAssetLinksHtml || "";
 
+    autoSavingRef.current = true;
     setAutoSaving(true);
 
     try {
@@ -3196,6 +3231,10 @@ export default function QuotationEditor({
 
         quotationId: draftQuotationId,
         revision: draftRevision,
+
+        skipTimelineLog: true,
+        isAutoSave: true,
+        source: "auto_save",
 
         itineraryHtml: finalItineraryHtml,
         quotationData: finalQuotationData,
@@ -3278,6 +3317,7 @@ export default function QuotationEditor({
     } catch (error) {
       console.warn("Silent quotation auto-save skipped:", error);
     } finally {
+      autoSavingRef.current = false;
       setAutoSaving(false);
     }
   };
@@ -3807,11 +3847,6 @@ export default function QuotationEditor({
           selectedVendorQuoteId,
           selectedVendorRequestId,
 
-          vendorCostingMode,
-          selectedVendorQuotes,
-          selectedVendorQuoteIds,
-          totalSelectedVendorCost,
-
           grossProfit,
           marginPercent:
             marginPercent === null
@@ -4005,6 +4040,14 @@ export default function QuotationEditor({
               ? "email"
               : "whatsapp";
 
+        console.log("Quotation asset send debug", {
+          selectedQuotationAssets,
+          quotationAssetLinksText,
+          quotationAssetLinksHtml,
+          quotationId,
+          revision
+        });
+
         await logQuotationCommunication({
           leadId: lead.id,
           channel: sentChannel,
@@ -4033,7 +4076,11 @@ export default function QuotationEditor({
           selectedVendorName,
           selectedVendorQuoteId,
           selectedVendorRequestId,
-          selectedVendorCurrency
+          selectedVendorCurrency,
+
+          selectedQuotationAssets,
+          quotationAssetLinksText,
+          quotationAssetLinksHtml
         });
       }
 
@@ -4123,6 +4170,10 @@ export default function QuotationEditor({
     note,
     isFinalQuotation,
     selectedSignatureUid,
+
+    selectedQuotationAssets,
+    quotationAssetLinksText,
+    quotationAssetLinksHtml,
 
     vendorCostingMode,
     selectedVendorQuotes,

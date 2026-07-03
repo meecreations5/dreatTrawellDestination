@@ -15,6 +15,7 @@ import {
 import {
   AlertCircle,
   Bold,
+  ExternalLink,
   FileText,
   ImageIcon,
   Italic,
@@ -24,6 +25,7 @@ import {
   Loader2,
   Paperclip,
   Quote,
+  Sparkles,
   Trash2,
   UploadCloud,
   X
@@ -68,6 +70,10 @@ const allowedReferenceTypes = [
 const maxReferenceFiles = 5;
 const maxFileSizeMb = 10;
 
+/* =========================
+   BASIC HELPERS
+========================= */
+
 function getDisplayName(user) {
   return (
     user?.name ||
@@ -76,6 +82,27 @@ function getDisplayName(user) {
     user?.email ||
     "Unnamed User"
   );
+}
+
+function getFirstValue(...values) {
+  return (
+    values.find(
+      value => typeof value === "string" && value.trim().length > 0
+    )?.trim() || ""
+  );
+}
+
+function normalize(value = "") {
+  return String(value || "").trim().toLowerCase();
+}
+
+function escapeHtml(value = "") {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
 function safeFileName(name = "") {
@@ -121,31 +148,258 @@ function getAttachmentType(file) {
   return "document";
 }
 
+/* =========================
+   ASSET HELPERS
+========================= */
+
+function getAssetTitle(asset = {}) {
+  return getFirstValue(
+    asset.title,
+    asset.name,
+    asset.fileName,
+    asset.currentFileName,
+    "Shared Asset"
+  );
+}
+
+function getAssetUrl(asset = {}) {
+  return getFirstValue(
+    asset.url,
+    asset.currentUrl,
+    asset.externalUrl,
+    asset.downloadUrl,
+    asset.fileUrl
+  );
+}
+
+function getAssetType(asset = {}) {
+  const type = normalize(
+    asset.assetType ||
+      asset.documentType ||
+      asset.fileType ||
+      asset.fileExtension ||
+      "document"
+  );
+
+  const fileType = normalize(asset.fileType || asset.currentFileType);
+  const extension = normalize(
+    asset.fileExtension || asset.currentFileExtension
+  );
+
+  if (
+    type.includes("image") ||
+    fileType.startsWith("image/") ||
+    ["jpg", "jpeg", "png", "webp"].includes(extension)
+  ) {
+    return "image";
+  }
+
+  if (
+    type.includes("pdf") ||
+    fileType === "application/pdf" ||
+    extension === "pdf"
+  ) {
+    return "pdf";
+  }
+
+  if (
+    type.includes("video") ||
+    type.includes("youtube") ||
+    fileType.startsWith("video/")
+  ) {
+    return "video";
+  }
+
+  if (type.includes("link")) return "link";
+
+  return "document";
+}
+
+function getSharedAssets(engagement) {
+  const assets = Array.isArray(engagement?.sharedAssets)
+    ? engagement.sharedAssets
+    : [];
+
+  const map = new Map();
+
+  assets.forEach(asset => {
+    const assetId =
+      asset.assetId ||
+      asset.id ||
+      asset.documentId ||
+      getAssetUrl(asset);
+
+    if (!assetId) return;
+
+    map.set(assetId, {
+      assetId,
+      title: getAssetTitle(asset),
+      url: getAssetUrl(asset),
+
+      categoryId: asset.categoryId || "",
+      categoryName: asset.categoryName || "",
+      categorySlug: asset.categorySlug || "",
+
+      assetType: asset.assetType || asset.documentType || "document",
+      usageType: asset.usageType || "",
+
+      currentVersion: asset.currentVersion || asset.version || 1,
+
+      fileName: asset.fileName || asset.currentFileName || "",
+      fileSize: asset.fileSize || asset.currentFileSize || 0,
+      fileType: asset.fileType || asset.currentFileType || "",
+      fileExtension:
+        asset.fileExtension || asset.currentFileExtension || "",
+
+      source: "engagement_shared_asset"
+    });
+  });
+
+  return Array.from(map.values());
+}
+
+function normalizeSharedAssetAsReference(asset = {}) {
+  return {
+    name: getAssetTitle(asset),
+    url: getAssetUrl(asset),
+
+    type: getAssetType(asset),
+    mimeType: asset.fileType || asset.currentFileType || "",
+    size: asset.fileSize || asset.currentFileSize || 0,
+
+    source: "engagement_shared_asset",
+
+    assetId: asset.assetId || asset.id || asset.documentId || "",
+    categoryName: asset.categoryName || "",
+    usageType: asset.usageType || "",
+    currentVersion: asset.currentVersion || asset.version || 1,
+
+    fileName: asset.fileName || asset.currentFileName || "",
+    fileExtension:
+      asset.fileExtension || asset.currentFileExtension || ""
+  };
+}
+
+/* =========================
+   ENGAGEMENT REFERENCE
+========================= */
+
 function getEngagementReferenceHtml(engagement) {
   const parts = [];
 
-  if (engagement?.subject) {
-    parts.push(`<p><strong>Subject:</strong> ${engagement.subject}</p>`);
+  if (engagement?.templateName) {
+    parts.push(
+      `<p><strong>Template Used:</strong> ${escapeHtml(
+        engagement.templateName
+      )}</p>`
+    );
   }
 
-  if (engagement?.message) {
-    parts.push(`<p>${String(engagement.message).replace(/\n/g, "<br />")}</p>`);
+  if (engagement?.templateType) {
+    parts.push(
+      `<p><strong>Template Type:</strong> ${escapeHtml(
+        engagement.templateType
+      )}</p>`
+    );
+  }
+
+  if (engagement?.templateCategory) {
+    parts.push(
+      `<p><strong>Template Category:</strong> ${escapeHtml(
+        engagement.templateCategory
+      )}</p>`
+    );
+  }
+
+  if (engagement?.communicationSource) {
+    parts.push(
+      `<p><strong>Communication Source:</strong> ${escapeHtml(
+        engagement.communicationSource
+      )}</p>`
+    );
+  }
+
+  if (engagement?.channel) {
+    parts.push(
+      `<p><strong>Channel:</strong> ${escapeHtml(engagement.channel)}</p>`
+    );
+  }
+
+  if (engagement?.destinationName) {
+    parts.push(
+      `<p><strong>Destination:</strong> ${escapeHtml(
+        engagement.destinationName
+      )}</p>`
+    );
+  }
+
+  if (engagement?.emailSubject) {
+    parts.push(
+      `<p><strong>Email Subject:</strong> ${escapeHtml(
+        engagement.emailSubject
+      )}</p>`
+    );
+  } else if (engagement?.subject) {
+    parts.push(
+      `<p><strong>Subject:</strong> ${escapeHtml(engagement.subject)}</p>`
+    );
+  }
+
+  if (engagement?.messageHtml) {
+    parts.push(`<div>${cleanRichHtml(engagement.messageHtml)}</div>`);
+  } else if (engagement?.message || engagement?.messageText) {
+    const text = escapeHtml(
+      engagement.message || engagement.messageText || ""
+    ).replace(/\n/g, "<br />");
+
+    parts.push(`<p>${text}</p>`);
   }
 
   if (engagement?.notes) {
-    parts.push(`<p>${String(engagement.notes).replace(/\n/g, "<br />")}</p>`);
+    parts.push(
+      `<p>${escapeHtml(String(engagement.notes)).replace(
+        /\n/g,
+        "<br />"
+      )}</p>`
+    );
   }
 
   if (engagement?.outcomeLabel || engagement?.outcomeCode) {
     parts.push(
-      `<p><strong>Outcome:</strong> ${
+      `<p><strong>Outcome:</strong> ${escapeHtml(
         engagement.outcomeLabel || engagement.outcomeCode
-      }</p>`
+      )}</p>`
     );
+  }
+
+  const sharedAssets = getSharedAssets(engagement);
+
+  if (sharedAssets.length > 0) {
+    const rows = sharedAssets
+      .map(asset => {
+        const title = escapeHtml(getAssetTitle(asset));
+        const url = getAssetUrl(asset);
+        const category = escapeHtml(asset.categoryName || asset.assetType || "Asset");
+
+        if (url) {
+          return `• <a href="${escapeHtml(
+            url
+          )}" target="_blank" rel="noopener noreferrer">${title}</a> (${category})`;
+        }
+
+        return `• ${title} (${category})`;
+      })
+      .join("<br />");
+
+    parts.push(`<p><strong>Shared Assets:</strong><br />${rows}</p>`);
   }
 
   return parts.join("");
 }
+
+/* =========================
+   DATA LOADERS
+========================= */
 
 async function loadTeamUsers() {
   try {
@@ -210,6 +464,7 @@ async function uploadReferenceFiles({ files, user }) {
         type: getAttachmentType(file),
         mimeType: file.type || "",
         size: file.size || 0,
+        source: "manual_upload",
         uploadedAt,
         uploadedByUid: user?.uid || "",
         uploadedByName: getDisplayName(user),
@@ -220,6 +475,37 @@ async function uploadReferenceFiles({ files, user }) {
 
   return uploads;
 }
+
+function resolveDestinationIdFromEngagement(engagement, destinations = []) {
+  if (!engagement || !destinations.length) return "";
+
+  const destinationRefId = getFirstValue(engagement.destinationRefId);
+  const destinationId = getFirstValue(engagement.destinationId);
+  const destinationName = normalize(engagement.destinationName);
+
+  const matched = destinations.find(destination => {
+    const idMatch =
+      destinationRefId &&
+      String(destination.id) === String(destinationRefId);
+
+    const destinationIdMatch =
+      destinationId &&
+      String(destination.destinationId || destination.id) ===
+        String(destinationId);
+
+    const nameMatch =
+      destinationName &&
+      normalize(destination.name) === destinationName;
+
+    return idMatch || destinationIdMatch || nameMatch;
+  });
+
+  return matched?.id || "";
+}
+
+/* =========================
+   COMPONENT
+========================= */
 
 export default function CreateLeadModal({ engagement, onClose }) {
   const { user, loading } = useAuth();
@@ -242,9 +528,21 @@ export default function CreateLeadModal({ engagement, onClose }) {
   const [uploadingReferences, setUploadingReferences] = useState(false);
   const [formError, setFormError] = useState("");
 
+  const sharedAssets = useMemo(() => {
+    return getSharedAssets(engagement);
+  }, [engagement]);
+
+  const hasTemplate = Boolean(
+    engagement?.templateId ||
+      engagement?.templateName ||
+      engagement?.isTemplateCommunication ||
+      engagement?.communicationSource === "template"
+  );
+
   /* =========================
      LOAD TEAM + DESTINATIONS
   ========================== */
+
   useEffect(() => {
     let mounted = true;
 
@@ -301,6 +599,7 @@ export default function CreateLeadModal({ engagement, onClose }) {
   /* =========================
      PREFILL REFERENCE FROM ENGAGEMENT
   ========================== */
+
   useEffect(() => {
     const initialHtml = getEngagementReferenceHtml(engagement);
     const initialSource = engagement?.channel || "";
@@ -308,6 +607,7 @@ export default function CreateLeadModal({ engagement, onClose }) {
     setClientReferenceSource(initialSource);
     setClientReferenceHtml(initialHtml || "");
     setReferenceFiles([]);
+    setDestinationId("");
     setFormError("");
 
     setTimeout(() => {
@@ -316,6 +616,23 @@ export default function CreateLeadModal({ engagement, onClose }) {
       }
     }, 0);
   }, [engagement]);
+
+  /* =========================
+     AUTO SELECT DESTINATION
+  ========================== */
+
+  useEffect(() => {
+    if (!engagement || !destinations.length) return;
+
+    const resolvedDestinationId = resolveDestinationIdFromEngagement(
+      engagement,
+      destinations
+    );
+
+    if (resolvedDestinationId) {
+      setDestinationId(resolvedDestinationId);
+    }
+  }, [engagement, destinations]);
 
   const destination = useMemo(() => {
     return destinations.find(d => d.id === destinationId) || null;
@@ -350,6 +667,7 @@ export default function CreateLeadModal({ engagement, onClose }) {
   /* =========================
      EDITOR ACTIONS
   ========================== */
+
   const syncEditorHtml = () => {
     setClientReferenceHtml(editorRef.current?.innerHTML || "");
   };
@@ -386,6 +704,7 @@ export default function CreateLeadModal({ engagement, onClose }) {
   /* =========================
      FILE HANDLING
   ========================== */
+
   const addReferenceFiles = event => {
     const files = Array.from(event.target.files || []);
 
@@ -435,6 +754,7 @@ export default function CreateLeadModal({ engagement, onClose }) {
   /* =========================
      CREATE LEAD
   ========================== */
+
   const createLead = async () => {
     setFormError("");
 
@@ -460,11 +780,36 @@ export default function CreateLeadModal({ engagement, onClose }) {
       const cleanReferenceHtml = cleanRichHtml(clientReferenceHtml);
       const cleanReferenceText = stripHtml(cleanReferenceHtml);
 
+      const sharedAssetReferences = sharedAssets
+        .map(normalizeSharedAssetAsReference)
+        .filter(asset => asset.url || asset.assetId);
+
       const clientReference = {
         source: clientReferenceSource || engagement?.channel || "",
         notes: cleanReferenceText,
         notesHtml: cleanReferenceHtml,
-        attachments: uploadedReferences
+
+        attachments: [
+          ...sharedAssetReferences,
+          ...uploadedReferences
+        ],
+
+        templateId: engagement?.templateId || "",
+        templateName: engagement?.templateName || "",
+        templateType: engagement?.templateType || "",
+        templateCategory: engagement?.templateCategory || "",
+        communicationSource: engagement?.communicationSource || "",
+
+        emailSubject: engagement?.emailSubject || "",
+        subject: engagement?.subject || "",
+
+        assetLinksText: engagement?.assetLinksText || "",
+        sharedAssetIds: engagement?.sharedAssetIds || [],
+        sharedAssetTitles: engagement?.sharedAssetTitles || [],
+
+        sourceEngagementId: engagement?.id || "",
+        sourceEngagementType: engagement?.engagementType || "",
+        sourceChannel: engagement?.channel || ""
       };
 
       const leadId = await createLeadFromEngagement({
@@ -472,7 +817,8 @@ export default function CreateLeadModal({ engagement, onClose }) {
           ...engagement,
           destinationRefId: destination.id,
           destinationId: destination.destinationId || destination.id || null,
-          destinationCode: destination.code || null,
+          destinationCode:
+            destination.code || destination.destinationCode || null,
           destinationName: destination.name
         },
         assignedUser: {
@@ -503,6 +849,7 @@ export default function CreateLeadModal({ engagement, onClose }) {
   /* =========================
      UI
   ========================== */
+
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[92vh] overflow-hidden">
@@ -540,6 +887,51 @@ export default function CreateLeadModal({ engagement, onClose }) {
                 <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm flex items-start gap-2">
                   <AlertCircle size={16} className="mt-0.5 shrink-0" />
                   <span>{formError}</span>
+                </div>
+              )}
+
+              {/* TEMPLATE CONTEXT */}
+              {hasTemplate && (
+                <div className="rounded-xl border border-purple-100 bg-purple-50 px-4 py-3">
+                  <div className="flex items-start gap-2">
+                    <Sparkles size={17} className="text-purple-700 mt-0.5" />
+
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-purple-700">
+                        Template Communication
+                      </p>
+
+                      <p className="text-sm font-semibold text-gray-900 mt-1 truncate">
+                        {engagement?.templateName || "Communication Template"}
+                      </p>
+
+                      <div className="flex flex-wrap gap-2 mt-2 text-[11px]">
+                        {engagement?.templateType && (
+                          <span className="rounded-full bg-white border border-purple-100 px-2 py-0.5 text-purple-700">
+                            {engagement.templateType}
+                          </span>
+                        )}
+
+                        {engagement?.channel && (
+                          <span className="rounded-full bg-white border border-purple-100 px-2 py-0.5 text-purple-700">
+                            {engagement.channel}
+                          </span>
+                        )}
+
+                        {engagement?.destinationName && (
+                          <span className="rounded-full bg-white border border-purple-100 px-2 py-0.5 text-purple-700">
+                            {engagement.destinationName}
+                          </span>
+                        )}
+
+                        {engagement?.emailSubject && (
+                          <span className="rounded-full bg-white border border-purple-100 px-2 py-0.5 text-purple-700">
+                            Email subject available
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -673,6 +1065,45 @@ export default function CreateLeadModal({ engagement, onClose }) {
                     </p>
                   </div>
                 </div>
+
+                {/* ASSETS ALREADY SHARED */}
+                {sharedAssets.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-gray-600">
+                      Assets Already Shared in Engagement
+                    </p>
+
+                    <div className="space-y-2">
+                      {sharedAssets.map((asset, index) => (
+                        <div
+                          key={asset.assetId || asset.url || index}
+                          className="flex items-center justify-between gap-3 bg-white border border-blue-100 rounded-lg px-3 py-2"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-gray-800 truncate">
+                              {getAssetTitle(asset)}
+                            </p>
+                            <p className="text-[11px] text-gray-400 truncate">
+                              {asset.categoryName || asset.assetType || "Asset"}
+                            </p>
+                          </div>
+
+                          {asset.url && (
+                            <a
+                              href={asset.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline shrink-0"
+                            >
+                              View
+                              <ExternalLink size={12} />
+                            </a>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* RICH TEXT EDITOR */}
                 <div className="space-y-1.5">

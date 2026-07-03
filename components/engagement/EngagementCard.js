@@ -20,7 +20,9 @@ import {
   AlertTriangle,
   Package,
   Copy,
-  Check
+  Check,
+  Sparkles,
+  FileText
 } from "lucide-react";
 
 import InitialAvatar from "@/components/ui/InitialAvatar";
@@ -30,6 +32,7 @@ import SendCommunicationModal from "@/components/engagement/SendCommunicationMod
 /* =========================
    CHANNEL CONFIG
 ========================= */
+
 const CHANNEL_CONFIG = {
   email: {
     label: "Email",
@@ -53,9 +56,20 @@ const CHANNEL_CONFIG = {
   }
 };
 
+const TEMPLATE_TYPE_LABELS = {
+  message: "Message",
+  promotion: "Promotion",
+  package: "Package",
+  itinerary: "Itinerary",
+  document: "Document",
+  vendor: "Vendor",
+  internal: "Internal"
+};
+
 /* =========================
    HTML TO CLEAN TEXT
 ========================= */
+
 function normalizeHtmlText(input = "") {
   if (!input) return "";
 
@@ -78,6 +92,19 @@ function normalizeHtmlText(input = "") {
 /* =========================
    FIELD HELPERS
 ========================= */
+
+function getFirstValue(...values) {
+  return (
+    values.find(
+      value => typeof value === "string" && value.trim().length > 0
+    )?.trim() || ""
+  );
+}
+
+function normalize(value = "") {
+  return String(value || "").trim().toLowerCase();
+}
+
 const getAgentId = (engagement, agent) =>
   agent?.id ||
   engagement?.travelAgentId ||
@@ -123,12 +150,8 @@ const getAgentCity = (engagement, agent) =>
   engagement?.travelAgent?.address?.city ||
   "";
 
-function getFirstValue(...values) {
-  return (
-    values.find(
-      value => typeof value === "string" && value.trim().length > 0
-    )?.trim() || ""
-  );
+function getTemplateTypeLabel(type = "") {
+  return TEMPLATE_TYPE_LABELS[normalize(type)] || "Template";
 }
 
 function getAssetTitle(asset) {
@@ -149,6 +172,59 @@ function getAssetUrl(asset) {
     asset?.downloadUrl,
     asset?.fileUrl
   );
+}
+
+function getAssetTypeLabel(asset = {}) {
+  const type = normalize(
+    asset.assetType ||
+    asset.documentType ||
+    asset.fileType ||
+    asset.fileExtension ||
+    "document"
+  );
+
+  const fileType = normalize(asset.fileType || asset.currentFileType);
+  const extension = normalize(
+    asset.fileExtension || asset.currentFileExtension
+  );
+
+  if (
+    type.includes("image") ||
+    fileType.startsWith("image/") ||
+    ["jpg", "jpeg", "png", "webp"].includes(extension)
+  ) {
+    return "Image";
+  }
+
+  if (
+    type.includes("pdf") ||
+    fileType === "application/pdf" ||
+    extension === "pdf"
+  ) {
+    return "PDF";
+  }
+
+  if (
+    type.includes("video") ||
+    type.includes("youtube") ||
+    fileType.startsWith("video/")
+  ) {
+    return "Video";
+  }
+
+  if (type.includes("link")) {
+    return "Link";
+  }
+
+  if (type.includes("presentation")) {
+    return "Presentation";
+  }
+
+  if (type.includes("spreadsheet")) {
+    return "Sheet";
+  }
+
+  return "Document";
 }
 
 function normalizeAsset(asset) {
@@ -172,7 +248,8 @@ function normalizeAsset(asset) {
     fileExtension:
       asset?.fileExtension || asset?.currentFileExtension || "",
 
-    sharedAs: asset?.sharedAs || "file_link"
+    sharedAs: asset?.sharedAs || "file_link",
+    shareMode: asset?.shareMode || "link"
   };
 }
 
@@ -193,6 +270,88 @@ function getSharedAssets(engagement) {
   });
 
   return Array.from(unique.values());
+}
+
+/* =========================
+   COMMUNICATION SENT HELPERS
+========================= */
+
+function isCommunicationSentEngagement(engagement = {}) {
+  const channel = normalize(engagement?.channel);
+  const status = normalize(
+    engagement?.sendStatus ||
+    engagement?.outboundStatus ||
+    engagement?.status
+  );
+
+  const communicationIdentity =
+    engagement?.engagementType === "communication_sent" ||
+    engagement?.activityType === "send_communication" ||
+    engagement?.communicationSource === "template" ||
+    engagement?.isTemplateCommunication === true;
+
+  const originalEngagementMarkedSent =
+    engagement?.communicationSent === true ||
+    Boolean(engagement?.lastCommunicationEngagementId);
+
+  const validCommunicationChannel =
+    channel === "email" || channel === "whatsapp";
+
+  const sentStatus = [
+    "completed",
+    "sent",
+    "email_sent",
+    "whatsapp_opened",
+    "whatsapp_prepared"
+  ].includes(status);
+
+  return (
+    communicationIdentity ||
+    originalEngagementMarkedSent ||
+    (validCommunicationChannel && sentStatus)
+  );
+}
+
+function getCommunicationSentLabel(engagement = {}) {
+  const channel = normalize(
+    engagement?.lastCommunicationChannel || engagement?.channel
+  );
+
+  if (channel === "email") return "Email Sent";
+  if (channel === "whatsapp") return "WhatsApp Opened";
+
+  return "Communication Sent";
+}
+
+function getCommunicationSentTone(engagement = {}) {
+  const channel = normalize(
+    engagement?.lastCommunicationChannel || engagement?.channel
+  );
+
+  if (channel === "email") {
+    return "border-blue-100 bg-blue-50 text-blue-700";
+  }
+
+  if (channel === "whatsapp") {
+    return "border-emerald-100 bg-emerald-50 text-emerald-700";
+  }
+
+  return "border-emerald-100 bg-emerald-50 text-emerald-700";
+}
+
+function CommunicationSentBadge({ engagement }) {
+  if (!isCommunicationSentEngagement(engagement)) return null;
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${getCommunicationSentTone(
+        engagement
+      )}`}
+    >
+      <CheckCircle2 className="w-3 h-3" />
+      {getCommunicationSentLabel(engagement)}
+    </span>
+  );
 }
 
 const getProfileStatus = (engagement, agent) => {
@@ -224,19 +383,19 @@ const getProfileStatus = (engagement, agent) => {
       label: "Agency name",
       ok: Boolean(
         agent?.agencyName ||
-          agent?.name ||
-          engagement?.travelAgentName ||
-          engagement?.agentName ||
-          engagement?.agencyName
+        agent?.name ||
+        engagement?.travelAgentName ||
+        engagement?.agentName ||
+        engagement?.agencyName
       )
     },
     {
       label: "SPOC",
       ok: Boolean(
         engagement?.spoc?.name ||
-          engagement?.spocName ||
-          engagement?.contactPerson ||
-          agent?.spocName
+        engagement?.spocName ||
+        engagement?.contactPerson ||
+        agent?.spocName
       )
     },
     {
@@ -262,12 +421,15 @@ const getProfileStatus = (engagement, agent) => {
   };
 };
 
+/* =========================
+   COMPONENT
+========================= */
+
 export default function EngagementCard({
   engagement,
   agent,
   highlight = false,
 
-  /* page-specific controls */
   agentProfileHref = "",
   viewEngagementHref = "",
   leadCreateHref = "",
@@ -286,11 +448,17 @@ export default function EngagementCard({
   const PREVIEW_CHARS = 140;
   const ASSET_PREVIEW_LIMIT = 3;
 
+  const channelKey = String(engagement?.channel || "meeting").toLowerCase();
+  const channel = CHANNEL_CONFIG[channelKey] || CHANNEL_CONFIG.meeting;
+  const ChannelIcon = channel.icon;
+
+  const communicationSent = isCommunicationSentEngagement(engagement);
+
   const message = normalizeHtmlText(
     engagement?.message ||
-      engagement?.messageText ||
-      engagement?.messageHtml ||
-      ""
+    engagement?.messageText ||
+    engagement?.messageHtml ||
+    ""
   );
 
   const sharedAssets = getSharedAssets(engagement);
@@ -303,9 +471,36 @@ export default function EngagementCard({
     0
   );
 
-  const channelKey = String(engagement?.channel || "meeting").toLowerCase();
-  const channel = CHANNEL_CONFIG[channelKey] || CHANNEL_CONFIG.meeting;
-  const ChannelIcon = channel.icon;
+  const templateName = getFirstValue(
+    engagement?.templateName,
+    engagement?.communicationTemplateName
+  );
+
+  const templateType = getFirstValue(
+    engagement?.templateType,
+    engagement?.communicationTemplateType
+  );
+
+  const templateCategory = getFirstValue(
+    engagement?.templateCategory,
+    engagement?.categoryName,
+    engagement?.category
+  );
+
+  const communicationSource = getFirstValue(
+    engagement?.communicationSource,
+    engagement?.source
+  );
+
+  const hasTemplate =
+    Boolean(engagement?.templateId || templateName) ||
+    communicationSource === "template" ||
+    engagement?.isTemplateCommunication === true;
+
+  const emailSubject = getFirstValue(
+    engagement?.emailSubject,
+    channelKey === "email" ? engagement?.subject : ""
+  );
 
   const agentId = getAgentId(engagement, agent);
 
@@ -418,6 +613,15 @@ export default function EngagementCard({
               {engagement?.status || "logged"}
             </span>
 
+            <CommunicationSentBadge engagement={engagement} />
+
+            {hasTemplate && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-purple-50 px-2 py-0.5 text-[11px] font-semibold text-purple-700 border border-purple-100">
+                <Sparkles className="w-3 h-3" />
+                Template
+              </span>
+            )}
+
             {sharedAssets.length > 0 && (
               <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700 border border-blue-100">
                 <Package className="w-3 h-3" />
@@ -444,9 +648,8 @@ export default function EngagementCard({
               className="text-gray-400 hover:text-yellow-500"
             >
               <Star
-                className={`w-4 h-4 ${
-                  pinned ? "text-yellow-500" : "text-gray-300"
-                }`}
+                className={`w-4 h-4 ${pinned ? "text-yellow-500" : "text-gray-300"
+                  }`}
                 fill={pinned ? "currentColor" : "none"}
               />
             </button>
@@ -465,6 +668,72 @@ export default function EngagementCard({
               {engagement.destinationName}
             </span>
           </button>
+        )}
+
+        {/* TEMPLATE INFO */}
+        {hasTemplate && (
+          <div className="rounded-xl border border-purple-100 bg-purple-50/50 px-3 py-2">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-purple-700">
+                  Template Used
+                </p>
+
+                <p className="truncate text-sm font-semibold text-gray-900 mt-0.5">
+                  {templateName || "Communication Template"}
+                </p>
+
+                {templateCategory && (
+                  <p className="truncate text-[11px] text-purple-700 mt-0.5">
+                    {templateCategory}
+                  </p>
+                )}
+              </div>
+
+              <span className="shrink-0 rounded-full bg-white border border-purple-100 px-2 py-0.5 text-[11px] font-semibold text-purple-700">
+                {getTemplateTypeLabel(templateType)}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* COMMUNICATION SENT INFO */}
+        {communicationSent && (
+          <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 px-3 py-2">
+            <div className="flex items-start gap-2">
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-emerald-800">
+                  {getCommunicationSentLabel(engagement)}
+                </p>
+
+                <p className="mt-0.5 truncate text-[11px] text-emerald-700">
+                  {templateName || engagement?.lastCommunicationTemplateName
+                    ? `Template: ${templateName || engagement.lastCommunicationTemplateName}`
+                    : "Custom communication was sent."}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* EMAIL SUBJECT */}
+        {channelKey === "email" && emailSubject && (
+          <div className="rounded-lg border border-blue-100 bg-blue-50/50 px-3 py-2">
+            <div className="flex items-start gap-2">
+              <FileText className="w-3.5 h-3.5 text-blue-600 mt-0.5 shrink-0" />
+
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold text-blue-700">
+                  Email Subject
+                </p>
+                <p className="text-xs text-gray-800 truncate">
+                  {emailSubject}
+                </p>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* MESSAGE */}
@@ -535,10 +804,16 @@ export default function EngagementCard({
                         {getAssetTitle(asset)}
                       </p>
 
-                      <p className="truncate text-[11px] text-gray-500">
-                        {asset.categoryName || asset.assetType || "Asset"} · v
-                        {asset.currentVersion || 1}
-                      </p>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold text-gray-600">
+                          {getAssetTypeLabel(asset)}
+                        </span>
+
+                        <p className="truncate text-[11px] text-gray-500">
+                          {asset.categoryName || "Asset"} · v
+                          {asset.currentVersion || 1}
+                        </p>
+                      </div>
                     </div>
 
                     <div className="flex shrink-0 items-center gap-2">
@@ -664,9 +939,8 @@ export default function EngagementCard({
 
         {/* ACTIONS */}
         <div
-          className={`grid gap-2 pt-1 ${
-            showSendCommunication ? "grid-cols-3" : "grid-cols-2"
-          }`}
+          className={`grid gap-2 pt-1 ${showSendCommunication ? "grid-cols-3" : "grid-cols-2"
+            }`}
         >
           <button
             type="button"
@@ -684,7 +958,11 @@ export default function EngagementCard({
               className="py-1.5 rounded-md text-xs font-medium bg-blue-600 text-white flex items-center justify-center gap-1 hover:bg-blue-700"
             >
               <Send className="w-3.5 h-3.5" />
-              Send
+              {communicationSent
+                ? "Send Again"
+                : engagement?.intentCode
+                  ? "Send Suggested"
+                  : "Send"}
             </button>
           )}
 

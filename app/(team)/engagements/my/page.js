@@ -5,7 +5,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   collection,
   onSnapshot,
-  orderBy,
   query,
   where
 } from "firebase/firestore";
@@ -16,9 +15,8 @@ import {
   CalendarDays,
   CheckCircle2,
   ExternalLink,
-  MessageCircle,
   Package,
-  TrendingUp,
+  Timer,
   UserRound
 } from "lucide-react";
 
@@ -39,6 +37,7 @@ const DEFAULT_FILTERS = {
   spoc: "",
   destination: "",
   channel: "all",
+  relation: "all",
   dateFrom: "",
   dateTo: ""
 };
@@ -58,6 +57,12 @@ const getValidDate = value => {
 
   if (value instanceof Date) {
     return Number.isNaN(value.getTime()) ? null : value;
+  }
+
+  if (typeof value === "number") {
+    const msValue = value < 10000000000 ? value * 1000 : value;
+    const date = new Date(msValue);
+    return Number.isNaN(date.getTime()) ? null : date;
   }
 
   const parsed = new Date(value);
@@ -163,9 +168,7 @@ const getSpocName = engagement =>
 
 const getDestinationName = (engagement = {}) => {
   if (Array.isArray(engagement?.destinationNames)) {
-    return engagement.destinationNames
-      .filter(Boolean)
-      .join(", ");
+    return engagement.destinationNames.filter(Boolean).join(", ");
   }
 
   if (Array.isArray(engagement?.destinations)) {
@@ -243,6 +246,169 @@ const getChannelLabel = channel => {
 
   return labels[channel] || channel || "Other";
 };
+
+/* =========================
+   FOLLOW-UP HELPERS
+========================= */
+function getFollowUpDate(engagement = {}) {
+  return (
+    engagement?.nextFollowUpAt ||
+    engagement?.nextActionDueAt ||
+    engagement?.followUpDate ||
+    engagement?.nextFollowUpDate ||
+    engagement?.nextActionDate ||
+    engagement?.scheduledAt ||
+    engagement?.reminderAt ||
+    engagement?.dueAt ||
+    engagement?.tentativeMeetingDate ||
+    engagement?.meetingAt ||
+    engagement?.nextFollowUpAtMs ||
+    engagement?.nextActionDueAtMs ||
+    null
+  );
+}
+
+function hasFollowUpDate(engagement = {}) {
+  return Boolean(getFollowUpDate(engagement));
+}
+
+function isTodayDate(value) {
+  const key = getLocalDateKey(value);
+  if (!key || key === "unknown") return false;
+
+  return key === getLocalDateKey(new Date());
+}
+
+function isOverdueDate(value) {
+  const key = getLocalDateKey(value);
+  if (!key || key === "unknown") return false;
+
+  return key < getLocalDateKey(new Date());
+}
+
+function formatFollowUpDate(value) {
+  const date = getValidDate(value);
+  if (!date) return "No date";
+
+  return date.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric"
+  });
+}
+
+function formatFollowUpTime(value) {
+  const date = getValidDate(value);
+  if (!date) return "";
+
+  return date.toLocaleTimeString("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function isDoneFollowUpStatus(value = "") {
+  return [
+    "done",
+    "completed",
+    "closed",
+    "cancelled",
+    "canceled",
+    "deleted"
+  ].includes(normalize(value));
+}
+
+function isPendingEngagementFollowUp(engagement = {}) {
+  if (engagement?.deleted === true || engagement?.isDeleted === true) {
+    return false;
+  }
+
+  const requiresFollowUp =
+    engagement?.requiresFollowUp === true ||
+    engagement?.followUpRequired === true ||
+    engagement?.needsFollowUp === true;
+
+  if (!requiresFollowUp) return false;
+
+  if (
+    engagement?.followUpCompleted === true ||
+    engagement?.followUpDone === true ||
+    engagement?.followUpCompletedAt
+  ) {
+    return false;
+  }
+
+  const followUpStatus =
+    engagement?.followUpStatus ||
+    engagement?.followUpState ||
+    "";
+
+  if (isDoneFollowUpStatus(followUpStatus)) return false;
+
+  return hasFollowUpDate(engagement);
+}
+
+function isMissingFollowUpDate(engagement = {}) {
+  if (engagement?.deleted === true || engagement?.isDeleted === true) {
+    return false;
+  }
+
+  const requiresFollowUp =
+    engagement?.requiresFollowUp === true ||
+    engagement?.followUpRequired === true ||
+    engagement?.needsFollowUp === true;
+
+  return requiresFollowUp && !hasFollowUpDate(engagement);
+}
+
+function getFollowUpSummary(engagement = {}) {
+  return (
+    engagement?.nextAction ||
+    engagement?.messageText ||
+    engagement?.message ||
+    engagement?.customRemark ||
+    engagement?.outcomeLabel ||
+    "Follow-up pending"
+  );
+}
+
+/* =========================
+   RELATION HELPERS
+========================= */
+function getMyRelation(engagement = {}, userUid = "") {
+  const createdByMe = Boolean(userUid && engagement?.createdByUid === userUid);
+  const assignedToMe = Boolean(userUid && engagement?.assignedToUid === userUid);
+
+  if (createdByMe && assignedToMe) {
+    return {
+      key: "both",
+      label: "Created & Assigned",
+      className: "border-violet-100 bg-violet-50 text-violet-700"
+    };
+  }
+
+  if (assignedToMe) {
+    return {
+      key: "assigned",
+      label: "Assigned to Me",
+      className: "border-emerald-100 bg-emerald-50 text-emerald-700"
+    };
+  }
+
+  if (createdByMe) {
+    return {
+      key: "created",
+      label: "Created by Me",
+      className: "border-blue-100 bg-blue-50 text-blue-700"
+    };
+  }
+
+  return {
+    key: "other",
+    label: "My Work",
+    className: "border-gray-100 bg-gray-50 text-gray-600"
+  };
+}
 
 /* =========================
    ASSET HELPERS
@@ -414,21 +580,21 @@ function MiniStatCard({ icon: Icon, label, value, hint }) {
   return (
     <div className="rounded-2xl border border-gray-200 bg-white p-4">
       <div className="flex items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <p className="text-xs font-medium text-gray-500">
             {label}
           </p>
-          <p className="mt-1 text-xl font-semibold text-gray-900">
+          <p className="mt-1 truncate text-xl font-semibold text-gray-900">
             {value}
           </p>
           {hint && (
-            <p className="mt-1 text-[11px] text-gray-400 truncate">
+            <p className="mt-1 truncate text-[11px] text-gray-400">
               {hint}
             </p>
           )}
         </div>
 
-        <div className="h-9 w-9 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
           <Icon size={17} />
         </div>
       </div>
@@ -437,13 +603,198 @@ function MiniStatCard({ icon: Icon, label, value, hint }) {
 }
 
 /* =========================
+   RELATION TOGGLE
+========================= */
+function RelationToggle({ value, onChange, summary }) {
+  const items = [
+    {
+      label: "All My Work",
+      value: "all",
+      count: summary.total
+    },
+    {
+      label: "Created by Me",
+      value: "created",
+      count: summary.createdByMe
+    },
+    {
+      label: "Assigned to Me",
+      value: "assigned",
+      count: summary.assignedToMe
+    }
+  ];
+
+  return (
+    <section className="rounded-2xl border border-gray-200 bg-white p-3">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-gray-900">
+            Work View
+          </p>
+          <p className="mt-0.5 text-xs text-gray-500">
+            Switch between engagements you created and engagements assigned to you.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {items.map(item => (
+            <button
+              key={item.value}
+              type="button"
+              onClick={() => onChange(item.value)}
+              className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+                value === item.value
+                  ? "border-blue-200 bg-blue-50 text-blue-700"
+                  : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              {item.label}
+              <span
+                className={`rounded-full px-2 py-0.5 text-[11px] ${
+                  value === item.value
+                    ? "bg-blue-100 text-blue-700"
+                    : "bg-gray-100 text-gray-500"
+                }`}
+              >
+                {item.count}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* =========================
+   FOLLOW-UP QUEUE
+========================= */
+function FollowUpQueue({ title, description, items, type = "today" }) {
+  const isOverdue = type === "overdue";
+
+  return (
+    <div className="overflow-hidden rounded-3xl border border-gray-200 bg-white">
+      <div className="border-b border-gray-100 bg-gray-50 px-4 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900">
+              {title}
+            </h2>
+            <p className="mt-0.5 text-xs text-gray-500">
+              {description}
+            </p>
+          </div>
+
+          <span
+            className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+              isOverdue
+                ? "border-red-100 bg-red-50 text-red-700"
+                : "border-blue-100 bg-blue-50 text-blue-700"
+            }`}
+          >
+            {items.length}
+          </span>
+        </div>
+      </div>
+
+      <div className="p-4">
+        {items.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-5 text-center">
+            <CheckCircle2
+              size={24}
+              className="mx-auto text-emerald-600"
+            />
+            <p className="mt-2 text-sm font-semibold text-gray-800">
+              {isOverdue ? "No overdue follow-ups" : "No follow-ups due today"}
+            </p>
+            <p className="mt-1 text-xs text-gray-500">
+              Your engagement follow-up queue is clear.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {items.slice(0, 5).map(item => {
+              const dueAt = getFollowUpDate(item);
+              const agentName = getAgentName(item) || "Travel Agent";
+              const destinationName = getDestinationName(item) || "—";
+
+              return (
+                <div
+                  key={item.id}
+                  className="rounded-2xl border border-gray-200 bg-white p-3 hover:bg-gray-50"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-semibold ${
+                            isOverdue
+                              ? "border-red-100 bg-red-50 text-red-700"
+                              : "border-blue-100 bg-blue-50 text-blue-700"
+                          }`}
+                        >
+                          {isOverdue ? (
+                            <AlertTriangle size={12} />
+                          ) : (
+                            <CalendarDays size={12} />
+                          )}
+                          {isOverdue ? "Overdue" : "Today"}
+                        </span>
+
+                        {item.channel ? (
+                          <span className="rounded-full bg-gray-100 px-2 py-1 text-[11px] font-semibold capitalize text-gray-600">
+                            {getChannelLabel(item.channel)}
+                          </span>
+                        ) : null}
+                      </div>
+
+                      <p className="mt-2 truncate text-sm font-semibold text-gray-900">
+                        {agentName}
+                      </p>
+
+                      <p className="mt-1 text-xs text-gray-500">
+                        {destinationName} • {formatFollowUpDate(dueAt)}{" "}
+                        {formatFollowUpTime(dueAt)}
+                      </p>
+
+                      <p className="mt-2 line-clamp-2 text-xs text-gray-600">
+                        {getFollowUpSummary(item)}
+                      </p>
+                    </div>
+
+                    <Link
+                      href={getViewEngagementHref(item)}
+                      className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                    >
+                      View
+                      <ExternalLink size={12} />
+                    </Link>
+                  </div>
+                </div>
+              );
+            })}
+
+            {items.length > 5 ? (
+              <p className="text-center text-xs font-medium text-gray-500">
+                +{items.length - 5} more follow-ups
+              </p>
+            ) : null}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* =========================
    AGENT PROFILE STATUS BAR
 ========================= */
-function AgentProfileStatusBar({ engagement }) {
+function AgentProfileStatusBar({ engagement, currentUserUid }) {
   const agentName = getAgentName(engagement) || "Travel Agent";
   const spocName = getSpocName(engagement);
   const profile = getProfileCompletion(engagement);
   const profileHref = getTravelAgentProfileHref(engagement);
+  const relation = getMyRelation(engagement, currentUserUid);
 
   return (
     <div className="border-b border-gray-100 bg-gradient-to-r from-gray-50 to-white px-4 py-3 md:px-5">
@@ -469,6 +820,12 @@ function AgentProfileStatusBar({ engagement }) {
                 </p>
               )}
 
+              <span
+                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${relation.className}`}
+              >
+                {relation.label}
+              </span>
+
               {profile.complete ? (
                 <span className="inline-flex items-center gap-1 rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
                   <CheckCircle2 size={12} />
@@ -491,6 +848,9 @@ function AgentProfileStatusBar({ engagement }) {
 
             <p className="mt-1 text-xs text-gray-500">
               {spocName ? `SPOC: ${spocName}` : "SPOC not available"}
+              {engagement?.assignedToName
+                ? ` • Assigned to: ${engagement.assignedToName}`
+                : ""}
             </p>
           </div>
         </div>
@@ -522,7 +882,7 @@ export default function MyEngagementsPage() {
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
 
   /* =========================
-     LOAD MY ENGAGEMENTS
+     LOAD MY / ASSIGNED ENGAGEMENTS
   ========================== */
   useEffect(() => {
     if (loading) return;
@@ -536,35 +896,102 @@ export default function MyEngagementsPage() {
     setLoadingList(true);
     setError("");
 
-    const q = query(
+    const createdQuery = query(
       collection(db, "engagements"),
-      where("createdByUid", "==", user.uid),
-      orderBy("createdAt", "desc")
+      where("createdByUid", "==", user.uid)
     );
 
-    const unsub = onSnapshot(
-      q,
-      snap => {
-        const rows = snap.docs
-          .map(d => ({
-            id: d.id,
-            ...d.data()
-          }))
-          .filter(item => item.deleted !== true && item.isDeleted !== true);
+    const assignedQuery = query(
+      collection(db, "engagements"),
+      where("assignedToUid", "==", user.uid)
+    );
 
-        setEngagements(rows);
+    let createdRows = [];
+    let assignedRows = [];
+    let createdLoaded = false;
+    let assignedLoaded = false;
+
+    function mergeAndSetRows() {
+      const map = new Map();
+
+      [...createdRows, ...assignedRows].forEach(item => {
+        if (item.deleted === true || item.isDeleted === true) return;
+
+        const createdByMe = item.createdByUid === user.uid;
+        const assignedToMe = item.assignedToUid === user.uid;
+
+        map.set(item.id, {
+          ...item,
+          _createdByMe: createdByMe,
+          _assignedToMe: assignedToMe
+        });
+      });
+
+      const rows = Array.from(map.values()).sort((a, b) => {
+        const aDate = getValidDate(a.createdAt)?.getTime?.() || 0;
+        const bDate = getValidDate(b.createdAt)?.getTime?.() || 0;
+        return bDate - aDate;
+      });
+
+      setEngagements(rows);
+
+      if (createdLoaded && assignedLoaded) {
         setLoadingList(false);
+      }
+    }
+
+    const unsubCreated = onSnapshot(
+      createdQuery,
+      snap => {
+        createdRows = snap.docs.map(d => ({
+          id: d.id,
+          ...d.data()
+        }));
+
+        createdLoaded = true;
+        mergeAndSetRows();
       },
       err => {
-        console.error("Failed to load engagements:", err);
-        setError(
-          "Unable to load engagements. Please check Firestore permissions or required index."
+        console.error("Failed to load created engagements:", err);
+
+        createdLoaded = true;
+        setError(prev =>
+          prev ||
+          "Unable to load created engagements. Please check Firestore permissions."
         );
-        setLoadingList(false);
+
+        mergeAndSetRows();
       }
     );
 
-    return () => unsub();
+    const unsubAssigned = onSnapshot(
+      assignedQuery,
+      snap => {
+        assignedRows = snap.docs.map(d => ({
+          id: d.id,
+          ...d.data()
+        }));
+
+        assignedLoaded = true;
+        mergeAndSetRows();
+      },
+      err => {
+        console.error("Failed to load assigned engagements:", err);
+
+        assignedLoaded = true;
+        setError(prev =>
+          prev ||
+          "Unable to load assigned engagements. Please check Firestore permissions."
+        );
+
+        mergeAndSetRows();
+      }
+    );
+
+    return () => {
+      unsubCreated();
+      unsubAssigned();
+    };
   }, [user?.uid, loading]);
 
   /* =========================
@@ -572,7 +999,10 @@ export default function MyEngagementsPage() {
   ========================== */
   const activeFilterCount = useMemo(() => {
     return Object.entries(filters).filter(([key, value]) => {
-      if (key === "channel") return value && value !== "all";
+      if (["channel", "relation"].includes(key)) {
+        return value && value !== "all";
+      }
+
       return Boolean(String(value || "").trim());
     }).length;
   }, [filters]);
@@ -613,6 +1043,17 @@ export default function MyEngagementsPage() {
       const spocName = getSpocName(e);
       const destinationName = getDestinationName(e);
       const createdDate = getValidDate(e.createdAt);
+
+      const createdByMe = e.createdByUid === user?.uid;
+      const assignedToMe = e.assignedToUid === user?.uid;
+
+      if (filters.relation === "created" && !createdByMe) {
+        return false;
+      }
+
+      if (filters.relation === "assigned" && !assignedToMe) {
+        return false;
+      }
 
       if ((fromDate || toDate) && !createdDate) return false;
       if (fromDate && createdDate < fromDate) return false;
@@ -660,6 +1101,8 @@ export default function MyEngagementsPage() {
           spocName,
           destinationName,
           e.createdByName,
+          e.assignedToName,
+          e.assignedToEmail,
           getSharedAssetSearchText(e)
         ]
           .map(normalize)
@@ -672,7 +1115,38 @@ export default function MyEngagementsPage() {
 
       return true;
     });
-  }, [engagements, filters, dateRangeError]);
+  }, [engagements, filters, dateRangeError, user?.uid]);
+
+  /* =========================
+     FOLLOW-UP LISTS
+  ========================== */
+  const pendingFollowUps = useMemo(() => {
+    return filteredEngagements
+      .filter(item => isPendingEngagementFollowUp(item))
+      .sort((a, b) => {
+        const aDate = getValidDate(getFollowUpDate(a))?.getTime?.() || 0;
+        const bDate = getValidDate(getFollowUpDate(b))?.getTime?.() || 0;
+        return aDate - bDate;
+      });
+  }, [filteredEngagements]);
+
+  const todayFollowUps = useMemo(() => {
+    return pendingFollowUps.filter(item =>
+      isTodayDate(getFollowUpDate(item))
+    );
+  }, [pendingFollowUps]);
+
+  const overdueFollowUps = useMemo(() => {
+    return pendingFollowUps.filter(item =>
+      isOverdueDate(getFollowUpDate(item))
+    );
+  }, [pendingFollowUps]);
+
+  const missingFollowUpDateCount = useMemo(() => {
+    return filteredEngagements.filter(item =>
+      isMissingFollowUpDate(item)
+    ).length;
+  }, [filteredEngagements]);
 
   /* =========================
      SUMMARY
@@ -685,7 +1159,15 @@ export default function MyEngagementsPage() {
       return d && isSameDay(d, today);
     }).length;
 
-    const channelMap = engagements.reduce((acc, e) => {
+    const createdByMe = engagements.filter(
+      e => e.createdByUid === user?.uid
+    ).length;
+
+    const assignedToMe = engagements.filter(
+      e => e.assignedToUid === user?.uid
+    ).length;
+
+    const channelMap = filteredEngagements.reduce((acc, e) => {
       const key = e.channel || "other";
       acc[key] = (acc[key] || 0) + 1;
       return acc;
@@ -702,13 +1184,25 @@ export default function MyEngagementsPage() {
     return {
       total: engagements.length,
       filtered: filteredEngagements.length,
+      createdByMe,
+      assignedToMe,
       today: todaysCount,
+      todayFollowUps: todayFollowUps.length,
+      overdueFollowUps: overdueFollowUps.length,
+      missingFollowUpDate: missingFollowUpDateCount,
       topChannel: topChannel
         ? `${getChannelLabel(topChannel[0])} (${topChannel[1]})`
         : "—",
       sharedAssets: filteredAssetCount
     };
-  }, [engagements, filteredEngagements]);
+  }, [
+    engagements,
+    filteredEngagements,
+    user?.uid,
+    todayFollowUps.length,
+    overdueFollowUps.length,
+    missingFollowUpDateCount
+  ]);
 
   /* =========================
      GROUP BY DATE
@@ -744,13 +1238,13 @@ export default function MyEngagementsPage() {
   if (loading || loadingList) {
     return (
       <main className="min-h-screen bg-gray-50">
-        <div className="max-w-screen-2xl mx-auto px-4 py-6 space-y-4">
+        <div className="mx-auto max-w-screen-2xl space-y-4 px-4 py-6">
           <div className="rounded-3xl border border-gray-200 bg-white p-6">
-            <div className="h-6 w-52 bg-gray-200 rounded mb-3 animate-pulse" />
-            <div className="h-4 w-80 bg-gray-100 rounded animate-pulse" />
+            <div className="mb-3 h-6 w-52 animate-pulse rounded bg-gray-200" />
+            <div className="h-4 w-80 animate-pulse rounded bg-gray-100" />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
             <CardSkeleton />
             <CardSkeleton />
             <CardSkeleton />
@@ -766,63 +1260,76 @@ export default function MyEngagementsPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-50">
-      <div className="max-w-screen-2xl mx-auto px-4 py-6 space-y-6">
+    <main className="min-h-screen w-full">
+      <div className="mx-auto w-full space-y-6 px-4 py-6">
         {/* ================= HERO HEADER ================= */}
-        <section className="rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 overflow-hidden">
+        <section className="overflow-hidden rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700">
           <div className="p-5 md:p-6">
             <div className="flex items-start gap-4">
-              <div className="h-12 w-12 rounded-2xl bg-white/15 text-white flex items-center justify-center shrink-0">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/15 text-white">
                 <Activity size={24} />
               </div>
 
               <div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white/90 mb-3">
+                <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white/90">
                   <Activity size={14} />
-                  Team Activity Timeline
+                  My Work Timeline
                 </div>
 
                 <h1 className="text-2xl font-semibold tracking-tight text-white">
                   My Engagements
                 </h1>
 
-                <p className="mt-1 text-sm text-blue-100 max-w-2xl leading-6">
-                  View your engagement history, shared assets, package links,
-                  destination communication and travel agent profile status.
+                <p className="mt-1 max-w-2xl text-sm leading-6 text-blue-100">
+                  View engagements created by you, assigned to you, follow-up
+                  queue, shared assets, package links, destination communication
+                  and travel agent profile status.
                 </p>
               </div>
             </div>
           </div>
         </section>
 
+        {/* ================= RELATION TOGGLE ================= */}
+        <RelationToggle
+          value={filters.relation}
+          summary={summary}
+          onChange={value =>
+            setFilters(prev => ({
+              ...prev,
+              relation: value
+            }))
+          }
+        />
+
         {/* ================= KPI STRIP ================= */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
+        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <MiniStatCard
             icon={BarChart3}
-            label="Total Engagements"
+            label="Total Work"
             value={summary.total}
-            hint="All records created by you"
-          />
-
-          <MiniStatCard
-            icon={TrendingUp}
-            label="Filtered Results"
-            value={summary.filtered}
-            hint="Matching current filters"
+            hint="Created or assigned to you"
           />
 
           <MiniStatCard
             icon={CalendarDays}
-            label="Today"
-            value={summary.today}
-            hint="Created today"
+            label="Today's Follow-ups"
+            value={summary.todayFollowUps}
+            hint="Engagement follow-ups due today"
           />
 
           <MiniStatCard
-            icon={MessageCircle}
-            label="Top Channel"
-            value={summary.topChannel}
-            hint="Most used channel"
+            icon={Timer}
+            label="Overdue"
+            value={summary.overdueFollowUps}
+            hint="Follow-ups past due date"
+          />
+
+          <MiniStatCard
+            icon={AlertTriangle}
+            label="Missing Date"
+            value={summary.missingFollowUpDate}
+            hint="Follow-up required but no date"
           />
 
           <MiniStatCard
@@ -833,10 +1340,27 @@ export default function MyEngagementsPage() {
           />
         </section>
 
+        {/* ================= FOLLOW-UP QUEUE ================= */}
+        <section className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+          <FollowUpQueue
+            title="Today's Follow-up Queue"
+            description="Engagement follow-ups scheduled for today."
+            items={todayFollowUps}
+            type="today"
+          />
+
+          <FollowUpQueue
+            title="Overdue Follow-up Queue"
+            description="Pending engagement follow-ups that crossed their due date."
+            items={overdueFollowUps}
+            type="overdue"
+          />
+        </section>
+
         {/* ================= MAIN GRID ================= */}
-        <section className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+        <section className="grid grid-cols-1 gap-5 xl:grid-cols-12">
           {/* LEFT: LIST */}
-          <div className="xl:col-span-8 2xl:col-span-9 space-y-5">
+          <div className="space-y-5 xl:col-span-8 2xl:col-span-9">
             {error && (
               <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                 {error}
@@ -856,8 +1380,8 @@ export default function MyEngagementsPage() {
                   title="No engagements found"
                   description={
                     engagements.length === 0
-                      ? "You have not created any engagements yet."
-                      : "Try changing your date range, search text, asset name or filters."
+                      ? "No engagements are created by you or assigned to you yet."
+                      : "Try changing your work view, date range, search text, asset name or filters."
                   }
                 />
               </div>
@@ -868,7 +1392,7 @@ export default function MyEngagementsPage() {
                 {groupedEngagements.map(group => (
                   <section key={group.key} className="relative">
                     {/* DATE HEADER */}
-                    <div className="sticky top-0 z-10 bg-gray-50/90 backdrop-blur py-2">
+                    <div className="sticky top-0 z-10 bg-gray-50/90 py-2 backdrop-blur">
                       <div className="flex items-center gap-3">
                         <div className="rounded-full border border-gray-200 bg-white px-3 py-1.5">
                           <p className="text-xs font-semibold text-gray-700">
@@ -881,13 +1405,13 @@ export default function MyEngagementsPage() {
                           {group.items.length > 1 ? "s" : ""}
                         </p>
 
-                        <div className="flex-1 h-px bg-gray-200" />
+                        <div className="h-px flex-1 bg-gray-200" />
                       </div>
                     </div>
 
                     {/* TIMELINE LIST */}
                     <div className="relative mt-3">
-                      <div className="absolute left-4 top-4 bottom-4 w-px bg-gray-200 hidden sm:block" />
+                      <div className="absolute bottom-4 left-4 top-4 hidden w-px bg-gray-200 sm:block" />
 
                       <div className="space-y-3">
                         {group.items.map(e => {
@@ -895,10 +1419,13 @@ export default function MyEngagementsPage() {
 
                           return (
                             <div key={e.id} className="relative sm:pl-10">
-                              <div className="absolute left-[10px] top-6 h-3 w-3 rounded-full bg-white border-2 border-blue-500 hidden sm:block" />
+                              <div className="absolute left-[10px] top-6 hidden h-3 w-3 rounded-full border-2 border-blue-500 bg-white sm:block" />
 
-                              <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden hover:shadow-md transition-shadow">
-                                <AgentProfileStatusBar engagement={e} />
+                              <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white transition-shadow hover:shadow-md">
+                                <AgentProfileStatusBar
+                                  engagement={e}
+                                  currentUserUid={user?.uid}
+                                />
 
                                 <EngagementCard
                                   engagement={e}

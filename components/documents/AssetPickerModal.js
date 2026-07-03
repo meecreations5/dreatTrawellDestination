@@ -15,6 +15,7 @@ import {
   Loader2,
   Package,
   Search,
+  Video,
   X
 } from "lucide-react";
 
@@ -27,6 +28,7 @@ import { db } from "@/lib/firebase";
 const ASSET_TYPES = [
   { value: "all", label: "All Types" },
   { value: "document", label: "Document" },
+  { value: "pdf", label: "PDF" },
   { value: "presentation", label: "Presentation" },
   { value: "spreadsheet", label: "Spreadsheet" },
   { value: "image", label: "Image" },
@@ -79,7 +81,7 @@ const VALIDITY_OPTIONS = [
 ];
 
 /* =========================
-   HELPERS
+   BASIC HELPERS
 ========================= */
 
 function normalize(value) {
@@ -115,11 +117,20 @@ function getAssetUrl(asset) {
 }
 
 function getAssetId(asset) {
-  return getFirstValue(asset?.assetId, asset?.id, asset?.documentId, getAssetUrl(asset));
+  return getFirstValue(
+    asset?.assetId,
+    asset?.id,
+    asset?.documentId,
+    getAssetUrl(asset)
+  );
 }
 
-function getAssetType(asset) {
+function getRawAssetType(asset) {
   return asset?.assetType || asset?.documentType || "document";
+}
+
+function getChannelUsage(asset) {
+  return Array.isArray(asset?.channelUsage) ? asset.channelUsage : [];
 }
 
 function getUsageTypeLabel(value) {
@@ -138,9 +149,156 @@ function getAssetTypeLabel(value) {
   );
 }
 
-function getChannelUsage(asset) {
-  return Array.isArray(asset?.channelUsage) ? asset.channelUsage : [];
+/* =========================
+   FILE / MEDIA HELPERS
+========================= */
+
+function isYoutubeUrl(url = "") {
+  const value = String(url || "").toLowerCase();
+
+  return (
+    value.includes("youtube.com/watch") ||
+    value.includes("youtu.be/") ||
+    value.includes("youtube.com/embed/")
+  );
 }
+
+function getYoutubeEmbedUrl(url = "") {
+  const value = String(url || "").trim();
+
+  if (!value) return "";
+
+  if (value.includes("youtube.com/embed/")) {
+    return value;
+  }
+
+  const watchMatch = value.match(/[?&]v=([^&]+)/);
+  if (watchMatch?.[1]) {
+    return `https://www.youtube.com/embed/${watchMatch[1]}`;
+  }
+
+  const shortMatch = value.match(/youtu\.be\/([^?&]+)/);
+  if (shortMatch?.[1]) {
+    return `https://www.youtube.com/embed/${shortMatch[1]}`;
+  }
+
+  return "";
+}
+
+function isImageAsset(asset) {
+  const type = normalize(getRawAssetType(asset));
+  const fileType = normalize(asset?.currentFileType || asset?.fileType);
+  const extension = normalize(
+    asset?.currentFileExtension || asset?.fileExtension
+  );
+
+  return (
+    type === "image" ||
+    fileType.startsWith("image/") ||
+    ["jpg", "jpeg", "png", "webp"].includes(extension)
+  );
+}
+
+function isPdfAsset(asset) {
+  const type = normalize(getRawAssetType(asset));
+  const fileType = normalize(asset?.currentFileType || asset?.fileType);
+  const extension = normalize(
+    asset?.currentFileExtension || asset?.fileExtension
+  );
+
+  return (
+    type === "pdf" ||
+    type.includes("pdf") ||
+    fileType === "application/pdf" ||
+    extension === "pdf"
+  );
+}
+
+function isVideoAsset(asset) {
+  const type = normalize(getRawAssetType(asset));
+  const fileType = normalize(asset?.currentFileType || asset?.fileType);
+  const extension = normalize(
+    asset?.currentFileExtension || asset?.fileExtension
+  );
+  const url = getAssetUrl(asset);
+
+  return (
+    type === "video" ||
+    type.includes("video") ||
+    fileType.startsWith("video/") ||
+    ["mp4", "mov", "webm", "mkv"].includes(extension) ||
+    isYoutubeUrl(url)
+  );
+}
+
+function isPresentationAsset(asset) {
+  const type = normalize(getRawAssetType(asset));
+  const extension = normalize(
+    asset?.currentFileExtension || asset?.fileExtension
+  );
+
+  return (
+    type === "presentation" ||
+    ["ppt", "pptx"].includes(extension)
+  );
+}
+
+function isSpreadsheetAsset(asset) {
+  const type = normalize(getRawAssetType(asset));
+  const extension = normalize(
+    asset?.currentFileExtension || asset?.fileExtension
+  );
+
+  return (
+    type === "spreadsheet" ||
+    ["xls", "xlsx", "csv"].includes(extension)
+  );
+}
+
+function getNormalizedAssetType(asset) {
+  const type = normalize(getRawAssetType(asset));
+  const url = getAssetUrl(asset);
+
+  if (isImageAsset(asset)) return "image";
+  if (isPdfAsset(asset)) return "pdf";
+  if (isVideoAsset(asset)) return "video";
+  if (isPresentationAsset(asset)) return "presentation";
+  if (isSpreadsheetAsset(asset)) return "spreadsheet";
+  if (type === "link" || (!asset?.fileName && url)) return "link";
+  if (type === "other") return "other";
+
+  return "document";
+}
+
+function getAssetPreviewIcon(asset) {
+  const type = getNormalizedAssetType(asset);
+
+  if (type === "image") {
+    return <ImageIcon className="h-10 w-10 text-blue-500" />;
+  }
+
+  if (type === "video") {
+    return <Video className="h-10 w-10 text-purple-500" />;
+  }
+
+  if (type === "pdf") {
+    return <FileText className="h-10 w-10 text-red-500" />;
+  }
+
+  if (type === "presentation") {
+    return <Package className="h-10 w-10 text-orange-500" />;
+  }
+
+  if (type === "spreadsheet") {
+    return <FileText className="h-10 w-10 text-green-600" />;
+  }
+
+  return <Package className="h-10 w-10 text-blue-500" />;
+}
+
+/* =========================
+   DATE / STATUS HELPERS
+========================= */
 
 function isExpired(asset) {
   if (!asset?.validTo) return false;
@@ -168,20 +326,6 @@ function getEffectiveStatus(asset) {
   if (asset?.status) return asset.status;
   if (asset?.active === false) return "draft";
   return "active";
-}
-
-function isImageAsset(asset) {
-  const type = normalize(getAssetType(asset));
-  const fileType = normalize(asset?.currentFileType || asset?.fileType);
-  const extension = normalize(
-    asset?.currentFileExtension || asset?.fileExtension
-  );
-
-  return (
-    type === "image" ||
-    fileType.startsWith("image/") ||
-    ["jpg", "jpeg", "png", "webp"].includes(extension)
-  );
 }
 
 function formatBytes(bytes) {
@@ -215,17 +359,26 @@ function formatDateOnly(value) {
   }
 }
 
+/* =========================
+   SELECTION NORMALIZATION
+========================= */
+
 function normalizeAssetForSelection(asset) {
+  const normalizedType = getNormalizedAssetType(asset);
+  const assetUrl = getAssetUrl(asset);
+  const youtube = isYoutubeUrl(assetUrl);
+
   return {
     assetId: getAssetId(asset),
     title: getAssetTitle(asset),
-    url: getAssetUrl(asset),
+    url: assetUrl,
 
     categoryId: asset?.categoryId || "",
     categoryName: asset?.categoryName || "",
     categorySlug: asset?.categorySlug || "",
 
-    assetType: getAssetType(asset),
+    assetType: normalizedType,
+    rawAssetType: getRawAssetType(asset),
     usageType: asset?.usageType || "",
     visibility: asset?.visibility || "team",
 
@@ -247,7 +400,25 @@ function normalizeAssetForSelection(asset) {
     channelUsage: getChannelUsage(asset),
     audience: asset?.audience || "travel_agent",
 
-    sharedAs: isImageAsset(asset) ? "image_link" : "file_link",
+    sharedAs:
+      normalizedType === "image"
+        ? "image_link"
+        : normalizedType === "video"
+          ? "video_link"
+          : normalizedType === "pdf"
+            ? "pdf_link"
+            : normalizedType === "link"
+              ? "external_link"
+              : "file_link",
+
+    shareMode: "link",
+
+    isImage: normalizedType === "image",
+    isPdf: normalizedType === "pdf",
+    isVideo: normalizedType === "video",
+    isYoutube: youtube,
+    youtubeEmbedUrl: youtube ? getYoutubeEmbedUrl(assetUrl) : "",
+
     selectedAt: new Date().toISOString()
   };
 }
@@ -454,20 +625,29 @@ export default function AssetPickerModal({
   const filteredAssets = useMemo(() => {
     const q = normalize(search);
 
+    const selectedDestination = destinations.find(
+      destination => destination.id === destinationFilter
+    );
+
+    const selectedDestinationName = normalize(selectedDestination?.name);
+
     return mergedAssets.filter(asset => {
       const status = getEffectiveStatus(asset);
       const channelUsage = getChannelUsage(asset);
+      const normalizedAssetType = getNormalizedAssetType(asset);
 
       if (asset.deleted === true || asset.isDeleted === true) return false;
       if (asset.archived === true) return false;
       if (status !== "active") return false;
       if (!getAssetUrl(asset)) return false;
 
+      const assetDestinationName = normalize(asset.destinationName);
+
       const matchesCategory =
         categoryId === "all" || asset.categoryId === categoryId;
 
       const matchesType =
-        assetType === "all" || getAssetType(asset) === assetType;
+        assetType === "all" || normalizedAssetType === assetType;
 
       const matchesUsage =
         usageTypeFilter === "all" || asset.usageType === usageTypeFilter;
@@ -475,7 +655,12 @@ export default function AssetPickerModal({
       const matchesDestination =
         destinationFilter === "all" ||
         asset.destinationId === destinationFilter ||
-        !asset.destinationId;
+        (
+          selectedDestinationName &&
+          assetDestinationName &&
+          assetDestinationName === selectedDestinationName
+        ) ||
+        (!asset.destinationId && !asset.destinationName);
 
       const matchesChannel =
         channelFilter === "all" ||
@@ -498,11 +683,14 @@ export default function AssetPickerModal({
         asset.description,
         asset.categoryName,
         asset.assetType,
+        asset.documentType,
+        normalizedAssetType,
         asset.usageType,
         getUsageTypeLabel(asset.usageType),
         asset.destinationName,
         asset.currentFileName,
         asset.currentUrl,
+        asset.url,
         Array.isArray(asset.tags) ? asset.tags.join(" ") : ""
       ]
         .map(normalize)
@@ -530,7 +718,8 @@ export default function AssetPickerModal({
     destinationFilter,
     channelFilter,
     approvalFilter,
-    validityFilter
+    validityFilter,
+    destinations
   ]);
 
   const selectedAssetObjects = useMemo(() => {
@@ -596,7 +785,8 @@ export default function AssetPickerModal({
                 {title}
               </h2>
               <p className="text-xs text-gray-500 mt-0.5">
-                Select approved and active assets from the document library.
+                Select approved active assets. For WhatsApp, media is shared as
+                links unless WhatsApp Business API is connected.
               </p>
             </div>
 
@@ -609,6 +799,15 @@ export default function AssetPickerModal({
               <X className="h-5 w-5" />
             </button>
           </div>
+
+          {/* WHATSAPP NOTE */}
+          {channel === "whatsapp" && (
+            <div className="border-b border-amber-100 bg-amber-50 px-5 py-2 text-xs text-amber-700">
+              WhatsApp Web can open the message text only. Selected images,
+              PDFs and videos will be added as links. Attach media manually in
+              WhatsApp when required.
+            </div>
+          )}
 
           {/* FILTERS */}
           <div className="border-b border-gray-100 px-5 py-4 space-y-3">
@@ -799,6 +998,7 @@ export default function AssetPickerModal({
                   const notYetValid = isNotYetValid(asset);
                   const channelUsage = getChannelUsage(asset);
                   const copied = copiedAssetId === id;
+                  const normalizedAssetType = getNormalizedAssetType(asset);
 
                   return (
                     <div
@@ -827,13 +1027,7 @@ export default function AssetPickerModal({
                           </div>
                         ) : (
                           <div className="aspect-video bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center">
-                            {getAssetType(asset) === "image" ? (
-                              <ImageIcon className="h-10 w-10 text-blue-500" />
-                            ) : getAssetType(asset) === "document" ? (
-                              <FileText className="h-10 w-10 text-blue-500" />
-                            ) : (
-                              <Package className="h-10 w-10 text-blue-500" />
-                            )}
+                            {getAssetPreviewIcon(asset)}
                           </div>
                         )}
 
@@ -846,7 +1040,7 @@ export default function AssetPickerModal({
 
                               <p className="text-xs text-gray-500 mt-1 truncate">
                                 {asset.categoryName || "Uncategorized"} ·{" "}
-                                {getAssetTypeLabel(getAssetType(asset))}
+                                {getAssetTypeLabel(normalizedAssetType)}
                               </p>
                             </div>
 
@@ -882,11 +1076,15 @@ export default function AssetPickerModal({
                             )}
 
                             <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">
+                              {getAssetTypeLabel(normalizedAssetType)}
+                            </span>
+
+                            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">
                               v{asset.currentVersion || 1}
                             </span>
 
                             <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">
-                              {formatBytes(asset.currentFileSize)}
+                              {formatBytes(asset.currentFileSize || asset.fileSize)}
                             </span>
 
                             {asset.approvedForUse !== false ? (
@@ -1046,14 +1244,35 @@ export default function AssetPickerModal({
                   alt={getAssetTitle(previewAsset)}
                   className="mx-auto max-h-[72vh] max-w-full rounded-lg object-contain"
                 />
+              ) : isYoutubeUrl(getAssetUrl(previewAsset)) ? (
+                <div className="mx-auto w-full max-w-4xl">
+                  <div className="aspect-video overflow-hidden rounded-xl bg-black">
+                    <iframe
+                      src={getYoutubeEmbedUrl(getAssetUrl(previewAsset))}
+                      title={getAssetTitle(previewAsset)}
+                      className="h-full w-full"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                      allowFullScreen
+                    />
+                  </div>
+                </div>
+              ) : isVideoAsset(previewAsset) ? (
+                <video
+                  src={getAssetUrl(previewAsset)}
+                  controls
+                  className="mx-auto max-h-[72vh] max-w-full rounded-lg bg-black"
+                />
               ) : (
                 <div className="mx-auto max-w-xl rounded-2xl bg-white p-8 text-center">
-                  <Package className="mx-auto h-12 w-12 text-blue-500" />
+                  {getAssetPreviewIcon(previewAsset)}
+
                   <h4 className="mt-3 text-sm font-semibold text-gray-900">
                     {getAssetTitle(previewAsset)}
                   </h4>
+
                   <p className="mt-1 text-xs text-gray-500">
-                    Preview is available for image assets. Open this file in a new tab to view it.
+                    Preview is available for images, YouTube links and direct
+                    video files. Open this asset in a new tab to view it.
                   </p>
 
                   <a
@@ -1070,8 +1289,11 @@ export default function AssetPickerModal({
             </div>
 
             <div className="border-t border-gray-100 px-5 py-4 flex items-center justify-between gap-3">
-              <p className="text-xs text-gray-500">
-                {previewAsset.currentFileName || previewAsset.fileName || "Asset"}
+              <p className="text-xs text-gray-500 truncate">
+                {previewAsset.currentFileName ||
+                  previewAsset.fileName ||
+                  getAssetUrl(previewAsset) ||
+                  "Asset"}
               </p>
 
               <button

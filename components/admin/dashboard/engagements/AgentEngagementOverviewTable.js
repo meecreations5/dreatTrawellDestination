@@ -108,7 +108,7 @@ export default function AgentEngagementOverviewTable({
           {rows.map(r => (
             <tr
               key={r.agentId}
-              className="border-t"
+              className="border-t border-gray-200 "
             >
               <td className="px-3 py-2 font-medium">
                 {r.agentName}
