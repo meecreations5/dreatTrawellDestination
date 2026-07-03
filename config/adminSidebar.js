@@ -74,14 +74,15 @@ export const adminSidebar = [
         icon: UploadCloud,
         href: "/admin/travel-agents/bulk-upload",
         permission: "travelAgentManagement"
-      },
-      {
-        label: "Engagements",
-        icon: Handshake,
-        href: "/admin/travel-agents/engagements",
-        permission: "travelAgentManagement"
       }
     ]
+  },
+
+  {
+    label: "Engagements",
+    icon: Handshake,
+    href: "/admin/engagements",
+    permission: "travelAgentManagement"
   },
 
   {
@@ -261,6 +262,7 @@ export const adminSidebar = [
       }
     ]
   },
+
   {
     label: "Quotation",
     icon: FileText,
