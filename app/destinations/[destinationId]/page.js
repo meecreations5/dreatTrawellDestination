@@ -19,6 +19,7 @@ import {
   PlayCircle,
   Sparkles,
   Ticket,
+  X,
   Youtube
 } from "lucide-react";
 
@@ -54,10 +55,32 @@ function getFileUrl(file) {
   return (
     file.url ||
     file.downloadURL ||
+    file.downloadUrl ||
     file.previewUrl ||
     file.thumbnailUrl ||
+    file.posterUrl ||
+    file.coverUrl ||
+    file.src ||
     ""
   );
+}
+
+function getVisualFileUrl(file) {
+  if (!file) return "";
+
+  if (typeof file === "string") return file;
+
+  if (file.type === "video") {
+    return (
+      file.thumbnailUrl ||
+      file.previewUrl ||
+      file.posterUrl ||
+      file.coverUrl ||
+      ""
+    );
+  }
+
+  return getFileUrl(file);
 }
 
 function getCoverUrl(destination) {
@@ -72,35 +95,35 @@ function getCoverUrl(destination) {
 function getImageGallery(destination) {
   const uploadedGallery = Array.isArray(destination?.gallery)
     ? destination.gallery
-        .map((item, index) => {
-          const url = getFileUrl(item);
+      .map((item, index) => {
+        const url = getFileUrl(item);
 
-          return {
-            id: item?.id || item?.path || url || `gallery_${index}`,
-            url,
-            title: item?.title || destination.name || "Destination image",
-            caption: item?.caption || "",
-            altText: item?.altText || destination.name || "Destination image"
-          };
-        })
-        .filter(item => item.url)
+        return {
+          id: item?.id || item?.path || url || `gallery_${index}`,
+          url,
+          title: item?.title || destination.name || "Destination image",
+          caption: item?.caption || "",
+          altText: item?.altText || destination.name || "Destination image"
+        };
+      })
+      .filter(item => item.url)
     : [];
 
   const richImages = Array.isArray(destination?.mediaGallery)
     ? destination.mediaGallery
-        .filter(item => item.type === "image" && item.active !== false)
-        .map((item, index) => {
-          const url = getFileUrl(item);
+      .filter(item => item.type === "image" && item.active !== false)
+      .map((item, index) => {
+        const url = getFileUrl(item);
 
-          return {
-            id: item?.id || item?.path || url || `media_${index}`,
-            url,
-            title: item?.title || destination.name || "Destination image",
-            caption: item?.caption || "",
-            altText: item?.altText || destination.name || "Destination image"
-          };
-        })
-        .filter(item => item.url)
+        return {
+          id: item?.id || item?.path || url || `media_${index}`,
+          url,
+          title: item?.title || destination.name || "Destination image",
+          caption: item?.caption || "",
+          altText: item?.altText || destination.name || "Destination image"
+        };
+      })
+      .filter(item => item.url)
     : [];
 
   return [...uploadedGallery, ...richImages];
@@ -109,12 +132,103 @@ function getImageGallery(destination) {
 function getYouTubeVideos(destination) {
   return Array.isArray(destination?.mediaGallery)
     ? destination.mediaGallery.filter(
-        item =>
-          item.type === "video" &&
-          item.source === "youtube" &&
-          item.active !== false
-      )
+      item =>
+        item.type === "video" &&
+        item.source === "youtube" &&
+        item.active !== false
+    )
     : [];
+}
+
+function getActivityImages(activity = {}) {
+  const mediaUploads = Array.isArray(activity.mediaUploads)
+    ? activity.mediaUploads
+    : [];
+
+  const photos = Array.isArray(activity.photos) ? activity.photos : [];
+  const gallery = Array.isArray(activity.gallery) ? activity.gallery : [];
+  const mediaGallery = Array.isArray(activity.mediaGallery)
+    ? activity.mediaGallery
+    : [];
+  const media = Array.isArray(activity.media) ? activity.media : [];
+
+  const allMedia = [
+    ...mediaUploads,
+    ...photos,
+    ...gallery,
+    ...mediaGallery,
+    ...media
+  ];
+
+  return allMedia
+    .map((item, index) => {
+      const url = getVisualFileUrl(item);
+
+      return {
+        id: item?.id || item?.path || url || `activity_image_${index}`,
+        url,
+        title:
+          item?.title ||
+          item?.caption ||
+          activity.title ||
+          activity.name ||
+          "Activity photo",
+        caption: item?.caption || "",
+        altText:
+          item?.altText ||
+          activity.title ||
+          activity.name ||
+          "Activity photo"
+      };
+    })
+    .filter(item => item.url);
+}
+
+function getActivityPrimaryImage(activity = {}) {
+  return getActivityImages(activity)?.[0]?.url || "";
+}
+
+function getActivityVideos(activity = {}) {
+  const media = [
+    ...(Array.isArray(activity.media) ? activity.media : []),
+    ...(Array.isArray(activity.mediaGallery) ? activity.mediaGallery : [])
+  ];
+
+  const videos = media
+    .filter(item => item?.type === "video" || item?.source === "youtube")
+    .map((item, index) => ({
+      id: item.id || item.url || item.youtubeUrl || `video_${index}`,
+      title: item.title || activity.title || "Activity video",
+      caption: item.caption || "",
+      url: item.url || item.youtubeUrl || item.originalUrl || "",
+      embedUrl: item.embedUrl || "",
+      thumbnailUrl: item.thumbnailUrl || ""
+    }))
+    .filter(item => item.url || item.embedUrl);
+
+  if (activity.youtube || activity.youtubeUrl) {
+    videos.push({
+      id: "activity_youtube",
+      title: "Activity Video",
+      caption: "",
+      url: activity.youtube || activity.youtubeUrl,
+      embedUrl: "",
+      thumbnailUrl: ""
+    });
+  }
+
+  return videos;
+}
+
+function hasValue(value) {
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "boolean") return true;
+
+  return value !== undefined && value !== null && String(value).trim() !== "";
+}
+
+function formatBoolean(value) {
+  return value ? "Yes" : "No";
 }
 
 function getTravelStyleLabels(travelStyles = {}) {
@@ -154,6 +268,147 @@ function getSellingPrice(activity, key) {
   );
 }
 
+function formatMoney(value, currency = "INR") {
+  const amount = toNumber(value);
+
+  if (!amount) return "On request";
+
+  if (currency === "INR") {
+    return formatInr(amount);
+  }
+
+  return `${currency} ${new Intl.NumberFormat("en-IN", {
+    maximumFractionDigits: 2
+  }).format(amount)}`;
+}
+
+function getPassengerPricingRows(activity = {}) {
+  const pricing = activity.pricing || {};
+  const currency = pricing.currency || "INR";
+
+  const passengers = [
+    {
+      key: "adult",
+      label: "Adult",
+      fallbackSelling: pricing.sellingAdultInInr
+    },
+    {
+      key: "child",
+      label: "Child",
+      fallbackSelling: pricing.sellingChildInInr
+    },
+    {
+      key: "infant",
+      label: "Infant",
+      fallbackSelling: pricing.sellingInfantInInr
+    }
+  ];
+
+  return passengers
+    .map(passenger => {
+      const row = pricing[passenger.key] || {};
+
+      return {
+        key: passenger.key,
+        label: row.label || passenger.label,
+        minAge: row.minAge,
+        maxAge: row.maxAge,
+        vendorRate: row.amount || 0,
+        amountInInr: row.amountInInr || 0,
+        markupType: row.markupType || pricing.markupType || "",
+        markupValue: row.markupValue || pricing.markupValue || 0,
+        sellingInInr:
+          row.sellingInInr ||
+          passenger.fallbackSelling ||
+          getSellingPrice(activity, passenger.key),
+        currency
+      };
+    })
+    .filter(
+      row =>
+        row.vendorRate ||
+        row.amountInInr ||
+        row.sellingInInr ||
+        row.key !== "infant"
+    );
+}
+
+function getVendorDetails(activity = {}) {
+  const vendor = activity.vendor || activity.selectedVendor || {};
+
+  return {
+    vendorId: vendor.vendorId || vendor.id || "",
+    vendorName:
+      vendor.vendorName ||
+      vendor.name ||
+      vendor.companyName ||
+      vendor.businessName ||
+      "",
+    contactPerson: vendor.contactPerson || vendor.contactName || "",
+    phone: vendor.phone || vendor.mobile || vendor.whatsapp || "",
+    email: vendor.email || vendor.vendorEmail || "",
+    currency: vendor.vendorCurrency || vendor.currency || "",
+    serviceType: vendor.serviceType || vendor.type || "",
+    paymentTerms: vendor.paymentTerms || "",
+    cancellationPolicy: vendor.cancellationPolicy || ""
+  };
+}
+
+function hasVendorDetails(vendor = {}) {
+  return Object.values(vendor).some(value => hasValue(value));
+}
+
+function getAgeText(row) {
+  if (hasValue(row.minAge) && hasValue(row.maxAge)) {
+    return `${row.minAge}-${row.maxAge} yrs`;
+  }
+
+  if (hasValue(row.minAge)) {
+    return `${row.minAge}+ yrs`;
+  }
+
+  return "";
+}
+
+function getMarkupText(row) {
+  if (!hasValue(row.markupValue)) return "";
+
+  if (row.markupType === "percentage") {
+    return `${row.markupValue}%`;
+  }
+
+  if (row.markupType === "fixed") {
+    return formatInr(row.markupValue);
+  }
+
+  return String(row.markupValue);
+}
+
+function getActivityYoutubeLinks(activity = {}) {
+  const directLinks = [
+    activity.youtube,
+    activity.youtubeUrl,
+    activity.videoUrl
+  ].filter(Boolean);
+
+  const mediaLinks = [
+    ...(Array.isArray(activity.media) ? activity.media : []),
+    ...(Array.isArray(activity.mediaGallery) ? activity.mediaGallery : []),
+    ...(Array.isArray(activity.mediaUploads) ? activity.mediaUploads : [])
+  ]
+    .filter(
+      item =>
+        item?.source === "youtube" ||
+        item?.type === "video" ||
+        item?.youtubeUrl ||
+        item?.embedUrl
+    )
+    .map(item => item.url || item.youtubeUrl || item.originalUrl || item.embedUrl)
+    .filter(Boolean);
+
+  return [...new Set([...directLinks, ...mediaLinks])];
+}
+
 function isPublicDestination(destination) {
   return destination?.status === "published" && destination?.active !== false;
 }
@@ -171,10 +426,8 @@ export default function DestinationDetailPage() {
   const [loadError, setLoadError] = useState("");
   const [selectedImage, setSelectedImage] = useState("");
   const [enquiryOpen, setEnquiryOpen] = useState(false);
+  const [selectedActivity, setSelectedActivity] = useState(null);
 
-  /* =========================
-     LOAD
-  ========================== */
   useEffect(() => {
     const loadDestination = async () => {
       if (!db || !destinationId) {
@@ -207,9 +460,7 @@ export default function DestinationDetailPage() {
         }
 
         setDestination(data);
-
-        const cover = getCoverUrl(data);
-        setSelectedImage(cover);
+        setSelectedImage(getCoverUrl(data));
       } catch (error) {
         console.error("Failed to load destination:", error);
         setLoadError("Unable to load destination. Please try again.");
@@ -377,7 +628,6 @@ export default function DestinationDetailPage() {
       {/* BODY */}
       <section className="mx-auto grid max-w-7xl gap-8 px-4 py-8 sm:px-6 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-8">
         <div className="space-y-8">
-          {/* OVERVIEW */}
           <Surface
             icon={Globe2}
             title="Destination Overview"
@@ -411,7 +661,6 @@ export default function DestinationDetailPage() {
             )}
           </Surface>
 
-          {/* GALLERY */}
           {(gallery.length > 0 || videos.length > 0) && (
             <Surface
               icon={ImageIcon}
@@ -434,11 +683,10 @@ export default function DestinationDetailPage() {
                         key={image.id}
                         type="button"
                         onClick={() => setSelectedImage(image.url)}
-                        className={`overflow-hidden rounded-2xl border transition ${
-                          selectedImage === image.url
-                            ? "border-blue-500 ring-4 ring-blue-100"
-                            : "border-slate-200 hover:border-blue-200"
-                        }`}
+                        className={`overflow-hidden rounded-2xl border transition ${selectedImage === image.url
+                          ? "border-blue-500 ring-4 ring-blue-100"
+                          : "border-slate-200 hover:border-blue-200"
+                          }`}
                       >
                         <img
                           src={image.url}
@@ -468,7 +716,6 @@ export default function DestinationDetailPage() {
             </Surface>
           )}
 
-          {/* ACTIVITIES */}
           <Surface
             icon={Ticket}
             title={
@@ -483,13 +730,18 @@ export default function DestinationDetailPage() {
             }
           >
             {destination.hasSubLocations ? (
-              <LocationWiseActivities destination={destination} />
+              <LocationWiseActivities
+                destination={destination}
+                onActivityClick={setSelectedActivity}
+              />
             ) : (
-              <ActivityGrid activities={destination.activities || []} />
+              <ActivityGrid
+                activities={destination.activities || []}
+                onActivityClick={setSelectedActivity}
+              />
             )}
           </Surface>
 
-          {/* ATTRACTIONS / PLACES / FOOD */}
           {!destination.hasSubLocations && (
             <>
               <ContentSection
@@ -513,7 +765,6 @@ export default function DestinationDetailPage() {
           )}
         </div>
 
-        {/* SIDEBAR */}
         <aside className="space-y-5 lg:sticky lg:top-6 lg:self-start">
           <Surface
             icon={CheckCircle2}
@@ -576,6 +827,11 @@ export default function DestinationDetailPage() {
         </aside>
       </section>
 
+      <ActivityDetailModal
+        activity={selectedActivity}
+        onClose={() => setSelectedActivity(null)}
+      />
+
       <DestinationEnquiryForm
         open={enquiryOpen}
         onClose={() => setEnquiryOpen(false)}
@@ -589,7 +845,7 @@ export default function DestinationDetailPage() {
    ACTIVITY DISPLAY
 ========================= */
 
-function LocationWiseActivities({ destination }) {
+function LocationWiseActivities({ destination, onActivityClick }) {
   const locations = Array.isArray(destination.locations)
     ? destination.locations.filter(location => location.active !== false)
     : [];
@@ -639,7 +895,15 @@ function LocationWiseActivities({ destination }) {
             </div>
           </div>
 
-          <ActivityGrid activities={location.activities || []} />
+          <ActivityGrid
+            activities={location.activities || []}
+            onActivityClick={activity =>
+              onActivityClick?.({
+                ...activity,
+                locationName: location.name || ""
+              })
+            }
+          />
 
           <div className="mt-6 grid gap-5 lg:grid-cols-3">
             <MiniContentList
@@ -663,7 +927,7 @@ function LocationWiseActivities({ destination }) {
   );
 }
 
-function ActivityGrid({ activities = [] }) {
+function ActivityGrid({ activities = [], onActivityClick }) {
   const activeActivities = Array.isArray(activities)
     ? activities.filter(activity => activity.active !== false)
     : [];
@@ -676,125 +940,106 @@ function ActivityGrid({ activities = [] }) {
     <div className="grid gap-5 md:grid-cols-2">
       {activeActivities.map((activity, index) => (
         <ActivityCard
-          key={activity.id || `${activity.title}-${index}`}
+          key={activity.id || `${activity.title || activity.name}-${index}`}
           activity={activity}
           index={index}
+          onClick={() => onActivityClick?.(activity)}
         />
       ))}
     </div>
   );
 }
 
-function ActivityCard({ activity, index }) {
+function ActivityCard({ activity, index, onClick }) {
   const adultSelling = getSellingPrice(activity, "adult");
   const childSelling = getSellingPrice(activity, "child");
-  const infantSelling = getSellingPrice(activity, "infant");
-
-  const activityImage =
-    getFileUrl(activity.mediaUploads?.[0]) ||
-    getFileUrl(activity.media?.find(item => item.type === "image")) ||
-    getFileUrl(activity.media?.find(item => item.thumbnailUrl)) ||
-    "";
+  const activityImage = getActivityPrimaryImage(activity);
 
   return (
-    <article className="overflow-hidden rounded-3xl border border-slate-200 bg-white  transition hover:-translate-y-0.5 hover:shadow-md">
-      <div className="relative h-44 bg-slate-100">
-        {activityImage ? (
-          <img
-            src={activityImage}
-            alt={activity.title || `Activity ${index + 1}`}
-            className="h-full w-full object-cover"
-          />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200 text-slate-400">
-            <Ticket size={34} />
-          </div>
-        )}
-
-        {activity.featured && (
-          <span className="absolute left-4 top-4 rounded-full bg-amber-400 px-3 py-1 text-xs font-semibold text-amber-950">
-            Featured
-          </span>
-        )}
-
-        {activity.activityType && (
-          <span className="absolute bottom-4 left-4 rounded-full bg-white/95 px-3 py-1 text-xs font-semibold capitalize text-blue-700 ">
-            {String(activity.activityType).replace(/_/g, " ")}
-          </span>
-        )}
-      </div>
-
-      <div className="space-y-4 p-5">
-        <div>
-          <h3 className="text-base font-semibold text-slate-950">
-            {activity.title || activity.name || `Activity ${index + 1}`}
-          </h3>
-
-          {activity.description && (
-            <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-600">
-              {activity.description}
-            </p>
-          )}
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <PublicRateCard
-            label="Adult"
-            selling={formatInr(adultSelling)}
-          />
-
-          <PublicRateCard
-            label="Child"
-            selling={formatInr(childSelling)}
-          />
-
-          {infantSelling > 0 && (
-            <PublicRateCard
-              label="Infant"
-              selling={formatInr(infantSelling)}
+    <article className="group overflow-hidden rounded-3xl border border-slate-200 bg-white  transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md">
+      <button
+        type="button"
+        onClick={onClick}
+        className="block w-full text-left"
+      >
+        <div className="relative h-44 bg-slate-100">
+          {activityImage ? (
+            <img
+              src={activityImage}
+              alt={activity.title || activity.name || `Activity ${index + 1}`}
+              className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
             />
-          )}
-        </div>
-
-        <div className="flex flex-wrap gap-2 text-xs text-slate-500">
-          {activity.timing?.duration && (
-            <span className="rounded-full bg-slate-100 px-3 py-1.5">
-              {activity.timing.duration}
-            </span>
-          )}
-
-          {activity.timing?.pickupRequired && (
-            <span className="rounded-full bg-slate-100 px-3 py-1.5">
-              Pickup included
-            </span>
-          )}
-
-          {activity.timing?.startTime && (
-            <span className="rounded-full bg-slate-100 px-3 py-1.5">
-              Starts {activity.timing.startTime}
-            </span>
-          )}
-        </div>
-
-        {Array.isArray(activity.inclusions) && activity.inclusions.length > 0 && (
-          <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-              Inclusions
-            </p>
-
-            <div className="flex flex-wrap gap-2">
-              {activity.inclusions.slice(0, 4).map((item, i) => (
-                <span
-                  key={`${item}-${i}`}
-                  className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700"
-                >
-                  {item}
-                </span>
-              ))}
+          ) : (
+            <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200 text-slate-400">
+              <Ticket size={34} />
             </div>
+          )}
+
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-950/45 via-transparent to-transparent opacity-80" />
+
+          {activity.featured && (
+            <span className="absolute left-4 top-4 rounded-full bg-amber-400 px-3 py-1 text-xs font-semibold text-amber-950">
+              Featured
+            </span>
+          )}
+
+          {activity.activityType && (
+            <span className="absolute bottom-4 left-4 rounded-full bg-white/95 px-3 py-1 text-xs font-semibold capitalize text-blue-700 ">
+              {String(activity.activityType).replace(/_/g, " ")}
+            </span>
+          )}
+
+          <span className="absolute bottom-4 right-4 rounded-full bg-white/95 px-3 py-1 text-xs font-semibold text-slate-800 ">
+            View Details
+          </span>
+        </div>
+
+        <div className="space-y-4 p-5">
+          <div>
+            <h3 className="text-base font-semibold text-slate-950">
+              {activity.title || activity.name || `Activity ${index + 1}`}
+            </h3>
+
+            {activity.description && (
+              <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">
+                {activity.description}
+              </p>
+            )}
           </div>
-        )}
-      </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <PublicRateCard
+              label="Adult"
+              selling={formatInr(adultSelling)}
+            />
+
+            <PublicRateCard
+              label="Child"
+              selling={formatInr(childSelling)}
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-2 text-xs text-slate-500">
+            {activity.timing?.duration && (
+              <span className="rounded-full bg-slate-100 px-3 py-1.5">
+                {activity.timing.duration}
+              </span>
+            )}
+
+            {activity.timing?.pickupRequired && (
+              <span className="rounded-full bg-slate-100 px-3 py-1.5">
+                Pickup included
+              </span>
+            )}
+
+            {activity.timing?.startTime && (
+              <span className="rounded-full bg-slate-100 px-3 py-1.5">
+                Starts {activity.timing.startTime}
+              </span>
+            )}
+          </div>
+        </div>
+      </button>
     </article>
   );
 }
@@ -810,7 +1055,7 @@ function PublicRateCard({ label, selling }) {
         </p>
       </div>
 
-      <p className="text-lg font-bold text-emerald-700">
+      <p className="text-base font-bold text-emerald-700">
         {selling}
       </p>
 
@@ -818,6 +1063,668 @@ function PublicRateCard({ label, selling }) {
         Starting price
       </p>
     </div>
+  );
+}
+
+/* =========================
+   ACTIVITY MODAL
+========================= */
+
+function ActivityDetailModal({ activity, onClose }) {
+  const [selectedPhoto, setSelectedPhoto] = useState("");
+
+  useEffect(() => {
+    if (!activity) {
+      setSelectedPhoto("");
+      return;
+    }
+
+    setSelectedPhoto(getActivityPrimaryImage(activity));
+  }, [activity]);
+
+  useEffect(() => {
+    if (!activity) return;
+
+    const handleEscape = e => {
+      if (e.key === "Escape") {
+        onClose?.();
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [activity, onClose]);
+
+  if (!activity) return null;
+
+  const images = getActivityImages(activity);
+  const videos = getActivityVideos(activity);
+  const youtubeLinks = getActivityYoutubeLinks(activity);
+  const pricingRows = getPassengerPricingRows(activity);
+  const vendor = getVendorDetails(activity);
+
+  const title = activity.title || activity.name || "Activity Details";
+  const description = activity.description || "";
+  const pricing = activity.pricing || {};
+  const timing = activity.timing || {};
+
+  const timingItems = [
+    {
+      icon: Clock3,
+      label: "Duration",
+      value: timing.duration
+    },
+    {
+      icon: CalendarDays,
+      label: "Start Time",
+      value: timing.startTime
+    },
+    {
+      icon: CalendarDays,
+      label: "End Time",
+      value: timing.endTime
+    },
+    {
+      icon: MapPin,
+      label: "Pickup Required",
+      value:
+        timing.pickupRequired !== undefined
+          ? formatBoolean(timing.pickupRequired)
+          : ""
+    },
+    {
+      icon: Clock3,
+      label: "Pickup Time",
+      value: timing.pickupTime
+    },
+    {
+      icon: Clock3,
+      label: "Drop Time",
+      value: timing.dropTime
+    }
+  ].filter(item => hasValue(item.value));
+
+  const linkItems = [
+    {
+      label: "Map Location",
+      url: activity.mapLink || activity.googleMapLink,
+      icon: MapPin,
+      tone: "blue"
+    },
+    {
+      label: "Source / Reference",
+      url: activity.sourceLink || activity.referenceLink,
+      icon: ExternalLink,
+      tone: "slate"
+    }
+  ].filter(item => hasValue(item.url));
+
+  return (
+    <div className="fixed inset-0 z-[90]">
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm"
+        aria-label="Close activity details"
+      />
+
+      <div className="absolute inset-x-3 top-1/2 mx-auto max-h-[94vh] max-w-6xl -translate-y-1/2 overflow-hidden rounded-[28px] bg-white shadow-2xl sm:inset-x-5">
+        {/* HEADER */}
+        <div className="border-b border-slate-100 bg-white px-5 py-4 sm:px-6">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                {activity.activityType && (
+                  <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold capitalize text-blue-700">
+                    {String(activity.activityType).replace(/_/g, " ")}
+                  </span>
+                )}
+
+                {activity.featured && (
+                  <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
+                    Featured
+                  </span>
+                )}
+
+                {activity.locationName && (
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                    {activity.locationName}
+                  </span>
+                )}
+              </div>
+
+              <h2 className="line-clamp-1 text-xl font-semibold text-slate-950 sm:text-2xl">
+                {title}
+              </h2>
+
+              {description && (
+                <p className="mt-1 line-clamp-2 max-w-3xl text-sm leading-6 text-slate-500">
+                  {description}
+                </p>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-950"
+              aria-label="Close"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* BODY */}
+        <div className="max-h-[calc(94vh-98px)] overflow-y-auto bg-slate-50 p-4 sm:p-5">
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_370px]">
+            {/* LEFT */}
+            <div className="space-y-5">
+              <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white ">
+                <div className="relative bg-slate-100">
+                  {selectedPhoto ? (
+                    <img
+                      src={selectedPhoto}
+                      alt={title}
+                      className="h-[260px] w-full object-cover sm:h-[380px] lg:h-[430px]"
+                    />
+                  ) : (
+                    <div className="flex h-[260px] w-full items-center justify-center text-slate-400 sm:h-[380px] lg:h-[430px]">
+                      <Ticket size={44} />
+                    </div>
+                  )}
+
+                  {images.length > 0 && (
+                    <div className="absolute bottom-4 left-4 rounded-full bg-slate-950/75 px-3 py-1 text-xs font-semibold text-white backdrop-blur">
+                      {images.length} photo{images.length > 1 ? "s" : ""}
+                    </div>
+                  )}
+                </div>
+
+                {images.length > 1 && (
+                  <div className="grid grid-cols-4 gap-3 border-t border-slate-100 p-3 sm:grid-cols-6">
+                    {images.slice(0, 12).map(image => (
+                      <button
+                        key={image.id}
+                        type="button"
+                        onClick={() => setSelectedPhoto(image.url)}
+                        className={`overflow-hidden rounded-2xl border transition ${selectedPhoto === image.url
+                            ? "border-blue-500 ring-4 ring-blue-100"
+                            : "border-slate-200 hover:border-blue-200"
+                          }`}
+                      >
+                        <img
+                          src={image.url}
+                          alt={image.altText || title}
+                          className="h-16 w-full object-cover sm:h-20"
+                        />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {description && (
+                <ActivityModalSection title="Overview">
+                  <p className="whitespace-pre-line text-sm leading-7 text-slate-600">
+                    {description}
+                  </p>
+                </ActivityModalSection>
+              )}
+
+              {pricingRows.length > 0 && (
+                <ActivityModalSection title="Pricing Details">
+                  <div className="overflow-hidden rounded-2xl border border-slate-200">
+                    <div className="grid grid-cols-[1fr_0.8fr_0.9fr_0.9fr_0.9fr] bg-slate-100 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      <span>Pax</span>
+                      <span>Vendor</span>
+                      <span>INR Cost</span>
+                      <span>Markup</span>
+                      <span>Selling</span>
+                    </div>
+
+                    {pricingRows.map(row => (
+                      <div
+                        key={row.key}
+                        className="grid grid-cols-[1fr_0.8fr_0.9fr_0.9fr_0.9fr] border-t border-slate-100 px-3 py-3 text-xs"
+                      >
+                        <div>
+                          <p className="font-semibold text-slate-900">
+                            {row.label}
+                          </p>
+
+                          {getAgeText(row) && (
+                            <p className="mt-0.5 text-[11px] text-slate-400">
+                              {getAgeText(row)}
+                            </p>
+                          )}
+                        </div>
+
+                        <p className="font-medium text-slate-700">
+                          {formatMoney(row.vendorRate, row.currency)}
+                        </p>
+
+                        <p className="font-medium text-slate-700">
+                          {formatInr(row.amountInInr)}
+                        </p>
+
+                        <p className="font-medium text-slate-700">
+                          {getMarkupText(row) || "-"}
+                        </p>
+
+                        <p className="font-bold text-emerald-700">
+                          {formatInr(row.sellingInInr)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                    {pricing.currency && (
+                      <ActivitySmallInfo
+                        label="Currency"
+                        value={pricing.currency}
+                      />
+                    )}
+
+                    {pricing.finalRoeToInr && (
+                      <ActivitySmallInfo
+                        label="Final ROE"
+                        value={`1 ${pricing.currency || ""} = ₹${pricing.finalRoeToInr}`}
+                      />
+                    )}
+
+                    {pricing.priceUnit && (
+                      <ActivitySmallInfo
+                        label="Price Unit"
+                        value={String(pricing.priceUnit).replace(/_/g, " ")}
+                      />
+                    )}
+
+                    {pricing.roeDate && (
+                      <ActivitySmallInfo
+                        label="ROE Date"
+                        value={pricing.roeDate}
+                      />
+                    )}
+                  </div>
+                </ActivityModalSection>
+              )}
+
+              {youtubeLinks.length > 0 && (
+                <ActivityModalSection title="YouTube Links">
+                  <div className="flex flex-wrap gap-2">
+                    {youtubeLinks.map((url, index) => (
+                      <ActivityExternalLink
+                        key={`${url}-${index}`}
+                        href={url}
+                        icon={Youtube}
+                        label={`YouTube ${index + 1}`}
+                        tone="red"
+                      />
+                    ))}
+                  </div>
+                </ActivityModalSection>
+              )}
+
+              {videos.length > 0 && (
+                <ActivityModalSection title="Videos">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {videos.map(video => (
+                      <a
+                        key={video.id}
+                        href={video.url || video.embedUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="group overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 transition hover:border-red-200 hover:bg-red-50"
+                      >
+                        <div className="flex min-h-[120px] items-center justify-center bg-slate-100 text-red-600">
+                          {video.thumbnailUrl ? (
+                            <img
+                              src={video.thumbnailUrl}
+                              alt={video.title}
+                              className="h-[120px] w-full object-cover"
+                            />
+                          ) : (
+                            <Youtube size={34} />
+                          )}
+                        </div>
+
+                        <div className="p-3">
+                          <p className="text-sm font-semibold text-slate-900">
+                            {video.title || "Watch Video"}
+                          </p>
+
+                          {video.caption && (
+                            <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
+                              {video.caption}
+                            </p>
+                          )}
+                        </div>
+                      </a>
+                    ))}
+                  </div>
+                </ActivityModalSection>
+              )}
+
+              {Array.isArray(activity.inclusions) &&
+                activity.inclusions.length > 0 && (
+                  <ActivityModalSection title="Inclusions">
+                    <ActivityChipList
+                      items={activity.inclusions}
+                      tone="emerald"
+                    />
+                  </ActivityModalSection>
+                )}
+
+              {Array.isArray(activity.exclusions) &&
+                activity.exclusions.length > 0 && (
+                  <ActivityModalSection title="Exclusions">
+                    <ActivityChipList
+                      items={activity.exclusions}
+                      tone="rose"
+                    />
+                  </ActivityModalSection>
+                )}
+
+              {activity.cancellationPolicy && (
+                <ActivityModalSection title="Cancellation Policy">
+                  <p className="whitespace-pre-line text-sm leading-7 text-slate-600">
+                    {activity.cancellationPolicy}
+                  </p>
+                </ActivityModalSection>
+              )}
+
+              {Array.isArray(timing.blackoutDates) &&
+                timing.blackoutDates.length > 0 && (
+                  <ActivityModalSection title="Blackout Dates">
+                    <ActivityChipList
+                      items={timing.blackoutDates}
+                      tone="slate"
+                    />
+                  </ActivityModalSection>
+                )}
+
+              {linkItems.length > 0 && (
+                <ActivityModalSection title="Useful Links">
+                  <div className="flex flex-wrap gap-2">
+                    {linkItems.map(link => (
+                      <ActivityExternalLink
+                        key={link.label}
+                        href={link.url}
+                        icon={link.icon}
+                        label={link.label}
+                        tone={link.tone}
+                      />
+                    ))}
+                  </div>
+                </ActivityModalSection>
+              )}
+            </div>
+
+            {/* RIGHT */}
+            <aside className="space-y-4 lg:sticky lg:top-0 lg:self-start">
+              <div className="rounded-3xl border border-slate-200 bg-white p-4 ">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-semibold text-slate-950">
+                    Starting Price
+                  </h3>
+
+                  <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                    Public Rate
+                  </span>
+                </div>
+
+                <div className="space-y-3">
+                  {pricingRows.map(row => (
+                    <ActivityCompactRateRow
+                      key={row.key}
+                      label={row.label}
+                      selling={formatInr(row.sellingInInr)}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {timingItems.length > 0 && (
+                <div className="rounded-3xl border border-slate-200 bg-white p-4 ">
+                  <h3 className="mb-4 text-sm font-semibold text-slate-950">
+                    Timing Details
+                  </h3>
+
+                  <div className="space-y-3">
+                    {timingItems.map(item => (
+                      <ActivityModalInfo
+                        key={item.label}
+                        icon={item.icon}
+                        label={item.label}
+                        value={item.value}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {Array.isArray(timing.operatingDays) &&
+                timing.operatingDays.length > 0 && (
+                  <div className="rounded-3xl border border-slate-200 bg-white p-4 ">
+                    <h3 className="mb-3 text-sm font-semibold text-slate-950">
+                      Operating Days
+                    </h3>
+
+                    <div className="flex flex-wrap gap-2">
+                      {timing.operatingDays.map(day => (
+                        <span
+                          key={day}
+                          className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700"
+                        >
+                          {day}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+              {hasVendorDetails(vendor) && (
+                <div className="rounded-3xl border border-slate-200 bg-white p-4 ">
+                  <h3 className="mb-4 text-sm font-semibold text-slate-950">
+                    Vendor Details
+                  </h3>
+
+                  <div className="space-y-3">
+                    {vendor.vendorName && (
+                      <ActivitySmallInfo
+                        label="Vendor"
+                        value={vendor.vendorName}
+                      />
+                    )}
+
+                    {vendor.contactPerson && (
+                      <ActivitySmallInfo
+                        label="Contact Person"
+                        value={vendor.contactPerson}
+                      />
+                    )}
+
+                    {vendor.phone && (
+                      <ActivitySmallInfo
+                        label="Phone"
+                        value={vendor.phone}
+                      />
+                    )}
+
+                    {vendor.email && (
+                      <ActivitySmallInfo
+                        label="Email"
+                        value={vendor.email}
+                      />
+                    )}
+
+                    {vendor.currency && (
+                      <ActivitySmallInfo
+                        label="Vendor Currency"
+                        value={vendor.currency}
+                      />
+                    )}
+
+                    {vendor.serviceType && (
+                      <ActivitySmallInfo
+                        label="Service Type"
+                        value={vendor.serviceType}
+                      />
+                    )}
+
+                    {vendor.paymentTerms && (
+                      <ActivitySmallInfo
+                        label="Payment Terms"
+                        value={vendor.paymentTerms}
+                      />
+                    )}
+
+                    {vendor.cancellationPolicy && (
+                      <ActivitySmallInfo
+                        label="Vendor Cancellation"
+                        value={vendor.cancellationPolicy}
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white  transition hover:bg-blue-700"
+              >
+                Close Details
+              </button>
+            </aside>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ActivityCompactRateRow({ label, selling }) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+      <div className="flex items-center gap-3">
+        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-500 ">
+          <IndianRupee size={14} />
+        </div>
+
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            {label}
+          </p>
+
+          <p className="mt-0.5 text-[11px] text-slate-400">
+            Starting price
+          </p>
+        </div>
+      </div>
+
+      <p className="text-sm font-bold text-emerald-700">
+        {selling}
+      </p>
+    </div>
+  );
+}
+
+function ActivityModalSection({ title, children }) {
+  return (
+    <section className="rounded-3xl border border-slate-200 bg-white p-5 ">
+      <h3 className="mb-3 text-sm font-semibold text-slate-950">
+        {title}
+      </h3>
+
+      {children}
+    </section>
+  );
+}
+
+function ActivityModalInfo({ icon: Icon, label, value }) {
+  return (
+    <div className="flex items-start gap-3 rounded-2xl bg-slate-50 p-3">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-slate-600 ">
+        <Icon size={15} />
+      </div>
+
+      <div className="min-w-0">
+        <p className="text-xs text-slate-500">
+          {label}
+        </p>
+
+        <p className="mt-0.5 break-words text-sm font-semibold text-slate-900">
+          {String(value)}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ActivitySmallInfo({ label, value }) {
+  if (!hasValue(value)) return null;
+
+  return (
+    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+        {label}
+      </p>
+
+      <p className="mt-1 break-words text-sm font-semibold text-slate-900">
+        {String(value)}
+      </p>
+    </div>
+  );
+}
+
+function ActivityChipList({ items = [], tone = "emerald" }) {
+  const toneClass =
+    tone === "rose"
+      ? "bg-rose-50 text-rose-700"
+      : tone === "slate"
+        ? "bg-slate-100 text-slate-700"
+        : "bg-emerald-50 text-emerald-700";
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {items.filter(Boolean).map((item, index) => (
+        <span
+          key={`${item}-${index}`}
+          className={`rounded-full px-3 py-1.5 text-xs font-semibold ${toneClass}`}
+        >
+          {String(item)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ActivityExternalLink({ href, icon: Icon, label, tone = "slate" }) {
+  const toneClass =
+    tone === "red"
+      ? "bg-red-50 text-red-700 hover:bg-red-100"
+      : tone === "blue"
+        ? "bg-blue-50 text-blue-700 hover:bg-blue-100"
+        : "bg-slate-100 text-slate-700 hover:bg-slate-200";
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold transition ${toneClass}`}
+    >
+      <Icon size={14} />
+      {label}
+    </a>
   );
 }
 
@@ -1086,12 +1993,15 @@ function HeroStat({ icon: Icon, label, value }) {
     <div className="rounded-2xl border border-white/10 bg-white/10 p-4 text-white backdrop-blur">
       <div className="mb-2 flex items-center gap-2 text-white/70">
         <Icon size={15} />
+
         <span className="text-[11px] font-semibold uppercase tracking-wide">
           {label}
         </span>
       </div>
 
-      <p className="line-clamp-1 text-sm font-semibold">{value}</p>
+      <p className="line-clamp-1 text-sm font-semibold">
+        {value}
+      </p>
     </div>
   );
 }
@@ -1104,7 +2014,10 @@ function SidebarInfo({ icon: Icon, label, value }) {
       </div>
 
       <div>
-        <p className="text-xs font-medium text-slate-500">{label}</p>
+        <p className="text-xs font-medium text-slate-500">
+          {label}
+        </p>
+
         <p className="mt-1 text-sm font-semibold text-slate-950">
           {value}
         </p>
