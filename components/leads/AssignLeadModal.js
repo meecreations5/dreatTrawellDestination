@@ -137,40 +137,60 @@ function buildClientReferenceSnapshot(lead) {
   };
 }
 
+const ASSIGNABLE_ROLES = new Set([
+  "employee",
+  "team",
+  "manager",
+  "admin",
+  "super_admin"
+]);
+
+function isAssignableUser(user = {}) {
+  const role = String(user?.role || "")
+    .trim()
+    .toLowerCase();
+
+  const hasLeadAccess =
+    user?.permissions?.leadManagement === true;
+
+  const isAdministrator =
+    user?.isAdmin === true ||
+    user?.isSuperAdmin === true;
+
+  const isActive =
+    user?.active === true &&
+    user?.deleted !== true &&
+    user?.isDeleted !== true;
+
+  return (
+    isActive &&
+    (
+      ASSIGNABLE_ROLES.has(role) ||
+      hasLeadAccess ||
+      isAdministrator
+    )
+  );
+}
+
 async function loadAssignableUsers() {
-  try {
-    const snap = await getDocs(
-      query(
-        collection(db, "users"),
-        where("active", "==", true),
-        where("role", "in", ["employee", "admin", "manager", "team"])
-      )
-    );
+  const snap = await getDocs(
+    query(
+      collection(db, "users"),
+      where("active", "==", true)
+    )
+  );
 
-    return snap.docs.map(docSnap => ({
-      id: docSnap.id,
-      uid: docSnap.id,
-      ...docSnap.data()
-    }));
-  } catch (error) {
-    console.warn(
-      "Role based user query failed. Falling back to active users.",
-      error
-    );
+  return snap.docs
+    .map(docSnap => {
+      const data = docSnap.data();
 
-    const snap = await getDocs(
-      query(
-        collection(db, "users"),
-        where("active", "==", true)
-      )
-    );
-
-    return snap.docs.map(docSnap => ({
-      id: docSnap.id,
-      uid: docSnap.id,
-      ...docSnap.data()
-    }));
-  }
+      return {
+        ...data,
+        id: docSnap.id,
+        uid: data?.uid || docSnap.id
+      };
+    })
+    .filter(isAssignableUser);
 }
 
 export default function AssignLeadModal({ leadId, lead, onClose }) {
