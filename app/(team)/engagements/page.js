@@ -1,29 +1,40 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   collection,
   onSnapshot,
-  orderBy,
   query,
   where
 } from "firebase/firestore";
 import {
   Activity,
   AlertTriangle,
+  ArrowLeft,
   BarChart3,
   CalendarDays,
   CheckCircle2,
+  CircleDollarSign,
   Clock3,
+  ExternalLink,
+  FileText,
+  Filter,
+  Flame,
+  ListChecks,
   Mail,
   MapPin,
   MessageCircle,
-  Phone,
+  PhoneCall,
   RefreshCcw,
   Search,
-  TrendingUp,
+  Share2,
+  Timer,
+  UserCheck,
+  UserPlus,
   Users,
-  Video
+  Video,
+  Workflow
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
@@ -33,268 +44,1291 @@ import CardSkeleton from "@/components/ui/CardSkeleton";
 import EmptyState from "@/components/ui/EmptyState";
 
 /* =========================
-   DEFAULT FILTERS
+   CONSTANTS
 ========================= */
+
 const DEFAULT_FILTERS = {
   search: "",
+  period: "30d",
   dateFrom: "",
   dateTo: "",
   channel: "all"
 };
 
+const CLOSED_TASK_STATUSES = new Set([
+  "completed",
+  "skipped",
+  "cancelled",
+  "canceled"
+]);
+
 /* =========================
-   HELPERS
+   GENERIC HELPERS
 ========================= */
-const normalize = value =>
-  String(value || "")
+
+function normalize(value = "") {
+  return String(value || "")
     .trim()
     .toLowerCase();
+}
 
-const getValidDate = value => {
+function normalizeStatus(value = "") {
+  return normalize(value).replace(/[\s-]+/g, "_");
+}
+
+function isDeletedRecord(item = {}) {
+  return item?.deleted === true || item?.isDeleted === true;
+}
+
+function toDate(value) {
   if (!value) return null;
 
-  if (value?.toDate) return value.toDate();
-
   if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? null : value;
+    return value;
+  }
+
+  if (typeof value?.toDate === "function") {
+    return value.toDate();
+  }
+
+  if (value?.seconds) {
+    return new Date(value.seconds * 1000);
+  }
+
+  if (typeof value === "number") {
+    const milliseconds =
+      value < 10000000000
+        ? value * 1000
+        : value;
+
+    const parsedNumber =
+      new Date(milliseconds);
+
+    return Number.isNaN(
+      parsedNumber.getTime()
+    )
+      ? null
+      : parsedNumber;
   }
 
   const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-};
 
-const getStartOfDay = value => {
-  if (!value) return null;
-  return new Date(`${value}T00:00:00`);
-};
+  return Number.isNaN(
+    parsed.getTime()
+  )
+    ? null
+    : parsed;
+}
 
-const getEndOfDay = value => {
-  if (!value) return null;
-  return new Date(`${value}T23:59:59`);
-};
+function getLocalDateKey(value) {
+  const date = toDate(value);
 
-const toDateInput = date => {
-  const d = new Date(date);
+  if (!date) {
+    return "";
+  }
 
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
+  const year =
+    date.getFullYear();
+
+  const month = String(
+    date.getMonth() + 1
+  ).padStart(2, "0");
+
+  const day = String(
+    date.getDate()
+  ).padStart(2, "0");
 
   return `${year}-${month}-${day}`;
-};
+}
 
-const isSameDay = (a, b) =>
-  a.getDate() === b.getDate() &&
-  a.getMonth() === b.getMonth() &&
-  a.getFullYear() === b.getFullYear();
+function getTodayKey() {
+  return getLocalDateKey(
+    new Date()
+  );
+}
 
-const formatDateTime = value => {
-  const date = getValidDate(value);
+function isToday(value) {
+  const key =
+    getLocalDateKey(value);
 
-  if (!date) return "—";
+  return Boolean(
+    key &&
+      key === getTodayKey()
+  );
+}
 
-  return date.toLocaleString(undefined, {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-};
+function isOverdue(value) {
+  const key =
+    getLocalDateKey(value);
 
-const formatLabel = value => {
-  if (!value) return "Not Set";
+  return Boolean(
+    key &&
+      key < getTodayKey()
+  );
+}
+
+function formatDate(value) {
+  const date = toDate(value);
+
+  if (!date) {
+    return "—";
+  }
+
+  return date.toLocaleDateString(
+    "en-IN",
+    {
+      day: "2-digit",
+      month: "short",
+      year: "numeric"
+    }
+  );
+}
+
+function formatDateTime(value) {
+  const date = toDate(value);
+
+  if (!date) {
+    return "—";
+  }
+
+  return date.toLocaleString(
+    "en-IN",
+    {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    }
+  );
+}
+
+function toDateInput(value) {
+  return getLocalDateKey(value);
+}
+
+function getPeriodRange(
+  period,
+  dateFrom,
+  dateTo
+) {
+  const now = new Date();
+
+  const todayKey =
+    getLocalDateKey(now);
+
+  if (period === "all") {
+    return {
+      from: "",
+      to: ""
+    };
+  }
+
+  if (period === "custom") {
+    return {
+      from: dateFrom || "",
+      to: dateTo || ""
+    };
+  }
+
+  if (period === "today") {
+    return {
+      from: todayKey,
+      to: todayKey
+    };
+  }
+
+  if (period === "yesterday") {
+    const yesterday =
+      new Date(now);
+
+    yesterday.setDate(
+      yesterday.getDate() - 1
+    );
+
+    const key =
+      getLocalDateKey(
+        yesterday
+      );
+
+    return {
+      from: key,
+      to: key
+    };
+  }
+
+  if (period === "7d") {
+    const start =
+      new Date(now);
+
+    start.setDate(
+      start.getDate() - 6
+    );
+
+    return {
+      from:
+        getLocalDateKey(
+          start
+        ),
+      to: todayKey
+    };
+  }
+
+  if (period === "30d") {
+    const start =
+      new Date(now);
+
+    start.setDate(
+      start.getDate() - 29
+    );
+
+    return {
+      from:
+        getLocalDateKey(
+          start
+        ),
+      to: todayKey
+    };
+  }
+
+  if (
+    period === "thisMonth"
+  ) {
+    const start =
+      new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        1
+      );
+
+    return {
+      from:
+        getLocalDateKey(
+          start
+        ),
+      to: todayKey
+    };
+  }
+
+  return {
+    from: "",
+    to: ""
+  };
+}
+
+function isWithinPeriod(
+  value,
+  period,
+  dateFrom,
+  dateTo
+) {
+  if (period === "all") {
+    return true;
+  }
+
+  const key =
+    getLocalDateKey(value);
+
+  if (!key) {
+    return false;
+  }
+
+  const range =
+    getPeriodRange(
+      period,
+      dateFrom,
+      dateTo
+    );
+
+  if (
+    range.from &&
+    key < range.from
+  ) {
+    return false;
+  }
+
+  if (
+    range.to &&
+    key > range.to
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function formatLabel(value = "") {
+  if (!value) {
+    return "Not Set";
+  }
 
   return String(value)
     .replaceAll("_", " ")
-    .replace(/\b\w/g, char => char.toUpperCase());
-};
+    .replaceAll("-", " ")
+    .replace(
+      /\b\w/g,
+      character =>
+        character.toUpperCase()
+    );
+}
 
-const getAgentName = engagement =>
-  engagement?.travelAgentName ||
-  engagement?.agentName ||
-  engagement?.agent?.agencyName ||
-  engagement?.agent?.name ||
-  engagement?.agencyName ||
-  "Unknown Agent";
+function percent(part, total) {
+  if (!total) {
+    return 0;
+  }
 
-const getSpocName = engagement =>
-  engagement?.spoc?.name ||
-  engagement?.spocName ||
-  engagement?.contactPerson ||
-  "";
-
-const getDestinationName = engagement =>
-  engagement?.destinationName ||
-  engagement?.destination?.name ||
-  "Not Set";
-
-const getOutcome = engagement =>
-  engagement?.outcomeLabel ||
-  engagement?.outcomeCode ||
-  engagement?.status ||
-  "Not Set";
-
-const getFollowUpDate = engagement =>
-  getValidDate(
-    engagement?.nextActionDate ||
-      engagement?.nextFollowUpDate ||
-      engagement?.followUpDate ||
-      engagement?.tentativeMeetingDate
+  return Math.round(
+    (part / total) * 100
   );
+}
 
-const getChannelIcon = channel => {
-  const icons = {
-    call: Phone,
-    whatsapp: MessageCircle,
-    email: Mail,
-    meeting: Users,
-    online_meeting: Video,
-    offline_meeting: Users,
-    site_visit: MapPin,
-    other: Activity
-  };
+function dedupeRows(rows = []) {
+  const map = new Map();
 
-  return icons[channel] || Activity;
-};
+  rows.forEach(row => {
+    if (!row?.id) {
+      return;
+    }
 
-const getChannelLabel = channel => {
+    map.set(
+      row.id,
+      row
+    );
+  });
+
+  return Array.from(
+    map.values()
+  );
+}
+
+/* =========================
+   ENTITY HELPERS
+========================= */
+
+function getChannel(value = "") {
+  const channel =
+    normalize(
+      value || "other"
+    );
+
+  if (
+    channel.includes(
+      "whatsapp"
+    )
+  ) {
+    return "whatsapp";
+  }
+
+  if (
+    channel.includes("email")
+  ) {
+    return "email";
+  }
+
+  if (
+    channel.includes("call")
+  ) {
+    return "call";
+  }
+
+  if (
+    channel.includes(
+      "meeting"
+    ) ||
+    channel.includes("visit")
+  ) {
+    return "meeting";
+  }
+
+  return channel || "other";
+}
+
+function getChannelLabel(
+  channel = ""
+) {
   const labels = {
     call: "Call",
     whatsapp: "WhatsApp",
     email: "Email",
     meeting: "Meeting",
-    online_meeting: "Online Meeting",
-    offline_meeting: "Offline Meeting",
-    site_visit: "Site Visit",
     other: "Other"
   };
 
-  return labels[channel] || formatLabel(channel);
-};
+  return (
+    labels[
+      getChannel(channel)
+    ] ||
+    formatLabel(channel)
+  );
+}
+
+function getChannelIcon(
+  channel = ""
+) {
+  const value =
+    getChannel(channel);
+
+  const icons = {
+    call: PhoneCall,
+    whatsapp: MessageCircle,
+    email: Mail,
+    meeting: Video,
+    other: Activity
+  };
+
+  return (
+    icons[value] ||
+    Activity
+  );
+}
+
+function getAgentName(item = {}) {
+  return (
+    item?.agentName ||
+    item?.travelAgentName ||
+    item?.agencyName ||
+    item?.agent?.agencyName ||
+    item?.agent?.name ||
+    "Unknown Agent"
+  );
+}
+
+function getDestinationName(
+  item = {}
+) {
+  if (item?.destinationName) {
+    return item.destinationName;
+  }
+
+  if (
+    Array.isArray(
+      item?.destinationNames
+    ) &&
+    item.destinationNames.length
+  ) {
+    return item.destinationNames
+      .filter(Boolean)
+      .join(", ");
+  }
+
+  if (
+    item?.destination?.name
+  ) {
+    return item.destination.name;
+  }
+
+  if (
+    item?.destinationCode
+  ) {
+    return item.destinationCode;
+  }
+
+  return "Not Set";
+}
+
+function getSpocName(item = {}) {
+  return (
+    item?.spoc?.name ||
+    item?.spocName ||
+    item?.contactPerson ||
+    ""
+  );
+}
+
+function getOutcome(item = {}) {
+  return (
+    item?.outcomeLabel ||
+    item?.outcomeCode ||
+    item?.result ||
+    item?.status ||
+    "Not Set"
+  );
+}
+
+function getCreatedAt(item = {}) {
+  return (
+    item?.createdAt ||
+    item?.date ||
+    item?.engagementDate ||
+    null
+  );
+}
+
+function getSearchText(item = {}) {
+  return [
+    item?.subject,
+    item?.message,
+    item?.messageText,
+    item?.remarks,
+    item?.note,
+    item?.leadCode,
+    item?.customerName,
+    item?.customerMobile,
+    item?.customerEmail,
+    item?.agentCode,
+    item?.ruleCode,
+    item?.title,
+    item?.purpose,
+    item?.status,
+    item?.stage,
+    item?.outcomeCode,
+    item?.outcomeLabel,
+    getAgentName(item),
+    getSpocName(item),
+    getDestinationName(item),
+    item?.createdByName,
+    item?.assignedToName
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function matchesSearch(
+  item,
+  search
+) {
+  const value =
+    normalize(search);
+
+  return (
+    !value ||
+    getSearchText(
+      item
+    ).includes(value)
+  );
+}
+
+function getLeadStage(
+  lead = {}
+) {
+  return normalizeStatus(
+    lead?.stage ||
+      lead?.status ||
+      ""
+  );
+}
+
+function isWonLead(lead = {}) {
+  return [
+    "converted",
+    "won",
+    "deal_won"
+  ].includes(
+    getLeadStage(lead)
+  );
+}
+
+function isHotLead(lead = {}) {
+  return [
+    "hot",
+    "hot_lead",
+    "priority_hot"
+  ].includes(
+    getLeadStage(lead)
+  );
+}
+
+function isPaymentPendingLead(
+  lead = {}
+) {
+  return [
+    "payment_pending",
+    "payment_due",
+    "awaiting_payment"
+  ].includes(
+    getLeadStage(lead)
+  );
+}
+
+function isRevisionPendingLead(
+  lead = {}
+) {
+  return [
+    "revision_required",
+    "revision_pending",
+    "revision_requested",
+    "revised_quote_pending"
+  ].includes(
+    getLeadStage(lead)
+  );
+}
+
+function isQuoteSentLead(
+  lead = {}
+) {
+  return [
+    "quote_sent",
+    "quotation_sent",
+    "final_quote_sent",
+    "revised_quote_sent"
+      ].includes(getLeadStage(lead));
+}
+
+function isActiveLead(lead = {}) {
+  return ![
+    "converted",
+    "won",
+    "deal_won",
+    "lost",
+    "closed",
+    "cancelled",
+    "canceled"
+  ].includes(getLeadStage(lead));
+}
+
+function getLeadActivityDate(lead = {}) {
+  return (
+    lead?.convertedAt ||
+    lead?.wonAt ||
+    lead?.paymentReceivedAt ||
+    lead?.quoteSentAt ||
+    lead?.quotationSentAt ||
+    lead?.lastQuotationSentAt ||
+    lead?.stageChangedAt ||
+    lead?.updatedAt ||
+    lead?.createdAt ||
+    null
+  );
+}
+
+function isSuccessfulConnection(item = {}) {
+  const value = [
+    item?.outcomeCode,
+    item?.outcomeLabel,
+    item?.status,
+    item?.result,
+    item?.response,
+    item?.agentResponse
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  const negativeSignals = [
+    "no response",
+    "not connected",
+    "call not connected",
+    "busy",
+    "wrong number",
+    "invalid contact",
+    "not reachable",
+    "unreachable",
+    "switched off",
+    "declined"
+  ];
+
+  return !negativeSignals.some(signal =>
+    value.includes(signal)
+  );
+}
+
+function getAgentKey(item = {}) {
+  return (
+    item?.agentId ||
+    item?.travelAgentId ||
+    getAgentName(item)
+  );
+}
+
+function getAgentSegment(agent = {}) {
+  return normalizeStatus(
+    agent?.engagementSegment ||
+      agent?.relationshipStage ||
+      agent?.lifecycleStatus ||
+      "unclassified"
+  );
+}
+
+function getTaskStatus(task = {}) {
+  return normalizeStatus(
+    task?.status ||
+      task?.completionStatus ||
+      "pending"
+  );
+}
+
+function isOpenTask(task = {}) {
+  if (isDeletedRecord(task)) {
+    return false;
+  }
+
+  return !CLOSED_TASK_STATUSES.has(
+    getTaskStatus(task)
+  );
+}
+
+function getTaskDueAt(task = {}) {
+  return (
+    task?.dueAt ||
+    task?.nextEngagementAt ||
+    task?.scheduledAt ||
+    null
+  );
+}
+
+function getTaskBucket(task = {}) {
+  const dueAt =
+    getTaskDueAt(task);
+
+  if (!toDate(dueAt)) {
+    return "upcoming";
+  }
+
+  if (isOverdue(dueAt)) {
+    return "overdue";
+  }
+
+  if (isToday(dueAt)) {
+    return "today";
+  }
+
+  return "upcoming";
+}
+
+function getTaskPriorityLabel(task = {}) {
+  const priority = Number(
+    task?.priority || 0
+  );
+
+  if (priority >= 95) {
+    return "Critical";
+  }
+
+  if (priority >= 85) {
+    return "High";
+  }
+
+  if (priority >= 60) {
+    return "Medium";
+  }
+
+  return "Normal";
+}
+
+function getTaskTitle(task = {}) {
+  return (
+    task?.title ||
+    task?.purpose ||
+    formatLabel(
+      task?.ruleCode ||
+        "Agent follow-up"
+    )
+  );
+}
 
 /* =========================
    UI COMPONENTS
 ========================= */
-function KpiCard({ icon: Icon, label, value, helper, tone = "blue" }) {
-  const toneClass = {
-    blue: "bg-blue-50 text-blue-700",
-    emerald: "bg-emerald-50 text-emerald-700",
-    amber: "bg-amber-50 text-amber-700",
-    red: "bg-red-50 text-red-700",
-    purple: "bg-purple-50 text-purple-700"
+
+function MetricCard({
+  icon: Icon,
+  label,
+  value,
+  helper,
+  tone = "blue"
+}) {
+  const tones = {
+    blue:
+      "border-blue-200 bg-blue-50 text-blue-700",
+
+    emerald:
+      "border-emerald-200 bg-emerald-50 text-emerald-700",
+
+    amber:
+      "border-amber-200 bg-amber-50 text-amber-700",
+
+    red:
+      "border-red-200 bg-red-50 text-red-700",
+
+    violet:
+      "border-violet-200 bg-violet-50 text-violet-700",
+
+    slate:
+      "border-slate-200 bg-slate-50 text-slate-700"
   };
 
   return (
-    <div className="rounded-3xl border border-gray-200 bg-white p-4 shadow-sm">
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 ">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-medium text-gray-500">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
             {label}
           </p>
 
-          <p className="mt-1 text-2xl font-semibold text-gray-950">
+          <p className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
             {value}
           </p>
 
-          {helper && (
-            <p className="mt-1 text-xs text-gray-400">
+          {helper ? (
+            <p className="mt-2 text-xs leading-5 text-slate-500">
               {helper}
             </p>
-          )}
+          ) : null}
         </div>
 
         <div
-          className={`h-11 w-11 rounded-2xl flex items-center justify-center ${
-            toneClass[tone] || toneClass.blue
+          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border ${
+            tones[tone] ||
+            tones.blue
           }`}
         >
-          <Icon size={20} />
+          <Icon className="h-5 w-5" />
         </div>
       </div>
     </div>
   );
 }
 
-function SectionCard({ title, subtitle, children }) {
+function SectionCard({
+  title,
+  description,
+  icon: Icon,
+  children,
+  rightContent
+}) {
   return (
-    <section className="rounded-3xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-      <div className="border-b border-gray-100 px-4 py-3">
-        <h2 className="text-sm font-semibold text-gray-900">
-          {title}
-        </h2>
-        {subtitle && (
-          <p className="mt-0.5 text-xs text-gray-500">
-            {subtitle}
-          </p>
-        )}
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white ">
+      <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-4 py-4">
+        <div className="flex items-start gap-3">
+          {Icon ? (
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+              <Icon className="h-5 w-5" />
+            </div>
+          ) : null}
+
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">
+              {title}
+            </h2>
+
+            {description ? (
+              <p className="mt-0.5 text-xs text-slate-500">
+                {description}
+              </p>
+            ) : null}
+          </div>
+        </div>
+
+        {rightContent || null}
       </div>
 
-      <div className="p-4">{children}</div>
+      <div className="p-4">
+        {children}
+      </div>
     </section>
   );
 }
 
-function ProgressRow({ label, value, total }) {
-  const percentage = total > 0 ? Math.round((value / total) * 100) : 0;
+function ProgressRow({
+  label,
+  value,
+  total
+}) {
+  const width =
+    percent(value, total);
 
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-xs font-medium text-gray-700 truncate">
+        <p className="truncate text-xs font-medium text-slate-700">
           {label}
         </p>
-        <p className="text-xs font-semibold text-gray-900">
+
+        <p className="text-xs font-bold text-slate-900">
           {value}
         </p>
       </div>
 
-      <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+      <div className="h-2 overflow-hidden rounded-full bg-slate-100">
         <div
           className="h-full rounded-full bg-blue-600"
-          style={{ width: `${percentage}%` }}
+          style={{
+            width: `${Math.min(
+              width,
+              100
+            )}%`
+          }}
         />
       </div>
     </div>
   );
 }
 
-function EmptyMiniState({ title }) {
+function EmptyMiniState({
+  title,
+  description
+}) {
   return (
-    <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-6 text-center">
-      <p className="text-sm font-medium text-gray-700">
+    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
+      <p className="text-sm font-semibold text-slate-700">
         {title}
       </p>
-      <p className="mt-1 text-xs text-gray-400">
-        Data will appear here once engagements are available.
+
+      <p className="mt-1 text-xs text-slate-500">
+        {description ||
+          "Data will appear here after activity is recorded."}
       </p>
     </div>
   );
 }
 
-function RecentEngagementItem({ engagement }) {
-  const Icon = getChannelIcon(engagement.channel);
+function TaskBucketButton({
+  active,
+  label,
+  count,
+  onClick,
+  tone = "blue"
+}) {
+  const activeTones = {
+    blue:
+      "border-blue-200 bg-blue-50 text-blue-700",
+
+    amber:
+      "border-amber-200 bg-amber-50 text-amber-700",
+
+    red:
+      "border-red-200 bg-red-50 text-red-700",
+
+    emerald:
+      "border-emerald-200 bg-emerald-50 text-emerald-700",
+
+    slate:
+      "border-slate-200 bg-slate-100 text-slate-700"
+  };
 
   return (
-    <div className="rounded-2xl border border-gray-200 bg-white p-4 hover:border-blue-200 hover:shadow-sm transition">
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold transition ${
+        active
+          ? activeTones[tone] ||
+            activeTones.blue
+          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+      }`}
+    >
+      {label}
+
+      <span className="rounded-full bg-white/80 px-1.5 py-0.5 text-[10px]">
+        {count}
+      </span>
+    </button>
+  );
+}
+
+function TaskStatusBadge({
+  task
+}) {
+  const status =
+    getTaskStatus(task);
+
+  const bucket =
+    getTaskBucket(task);
+
+  if (status === "completed") {
+    return (
+      <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700">
+        Completed
+      </span>
+    );
+  }
+
+  if (status === "skipped") {
+    return (
+      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600">
+        Skipped
+      </span>
+    );
+  }
+
+  if (bucket === "overdue") {
+    return (
+      <span className="rounded-full border border-red-200 bg-red-50 px-2 py-1 text-[11px] font-semibold text-red-700">
+        Overdue
+      </span>
+    );
+  }
+
+  if (bucket === "today") {
+    return (
+      <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700">
+        Due Today
+      </span>
+    );
+  }
+
+  return (
+    <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700">
+      Upcoming
+    </span>
+  );
+}
+
+function EngagementTaskQueue({
+  tasks,
+  bucket,
+  onBucketChange,
+  counts
+}) {
+  return (
+    <SectionCard
+      icon={ListChecks}
+      title="My Engagement Task Queue"
+      description="Cadence actions, lead follow-ups and relationship tasks assigned to you."
+      rightContent={
+        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+          {tasks.length} visible
+        </span>
+      }
+    >
+      <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
+        <TaskBucketButton
+          label="Today"
+          count={counts.today}
+          active={
+            bucket === "today"
+          }
+          tone="amber"
+          onClick={() =>
+            onBucketChange("today")
+          }
+        />
+
+        <TaskBucketButton
+          label="Overdue"
+          count={counts.overdue}
+          active={
+            bucket === "overdue"
+          }
+          tone="red"
+          onClick={() =>
+            onBucketChange(
+              "overdue"
+            )
+          }
+        />
+
+        <TaskBucketButton
+          label="Upcoming"
+          count={counts.upcoming}
+          active={
+            bucket === "upcoming"
+          }
+          tone="blue"
+          onClick={() =>
+            onBucketChange(
+              "upcoming"
+            )
+          }
+        />
+
+        <TaskBucketButton
+          label="Completed Today"
+          count={
+            counts.completedToday
+          }
+          active={
+            bucket === "completed"
+          }
+          tone="emerald"
+          onClick={() =>
+            onBucketChange(
+              "completed"
+            )
+          }
+        />
+
+        <TaskBucketButton
+          label="Skipped"
+          count={counts.skipped}
+          active={
+            bucket === "skipped"
+          }
+          tone="slate"
+          onClick={() =>
+            onBucketChange(
+              "skipped"
+            )
+          }
+        />
+
+        <TaskBucketButton
+          label="All Open"
+          count={counts.open}
+          active={
+            bucket === "all"
+          }
+          onClick={() =>
+            onBucketChange("all")
+          }
+        />
+      </div>
+
+      {tasks.length ? (
+        <div className="space-y-3">
+          {tasks
+            .slice(0, 12)
+            .map(task => (
+              <div
+                key={task.id}
+                className="rounded-2xl border border-slate-200 bg-white p-4 transition hover:border-slate-300 hover:"
+              >
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <TaskStatusBadge
+                        task={task}
+                      />
+
+                      <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-1 text-[11px] font-semibold text-violet-700">
+                        {getTaskPriorityLabel(
+                          task
+                        )}
+                      </span>
+
+                      {task?.sequenceDay !==
+                        null &&
+                      task?.sequenceDay !==
+                        undefined ? (
+                        <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700">
+                          New Agent Day{" "}
+                          {task.sequenceDay}
+                        </span>
+                      ) : null}
+                    </div>
+
+                    <h3 className="mt-3 text-sm font-semibold text-slate-950">
+                      {getTaskTitle(
+                        task
+                      )}
+                    </h3>
+
+                    <p className="mt-1 text-sm font-medium text-slate-700">
+                      {getAgentName(
+                        task
+                      )}
+                    </p>
+
+                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
+                      <span>
+                        {formatLabel(
+                          task?.ruleCode
+                        )}
+                      </span>
+
+                      <span>
+                        {formatDateTime(
+                          getTaskDueAt(
+                            task
+                          )
+                        )}
+                      </span>
+
+                      {task?.leadCode ? (
+                        <span>
+                          Lead:{" "}
+                          {task.leadCode}
+                        </span>
+                      ) : null}
+                    </div>
+
+                    {task?.purpose ? (
+                      <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">
+                        {task.purpose}
+                      </p>
+                    ) : null}
+
+                    {Array.isArray(
+                      task?.recommendedChannels
+                    ) &&
+                    task
+                      .recommendedChannels
+                      .length ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {task.recommendedChannels.map(
+                          channel => (
+                            <span
+                              key={
+                                channel
+                              }
+                              className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium capitalize text-slate-600"
+                            >
+                              {channel}
+                                                      </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  {task?.leadId ? (
+                    <Link
+                      href={`/leads/${task.leadId}`}
+                      className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                    >
+                      View Lead
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </Link>
+                  ) : null}
+
+                  {task?.agentId ? (
+                    <Link
+                      href={`/travel-agents/${task.agentId}`}
+                      className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                    >
+                      View Agent
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </Link>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {tasks.length > 12 ? (
+            <p className="text-center text-xs font-medium text-slate-500">
+              +{tasks.length - 12} more tasks match this view
+            </p>
+          ) : null}
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+          <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-600" />
+
+          <p className="mt-3 text-sm font-semibold text-slate-900">
+            No tasks found in this queue.
+          </p>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+function RecentEngagementItem({ engagement }) {
+  const Icon = getChannelIcon(engagement?.channel);
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 transition hover:border-blue-200 hover:">
       <div className="flex items-start gap-3">
-        <div className="h-10 w-10 rounded-2xl bg-blue-50 text-blue-700 flex items-center justify-center shrink-0">
-          <Icon size={18} />
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
+          <Icon className="h-5 w-5" />
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-gray-950 truncate">
-                {engagement.subject || getAgentName(engagement)}
+              <p className="truncate text-sm font-semibold text-slate-950">
+                {engagement?.subject || getAgentName(engagement)}
               </p>
 
-              <p className="mt-0.5 text-xs text-gray-500">
-                {getChannelLabel(engagement.channel)} • {formatDateTime(engagement.createdAt)}
+              <p className="mt-0.5 text-xs text-slate-500">
+                {getChannelLabel(engagement?.channel)} •{" "}
+                {formatDateTime(getCreatedAt(engagement))}
               </p>
             </div>
 
-            <span className="inline-flex w-fit rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600">
+            <span className="inline-flex w-fit rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
               {formatLabel(getOutcome(engagement))}
             </span>
           </div>
@@ -304,48 +1338,79 @@ function RecentEngagementItem({ engagement }) {
               {getAgentName(engagement)}
             </span>
 
-            {getSpocName(engagement) && (
-              <span className="rounded-full bg-gray-50 border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600">
+            {getSpocName(engagement) ? (
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
                 SPOC: {getSpocName(engagement)}
               </span>
-            )}
+            ) : null}
 
             <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
               {getDestinationName(engagement)}
             </span>
           </div>
 
-          {engagement.message && (
-            <p className="mt-3 text-sm text-gray-500 line-clamp-2">
-              {engagement.message}
+          {engagement?.message || engagement?.messageText ? (
+            <p className="mt-3 line-clamp-2 text-sm text-slate-500">
+              {engagement?.message || engagement?.messageText}
             </p>
-          )}
+          ) : null}
         </div>
       </div>
     </div>
   );
 }
 
+function LoadingState() {
+  return (
+    <main className="min-h-screen bg-slate-50">
+      <div className="mx-auto max-w-[1500px] space-y-5 px-4 py-6">
+        <CardSkeleton />
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {[1, 2, 3, 4].map(item => (
+            <CardSkeleton key={item} />
+          ))}
+        </div>
+
+        <CardSkeleton />
+        <CardSkeleton />
+      </div>
+    </main>
+  );
+}
+
 /* =========================
    MAIN PAGE
 ========================= */
-export default function EngagementDashboardPage() {
+
+export default function TeamEngagementDashboardPage() {
   const { user, loading: authLoading } = useAuth();
 
   const [engagements, setEngagements] = useState([]);
+  const [leads, setLeads] = useState([]);
+  const [travelAgents, setTravelAgents] = useState([]);
+  const [engagementTasks, setEngagementTasks] = useState([]);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const [taskBucket, setTaskBucket] = useState("today");
 
   /* =========================
-     LOAD ENGAGEMENTS
+     USER-SCOPED REALTIME DATA
   ========================== */
+
   useEffect(() => {
     if (authLoading) return;
 
-    if (!user?.uid) {
+    const uid = user?.uid || user?.id || "";
+    const email = user?.email || "";
+
+    if (!uid) {
       setEngagements([]);
+      setLeads([]);
+      setTravelAgents([]);
+      setEngagementTasks([]);
       setLoading(false);
       return;
     }
@@ -353,597 +1418,1557 @@ export default function EngagementDashboardPage() {
     setLoading(true);
     setError("");
 
-    const q = query(
-      collection(db, "engagements"),
-      where("createdByUid", "==", user.uid),
-      orderBy("createdAt", "desc")
-    );
+    const readiness = {
+      engagements: false,
+      leads: false,
+      agents: false,
+      tasks: false
+    };
 
-    const unsub = onSnapshot(
-      q,
-      snap => {
-        const rows = snap.docs.map(d => ({
-          id: d.id,
-          ...d.data()
-        }));
+    function markReady(key) {
+      readiness[key] = true;
 
-        setEngagements(rows);
-        setLoading(false);
-      },
-      err => {
-        console.error("Failed to load engagement dashboard:", err);
-        setError(
-          "Unable to load engagement dashboard. Please check Firestore permissions or required index."
-        );
+      if (Object.values(readiness).every(Boolean)) {
         setLoading(false);
       }
-    );
-
-    return () => unsub();
-  }, [user?.uid, authLoading]);
-
-  /* =========================
-     FILTER OPTIONS
-  ========================== */
-  const channelOptions = useMemo(() => {
-    const channels = Array.from(
-      new Set(engagements.map(e => e.channel).filter(Boolean))
-    );
-
-    return channels.sort();
-  }, [engagements]);
-
-  const activeFilterCount = useMemo(() => {
-    return Object.entries(filters).filter(([key, value]) => {
-      if (key === "channel") return value && value !== "all";
-      return Boolean(String(value || "").trim());
-    }).length;
-  }, [filters]);
-
-  const dateRangeError = useMemo(() => {
-    if (!filters.dateFrom || !filters.dateTo) return "";
-
-    const fromDate = getStartOfDay(filters.dateFrom);
-    const toDate = getEndOfDay(filters.dateTo);
-
-    if (fromDate && toDate && fromDate > toDate) {
-      return "From Date cannot be later than To Date.";
     }
 
-    return "";
-  }, [filters.dateFrom, filters.dateTo]);
+    function subscribeMerged(queryRefs, setter, readyKey, label) {
+      const buckets = queryRefs.map(() => new Map());
+      const completedIndexes = new Set();
 
-  const filteredEngagements = useMemo(() => {
-    if (dateRangeError) return [];
+      function emitMerged() {
+        const merged = [];
 
-    const searchText = normalize(filters.search);
-    const fromDate = getStartOfDay(filters.dateFrom);
-    const toDate = getEndOfDay(filters.dateTo);
+        buckets.forEach(bucket => {
+          bucket.forEach(row => merged.push(row));
+        });
 
-    return engagements.filter(e => {
-      const createdDate = getValidDate(e.createdAt);
-      const channel = normalize(e.channel);
-
-      if ((fromDate || toDate) && !createdDate) return false;
-      if (fromDate && createdDate < fromDate) return false;
-      if (toDate && createdDate > toDate) return false;
-
-      if (
-        filters.channel !== "all" &&
-        channel !== normalize(filters.channel)
-      ) {
-        return false;
+        setter(dedupeRows(merged));
       }
 
-      if (searchText) {
-        const searchableText = [
-          e.subject,
-          e.message,
-          e.outcomeCode,
-          e.outcomeLabel,
-          e.channel,
-          getAgentName(e),
-          getSpocName(e),
-          getDestinationName(e),
-          e.createdByName
-        ]
-          .map(normalize)
-          .join(" ");
+      function markQueryComplete(index) {
+        completedIndexes.add(index);
 
-        if (!searchableText.includes(searchText)) {
-          return false;
+        if (completedIndexes.size === queryRefs.length) {
+          markReady(readyKey);
         }
       }
 
-      return true;
-    });
-  }, [engagements, filters, dateRangeError]);
+      const unsubscribers = queryRefs.map((queryRef, index) => {
+        return onSnapshot(
+          queryRef,
+          snapshot => {
+            const bucket = new Map();
+
+            snapshot.docs.forEach(documentSnapshot => {
+              bucket.set(documentSnapshot.id, {
+                id: documentSnapshot.id,
+                ...documentSnapshot.data()
+              });
+            });
+
+            buckets[index] = bucket;
+            emitMerged();
+            markQueryComplete(index);
+          },
+          snapshotError => {
+            console.error(`${label} load error:`, snapshotError);
+            markQueryComplete(index);
+
+            setError(previous => {
+              if (previous) return previous;
+
+              return `Some ${label.toLowerCase()} data could not be loaded. Check Firestore rules and indexes.`;
+            });
+          }
+        );
+      });
+
+      return () => {
+        unsubscribers.forEach(unsubscribe => unsubscribe());
+      };
+    }
+
+    const engagementQueries = [
+      query(
+        collection(db, "engagements"),
+        where("createdByUid", "==", uid)
+      )
+    ];
+
+    const leadQueries = [
+      query(
+        collection(db, "leads"),
+        where("assignedToUid", "==", uid)
+      ),
+      query(
+        collection(db, "leads"),
+        where("createdByUid", "==", uid)
+      )
+    ];
+
+    const agentQueries = [
+      query(
+        collection(db, "travelAgents"),
+        where("assignedToUid", "==", uid)
+      ),
+      query(
+        collection(db, "travelAgents"),
+        where("accountManagerUid", "==", uid)
+      )
+    ];
+
+    const taskQueries = [
+      query(
+        collection(db, "engagementTasks"),
+        where("assignedToUid", "==", uid)
+      )
+    ];
+
+    if (email) {
+      leadQueries.push(
+        query(
+          collection(db, "leads"),
+          where("assignedToEmail", "==", email)
+        )
+      );
+
+      agentQueries.push(
+        query(
+          collection(db, "travelAgents"),
+          where("assignedToEmail", "==", email)
+        )
+      );
+
+      taskQueries.push(
+        query(
+          collection(db, "engagementTasks"),
+          where("assignedToEmail", "==", email)
+        )
+      );
+    }
+
+    const unsubscribeEngagements = subscribeMerged(
+      engagementQueries,
+      setEngagements,
+      "engagements",
+      "Engagements"
+    );
+
+    const unsubscribeLeads = subscribeMerged(
+      leadQueries,
+      setLeads,
+      "leads",
+      "Leads"
+    );
+
+    const unsubscribeAgents = subscribeMerged(
+      agentQueries,
+      setTravelAgents,
+      "agents",
+      "Travel agents"
+    );
+
+    const unsubscribeTasks = subscribeMerged(
+      taskQueries,
+      setEngagementTasks,
+      "tasks",
+      "Engagement tasks"
+    );
+
+    return () => {
+      unsubscribeEngagements();
+      unsubscribeLeads();
+      unsubscribeAgents();
+      unsubscribeTasks();
+    };
+  }, [user?.uid, user?.id, user?.email, authLoading]);
 
   /* =========================
-     SUMMARY
+     CLEAN DATA
   ========================== */
-  const summary = useMemo(() => {
-    const today = new Date();
 
-    let todayCount = 0;
-    let meetingCount = 0;
-    let followUpDue = 0;
-    let overdueFollowUp = 0;
+  const activeEngagements = useMemo(() => {
+    return engagements
+      .filter(item => !isDeletedRecord(item))
+      .sort((a, b) => {
+        return (
+          (toDate(getCreatedAt(b))?.getTime() || 0) -
+          (toDate(getCreatedAt(a))?.getTime() || 0)
+        );
+      });
+  }, [engagements]);
 
-    const channelMap = {};
-    const destinationMap = {};
-    const agentMap = {};
-    const outcomeMap = {};
+  const activeLeads = useMemo(() => {
+    return leads.filter(item => !isDeletedRecord(item));
+  }, [leads]);
 
-    filteredEngagements.forEach(e => {
-      const createdDate = getValidDate(e.createdAt);
+  const activeTravelAgents = useMemo(() => {
+    return travelAgents.filter(item => !isDeletedRecord(item));
+  }, [travelAgents]);
 
-      if (createdDate && isSameDay(createdDate, today)) {
-        todayCount += 1;
-      }
+  const activeTasks = useMemo(() => {
+    return engagementTasks.filter(item => !isDeletedRecord(item));
+  }, [engagementTasks]);
 
-      if (
-        ["meeting", "online_meeting", "offline_meeting"].includes(e.channel)
-      ) {
-        meetingCount += 1;
-      }
+  const channelOptions = useMemo(() => {
+    const set = new Set();
 
-      const followDate = getFollowUpDate(e);
-
-      if (followDate) {
-        if (followDate < today && !isSameDay(followDate, today)) {
-          overdueFollowUp += 1;
-        } else if (isSameDay(followDate, today)) {
-          followUpDue += 1;
-        }
-      }
-
-      const channel = e.channel || "other";
-      channelMap[channel] = (channelMap[channel] || 0) + 1;
-
-      const destination = getDestinationName(e);
-      destinationMap[destination] =
-        (destinationMap[destination] || 0) + 1;
-
-      const agent = getAgentName(e);
-      agentMap[agent] = (agentMap[agent] || 0) + 1;
-
-      const outcome = getOutcome(e);
-      outcomeMap[outcome] = (outcomeMap[outcome] || 0) + 1;
+    activeEngagements.forEach(item => {
+      set.add(getChannel(item?.channel));
     });
 
-    const toSorted = obj =>
-      Object.entries(obj)
-        .map(([label, value]) => ({ label, value }))
-        .sort((a, b) => b.value - a.value);
+    return Array.from(set)
+      .filter(Boolean)
+      .sort();
+  }, [activeEngagements]);
 
-    const topChannel = toSorted(channelMap)[0];
+  const filteredEngagements = useMemo(() => {
+    return activeEngagements.filter(item => {
+      const matchesChannel =
+        filters.channel === "all" ||
+        getChannel(item?.channel) === filters.channel;
 
-    return {
-      total: filteredEngagements.length,
-      today: todayCount,
-      meetings: meetingCount,
-      followUpDue,
-      overdueFollowUp,
-      channelRows: toSorted(channelMap),
-      destinationRows: toSorted(destinationMap).slice(0, 5),
-      agentRows: toSorted(agentMap).slice(0, 5),
-      outcomeRows: toSorted(outcomeMap).slice(0, 5),
-      topChannel: topChannel
-        ? `${getChannelLabel(topChannel.label)} (${topChannel.value})`
-        : "—"
+      const matchesDate = isWithinPeriod(
+        getCreatedAt(item),
+        filters.period,
+        filters.dateFrom,
+        filters.dateTo
+      );
+
+      return (
+        matchesSearch(item, filters.search) &&
+        matchesChannel &&
+        matchesDate
+      );
+    });
+  }, [activeEngagements, filters]);
+
+  const scopedLeads = useMemo(() => {
+    return activeLeads.filter(item => {
+      return matchesSearch(item, filters.search);
+    });
+  }, [activeLeads, filters.search]);
+
+  const scopedAgents = useMemo(() => {
+    return activeTravelAgents.filter(item => {
+      return matchesSearch(item, filters.search);
+    });
+  }, [activeTravelAgents, filters.search]);
+
+  const scopedTasks = useMemo(() => {
+    return activeTasks.filter(item => {
+      const matchesTaskChannel =
+        filters.channel === "all" ||
+        (Array.isArray(item?.recommendedChannels) &&
+          item.recommendedChannels
+            .map(getChannel)
+            .includes(filters.channel));
+
+      return (
+        matchesSearch(item, filters.search) &&
+        matchesTaskChannel
+      );
+    });
+  }, [activeTasks, filters.search, filters.channel]);
+
+  /* =========================
+     TASK METRICS
+  ========================== */
+
+  const taskMetrics = useMemo(() => {
+    const open = scopedTasks.filter(isOpenTask);
+        return {
+      open: open.length,
+
+      today: open.filter(
+        item =>
+          getTaskBucket(item) ===
+          "today"
+      ).length,
+
+      overdue: open.filter(
+        item =>
+          getTaskBucket(item) ===
+          "overdue"
+      ).length,
+
+      upcoming: open.filter(
+        item =>
+          getTaskBucket(item) ===
+          "upcoming"
+      ).length,
+
+      completedToday:
+        scopedTasks.filter(item => {
+          return (
+            getTaskStatus(item) ===
+              "completed" &&
+            isToday(
+              item?.completedAt
+            )
+          );
+        }).length,
+
+      skipped:
+        scopedTasks.filter(
+          item =>
+            getTaskStatus(item) ===
+            "skipped"
+        ).length
     };
-  }, [filteredEngagements]);
+  }, [scopedTasks]);
 
-  const recentEngagements = useMemo(() => {
-    return filteredEngagements.slice(0, 6);
-  }, [filteredEngagements]);
+  const visibleTaskQueue =
+    useMemo(() => {
+      const rows =
+        scopedTasks.filter(task => {
+          const status =
+            getTaskStatus(task);
+
+          if (
+            taskBucket ===
+            "completed"
+          ) {
+            return (
+              status ===
+                "completed" &&
+              isToday(
+                task?.completedAt
+              )
+            );
+          }
+
+          if (
+            taskBucket ===
+            "skipped"
+          ) {
+            return (
+              status === "skipped"
+            );
+          }
+
+          if (
+            taskBucket === "all"
+          ) {
+            return isOpenTask(
+              task
+            );
+          }
+
+          return (
+            isOpenTask(task) &&
+            getTaskBucket(task) ===
+              taskBucket
+          );
+        });
+
+      return rows.sort(
+        (a, b) => {
+          const aDate =
+            toDate(
+              getTaskDueAt(a)
+            )?.getTime() ||
+            Number.MAX_SAFE_INTEGER;
+
+          const bDate =
+            toDate(
+              getTaskDueAt(b)
+            )?.getTime() ||
+            Number.MAX_SAFE_INTEGER;
+
+          if (aDate !== bDate) {
+            return aDate - bDate;
+          }
+
+          return (
+            Number(
+              b?.priority || 0
+            ) -
+            Number(
+              a?.priority || 0
+            )
+          );
+        }
+      );
+    }, [
+      scopedTasks,
+      taskBucket
+    ]);
+
+  /* =========================
+     TODAY SNAPSHOT
+  ========================== */
+
+  const todaySnapshot =
+    useMemo(() => {
+      const successfulHistory =
+        activeEngagements
+          .filter(
+            isSuccessfulConnection
+          )
+          .filter(item =>
+            toDate(
+              getCreatedAt(item)
+            )
+          )
+          .sort((a, b) => {
+            return (
+              (
+                toDate(
+                  getCreatedAt(a)
+                )?.getTime() || 0
+              ) -
+              (
+                toDate(
+                  getCreatedAt(b)
+                )?.getTime() || 0
+              )
+            );
+          });
+
+      const firstConnectionByAgent =
+        new Map();
+
+      successfulHistory.forEach(
+        item => {
+          const key =
+            getAgentKey(item);
+
+          if (
+            !key ||
+            firstConnectionByAgent.has(
+              key
+            )
+          ) {
+            return;
+          }
+
+          firstConnectionByAgent.set(
+            key,
+            item
+          );
+        }
+      );
+
+      const successfulToday =
+        activeEngagements
+          .filter(item =>
+            isToday(
+              getCreatedAt(item)
+            )
+          )
+          .filter(
+            isSuccessfulConnection
+          )
+          .filter(item =>
+            matchesSearch(
+              item,
+              filters.search
+            )
+          )
+          .filter(item => {
+            return (
+              filters.channel ===
+                "all" ||
+              getChannel(
+                item?.channel
+              ) ===
+                filters.channel
+            );
+          });
+
+      const uniqueToday =
+        new Map();
+
+      successfulToday.forEach(
+        item => {
+          const key =
+            getAgentKey(item);
+
+          if (
+            !key ||
+            uniqueToday.has(key)
+          ) {
+            return;
+          }
+
+          uniqueToday.set(
+            key,
+            item
+          );
+        }
+      );
+
+      const firstConnectedTodayKeys =
+        new Set();
+
+      firstConnectionByAgent.forEach(
+        (item, key) => {
+          if (
+            isToday(
+              getCreatedAt(item)
+            )
+          ) {
+            firstConnectedTodayKeys.add(
+              key
+            );
+          }
+        }
+      );
+
+      const queriesReceivedToday =
+        scopedLeads.filter(
+          lead => {
+            return isToday(
+              lead?.createdAt
+            );
+          }
+        ).length;
+
+      const quotesSharedToday =
+        scopedLeads.filter(
+          lead => {
+            return (
+              isQuoteSentLead(
+                lead
+              ) &&
+              isToday(
+                getLeadActivityDate(
+                  lead
+                )
+              )
+            );
+          }
+        ).length;
+
+      const convertedToday =
+        scopedLeads.filter(
+          lead => {
+            return (
+              isWonLead(lead) &&
+              isToday(
+                getLeadActivityDate(
+                  lead
+                )
+              )
+            );
+          }
+        ).length;
+
+      return {
+        firstConnections:
+          Array.from(
+            uniqueToday.keys()
+          ).filter(key =>
+            firstConnectedTodayKeys.has(
+              key
+            )
+          ).length,
+
+        uniqueAgentsConnected:
+          uniqueToday.size,
+
+        existingFollowUps:
+          Array.from(
+            uniqueToday.keys()
+          ).filter(
+            key =>
+              !firstConnectedTodayKeys.has(
+                key
+              )
+          ).length,
+
+        queriesReceivedToday,
+        quotesSharedToday,
+        convertedToday,
+
+        completedTasksToday:
+          taskMetrics.completedToday,
+
+        overdueTasks:
+          taskMetrics.overdue
+      };
+    }, [
+      activeEngagements,
+      scopedLeads,
+      taskMetrics.completedToday,
+      taskMetrics.overdue,
+      filters.search,
+      filters.channel
+    ]);
+
+  /* =========================
+     LEAD ACTIONS
+  ========================== */
+
+  const leadActions =
+    useMemo(() => {
+      return {
+        activeQueries:
+          scopedLeads.filter(
+            isActiveLead
+          ).length,
+
+        hotLeads:
+          scopedLeads.filter(
+            isHotLead
+          ).length,
+
+        paymentPending:
+          scopedLeads.filter(
+            isPaymentPendingLead
+          ).length,
+
+        revisionPending:
+          scopedLeads.filter(
+            isRevisionPendingLead
+          ).length,
+
+        quoteSent:
+          scopedLeads.filter(
+            isQuoteSentLead
+          ).length
+      };
+    }, [scopedLeads]);
+
+  /* =========================
+     ANALYTICS
+  ========================== */
+
+  const summary =
+    useMemo(() => {
+      const channelMap =
+        new Map();
+
+      const destinationMap =
+        new Map();
+
+      const outcomeMap =
+        new Map();
+
+      const agentMap =
+        new Map();
+
+      filteredEngagements.forEach(
+        item => {
+          const channel =
+            getChannel(
+              item?.channel
+            );
+
+          const destination =
+            getDestinationName(
+              item
+            );
+
+          const outcome =
+            getOutcome(item);
+
+          const agent =
+            getAgentName(item);
+
+          channelMap.set(
+            channel,
+            (
+              channelMap.get(
+                channel
+              ) || 0
+            ) + 1
+          );
+
+          destinationMap.set(
+            destination,
+            (
+              destinationMap.get(
+                destination
+              ) || 0
+            ) + 1
+          );
+
+          outcomeMap.set(
+            outcome,
+            (
+              outcomeMap.get(
+                outcome
+              ) || 0
+            ) + 1
+          );
+
+          agentMap.set(
+            agent,
+            (
+              agentMap.get(
+                agent
+              ) || 0
+            ) + 1
+          );
+        }
+      );
+
+      function toRows(
+        map,
+        limit = 6
+      ) {
+        return Array.from(
+          map.entries()
+        )
+          .map(
+            ([
+              label,
+              value
+            ]) => ({
+              label,
+              value
+            })
+          )
+          .sort(
+            (a, b) =>
+              b.value - a.value
+          )
+          .slice(0, limit);
+      }
+
+      const assetShares =
+        filteredEngagements.reduce(
+          (sum, item) => {
+            const count =
+              Number(
+                item?.assetShareCount ||
+                  0
+              ) ||
+              (
+                Array.isArray(
+                  item?.sharedAssetIds
+                )
+                  ? item
+                      .sharedAssetIds
+                      .length
+                  : 0
+              ) ||
+              (
+                Array.isArray(
+                  item?.sharedAssets
+                )
+                  ? item
+                      .sharedAssets
+                      .length
+                  : 0
+              ) ||
+              0;
+
+            return sum + count;
+          },
+          0
+        );
+
+      return {
+        total:
+          filteredEngagements.length,
+
+        uniqueAgents:
+          new Set(
+            filteredEngagements.map(
+              getAgentKey
+            )
+          ).size,
+
+        channelRows:
+          toRows(channelMap),
+
+        destinationRows:
+          toRows(
+            destinationMap
+          ),
+
+        outcomeRows:
+          toRows(outcomeMap),
+
+        agentRows:
+          toRows(agentMap),
+
+        assetShares,
+
+        lastEngagement:
+          filteredEngagements[0] ||
+          null
+      };
+    }, [filteredEngagements]);
+
+  const agentPortfolio =
+    useMemo(() => {
+      const counts = {
+        total:
+          scopedAgents.length,
+
+        newAgent: 0,
+        regular: 0,
+        warm: 0,
+        inactive: 0,
+        cold: 0,
+        unclassified: 0
+      };
+
+      scopedAgents.forEach(
+        agent => {
+          const segment =
+            getAgentSegment(agent);
+
+          if (
+            segment ===
+              "new_agent" ||
+            segment === "new"
+          ) {
+            counts.newAgent += 1;
+          } else if (
+            segment ===
+              "regular_business" ||
+            segment === "regular"
+          ) {
+            counts.regular += 1;
+          } else if (
+            segment ===
+              "warm_irregular" ||
+            segment === "warm"
+          ) {
+            counts.warm += 1;
+          } else if (
+            segment ===
+            "inactive"
+          ) {
+            counts.inactive += 1;
+          } else if (
+            segment === "cold"
+          ) {
+            counts.cold += 1;
+          } else {
+            counts.unclassified += 1;
+          }
+        }
+      );
+
+      return counts;
+    }, [scopedAgents]);
+
+  const recentEngagements =
+    useMemo(() => {
+      return filteredEngagements.slice(
+        0,
+        8
+      );
+    }, [filteredEngagements]);
 
   /* =========================
      FILTER ACTIONS
   ========================== */
-  const updateFilter = (key, value) => {
-    setFilters(prev => ({
-      ...prev,
+
+  function updateFilter(
+    key,
+    value
+  ) {
+    setFilters(previous => ({
+      ...previous,
       [key]: value
     }));
-  };
+  }
 
-  const setDateRange = type => {
-    const today = new Date();
+  function applyQuickDate(
+    period
+  ) {
+    setFilters(previous => ({
+      ...previous,
+      period,
+      dateFrom: "",
+      dateTo: ""
+    }));
+  }
 
-    if (type === "today") {
-      const date = toDateInput(today);
+  function applyCustomDate(
+    key,
+    value
+  ) {
+    setFilters(previous => ({
+      ...previous,
+      period: "custom",
+      [key]: value
+    }));
+  }
 
-      setFilters(prev => ({
-        ...prev,
-        dateFrom: date,
-        dateTo: date
-      }));
-    }
+  function resetFilters() {
+    setFilters(
+      DEFAULT_FILTERS
+    );
 
-    if (type === "yesterday") {
-      const yesterday = new Date(today);
-      yesterday.setDate(today.getDate() - 1);
+    setTaskBucket("today");
+  }
 
-      const date = toDateInput(yesterday);
+  const dateRangeError =
+    useMemo(() => {
+      if (
+        !filters.dateFrom ||
+        !filters.dateTo
+      ) {
+        return "";
+      }
 
-      setFilters(prev => ({
-        ...prev,
-        dateFrom: date,
-        dateTo: date
-      }));
-    }
-
-    if (type === "last7") {
-      const from = new Date(today);
-      from.setDate(today.getDate() - 6);
-
-      setFilters(prev => ({
-        ...prev,
-        dateFrom: toDateInput(from),
-        dateTo: toDateInput(today)
-      }));
-    }
-
-    if (type === "thisMonth") {
-      const firstDay = new Date(
-        today.getFullYear(),
-        today.getMonth(),
-        1
+      return (
+        filters.dateFrom >
+        filters.dateTo
+          ? "From Date cannot be later than To Date."
+          : ""
       );
+    }, [
+      filters.dateFrom,
+      filters.dateTo
+    ]);
 
-      setFilters(prev => ({
-        ...prev,
-        dateFrom: toDateInput(firstDay),
-        dateTo: toDateInput(today)
-      }));
-    }
-  };
+  if (
+    authLoading ||
+    loading
+  ) {
+    return <LoadingState />;
+  }
 
-  /* =========================
-     LOADING
-  ========================== */
-  if (authLoading || loading) {
+  if (!user) {
     return (
-      <main className="min-h-screen bg-gray-50">
-        <div className="max-w-7xl mx-auto px-4 py-6 space-y-4">
-          <CardSkeleton />
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-            <CardSkeleton />
-            <CardSkeleton />
-            <CardSkeleton />
-            <CardSkeleton />
-          </div>
-          <CardSkeleton />
-          <CardSkeleton />
+      <main className="min-h-screen bg-slate-50 p-6">
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-5 text-sm font-medium text-red-700">
+          Please sign in to view the engagement dashboard.
         </div>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-gray-50">
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+    <main className="min-h-screen">
+      <div className="mx-auto max-w-[1600px] space-y-6 px-4 py-6 sm:px-6">
 
-        {/* ================= BANNER ================= */}
-        <section className="rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 shadow-sm overflow-hidden">
-          <div className="p-5 md:p-6">
-            <div className="flex items-start gap-4">
-              <div className="h-12 w-12 rounded-2xl bg-white/15 text-white flex items-center justify-center shrink-0">
-                <BarChart3 size={24} />
-              </div>
+        {/* HEADER */}
+        <section className="overflow-hidden rounded-3xl bg-slate-950 ">
+          <div className="p-5 text-white sm:p-6">
+            <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+              <div className="max-w-3xl">
+                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-semibold text-slate-200">
+                  <BarChart3 className="h-3.5 w-3.5" />
 
-              <div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white/90 mb-3">
-                  <Activity size={14} />
-                  Engagement Analytics
+                  Team Engagement Workspace
                 </div>
 
-                <h1 className="text-2xl font-semibold tracking-tight text-white">
-                  Engagement Dashboard
+                <h1 className="mt-5 text-3xl font-bold tracking-tight text-white">
+                  My Engagement Dashboard
                 </h1>
 
-                <p className="mt-1 text-sm text-blue-100 max-w-2xl leading-6">
-                  Monitor your calls, WhatsApp messages, emails, meetings and follow-up performance from one dashboard.
+                <p className="mt-3 text-sm leading-6 text-slate-300">
+                  Manage your assigned agents, cadence tasks, active queries,
+                  follow-ups and engagement performance from one workspace.
                 </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:min-w-[620px]">
+                <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
+                  <p className="text-xs text-slate-300">
+                    Engagements
+                  </p>
+
+                  <p className="mt-2 text-2xl font-bold">
+                    {summary.total}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
+                  <p className="text-xs text-slate-300">
+                    Agents Today
+                  </p>
+
+                  <p className="mt-2 text-2xl font-bold text-sky-300">
+                    {
+                      todaySnapshot
+                        .uniqueAgentsConnected
+                    }
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
+                  <p className="text-xs text-slate-300">
+                    Tasks Today
+                  </p>
+
+                  <p className="mt-2 text-2xl font-bold text-amber-300">
+                    {
+                      taskMetrics.today
+                    }
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
+                  <p className="text-xs text-slate-300">
+                    Overdue
+                  </p>
+
+                  <p className="mt-2 text-2xl font-bold text-red-300">
+                    {
+                      taskMetrics.overdue
+                    }
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-col gap-3 border-t border-white/10 pt-5 sm:flex-row sm:items-center sm:justify-between">
+              <p className="flex items-center gap-2 text-sm text-slate-300">
+                <Filter className="h-4 w-4" />
+
+                The dashboard only shows records assigned to or created by you.
+              </p>
+
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  href="/employee-dashboard"
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/15"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Back
+                </Link>
+
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/15"
+                >
+                  <RefreshCcw className="h-4 w-4" />
+                  Reset
+                </button>
               </div>
             </div>
           </div>
         </section>
 
-        {/* ================= FILTER PANEL ================= */}
-        <section className="rounded-3xl border border-gray-200 bg-white p-4 shadow-sm">
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
-
-            <div className="xl:col-span-2">
-              <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                Search
-              </label>
-              <div className="relative">
-                <Search
-                  size={16}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-                />
-                <input
-                  value={filters.search}
-                  onChange={e => updateFilter("search", e.target.value)}
-                  placeholder="Agent, destination, SPOC, outcome..."
-                  className="w-full rounded-xl border border-gray-200 bg-gray-50 pl-9 pr-3 py-2.5 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                Channel
-              </label>
-              <select
-                value={filters.channel}
-                onChange={e => updateFilter("channel", e.target.value)}
-                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-              >
-                <option value="all">All Channels</option>
-                {channelOptions.map(channel => (
-                  <option key={channel} value={channel}>
-                    {getChannelLabel(channel)}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                From Date
-              </label>
-              <input
-                type="date"
-                value={filters.dateFrom}
-                onChange={e => updateFilter("dateFrom", e.target.value)}
-                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                To Date
-              </label>
-              <input
-                type="date"
-                value={filters.dateTo}
-                onChange={e => updateFilter("dateTo", e.target.value)}
-                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-              />
-            </div>
-
-            <div className="flex items-end">
-              <button
-                type="button"
-                onClick={() => setFilters({ ...DEFAULT_FILTERS })}
-                className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-semibold text-gray-600 hover:bg-gray-50"
-              >
-                <RefreshCcw size={15} />
-                Reset
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => setDateRange("today")}
-              className="rounded-full border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-blue-50 hover:border-blue-100 hover:text-blue-700"
-            >
-              Today
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setDateRange("yesterday")}
-              className="rounded-full border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-blue-50 hover:border-blue-100 hover:text-blue-700"
-            >
-              Yesterday
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setDateRange("last7")}
-              className="rounded-full border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-blue-50 hover:border-blue-100 hover:text-blue-700"
-            >
-              Last 7 Days
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setDateRange("thisMonth")}
-              className="rounded-full border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-blue-50 hover:border-blue-100 hover:text-blue-700"
-            >
-              This Month
-            </button>
-
-            {activeFilterCount > 0 && (
-              <span className="rounded-full bg-blue-50 border border-blue-100 px-3 py-1.5 text-xs font-semibold text-blue-700">
-                {activeFilterCount} active filter
-                {activeFilterCount > 1 ? "s" : ""}
-              </span>
+        {/* QUICK DATES */}
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 ">
+          <div className="flex flex-wrap gap-2">
+            {[
+              [
+                "today",
+                "Today"
+              ],
+              [
+                "yesterday",
+                "Yesterday"
+              ],
+              [
+                "7d",
+                "Last 7 Days"
+              ],
+              [
+                "30d",
+                "Last 30 Days"
+              ],
+              [
+                "thisMonth",
+                "This Month"
+              ],
+              [
+                "all",
+                "All Time"
+              ]
+            ].map(
+              ([
+                value,
+                label
+              ]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() =>
+                    applyQuickDate(
+                      value
+                    )
+                  }
+                  className={`rounded-xl border px-4 py-2 text-sm font-medium transition ${
+                    filters.period ===
+                    value
+                      ? "border-blue-200 bg-blue-50 text-blue-700"
+                      : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  {label}
+                </button>
+              )
             )}
           </div>
         </section>
 
-        {error && (
-          <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        {/* FILTERS */}
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 ">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <div className="relative xl:col-span-2">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
+              <input
+                value={
+                  filters.search
+                }
+                onChange={event =>
+                  updateFilter(
+                    "search",
+                    event.target.value
+                  )
+                }
+                placeholder="Search agent, destination, lead, task or outcome..."
+                className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+              />
+            </div>
+                        <select
+              value={filters.channel}
+              onChange={event =>
+                updateFilter(
+                  "channel",
+                  event.target.value
+                )
+              }
+              className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+            >
+              <option value="all">
+                All Channels
+              </option>
+
+              {channelOptions.map(
+                channel => (
+                  <option
+                    key={channel}
+                    value={channel}
+                  >
+                    {getChannelLabel(
+                      channel
+                    )}
+                  </option>
+                )
+              )}
+            </select>
+
+            <input
+              type="date"
+              value={filters.dateFrom}
+              onChange={event =>
+                applyCustomDate(
+                  "dateFrom",
+                  event.target.value
+                )
+              }
+              className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+            />
+
+            <input
+              type="date"
+              value={filters.dateTo}
+              onChange={event =>
+                applyCustomDate(
+                  "dateTo",
+                  event.target.value
+                )
+              }
+              className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+            />
+          </div>
+        </section>
+
+        {error ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
             {error}
           </div>
-        )}
+        ) : null}
 
-        {dateRangeError && (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+        {dateRangeError ? (
+          <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {dateRangeError}
           </div>
-        )}
+        ) : null}
 
-        {/* ================= KPI GRID ================= */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
-          <KpiCard
+        {/* TODAY SNAPSHOT */}
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 ">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">
+              Today&apos;s Activity Snapshot
+            </h2>
+
+            <p className="mt-1 text-xs text-slate-500">
+              Your calls, queries, quotation movement and task completion today.
+            </p>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
+            <MetricCard
+              icon={UserPlus}
+              label="New Connections"
+              value={
+                todaySnapshot.firstConnections
+              }
+              helper="Agents connected by you for the first time."
+              tone="violet"
+            />
+
+            <MetricCard
+              icon={PhoneCall}
+              label="Agents Connected"
+              value={
+                todaySnapshot
+                  .uniqueAgentsConnected
+              }
+              helper="Unique agents successfully reached today."
+              tone="blue"
+            />
+
+            <MetricCard
+              icon={Users}
+              label="Existing Follow-ups"
+              value={
+                todaySnapshot.existingFollowUps
+              }
+              helper="Existing agents contacted today."
+              tone="emerald"
+            />
+
+            <MetricCard
+              icon={MessageCircle}
+              label="Queries Received"
+              value={
+                todaySnapshot
+                  .queriesReceivedToday
+              }
+              helper="Lead records created today."
+              tone="blue"
+            />
+
+            <MetricCard
+              icon={FileText}
+              label="Quotes Shared"
+              value={
+                todaySnapshot
+                  .quotesSharedToday
+              }
+              helper="Queries moved to quote-sent today."
+              tone="amber"
+            />
+
+            <MetricCard
+              icon={CheckCircle2}
+              label="Tasks Completed"
+              value={
+                todaySnapshot
+                  .completedTasksToday
+              }
+              helper="Cadence tasks completed today."
+              tone="emerald"
+            />
+
+            <MetricCard
+              icon={CircleDollarSign}
+              label="Converted"
+              value={
+                todaySnapshot.convertedToday
+              }
+              helper="Queries converted or won today."
+              tone="emerald"
+            />
+
+            <MetricCard
+              icon={AlertTriangle}
+              label="Overdue Tasks"
+              value={
+                todaySnapshot.overdueTasks
+              }
+              helper="Pending tasks beyond due date."
+              tone="red"
+            />
+          </div>
+        </section>
+
+        {/* PRIORITY ACTIONS */}
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+          <MetricCard
             icon={Activity}
-            label="Total Engagements"
-            value={summary.total}
-            helper="Matching selected filters"
+            label="Active Queries"
+            value={
+              leadActions.activeQueries
+            }
+            helper="Open assigned query opportunities."
             tone="blue"
           />
 
-          <KpiCard
-            icon={CalendarDays}
-            label="Today"
-            value={summary.today}
-            helper="Created today"
-            tone="emerald"
+          <MetricCard
+            icon={Flame}
+            label="Hot Leads"
+            value={
+              leadActions.hotLeads
+            }
+            helper="Daily call and WhatsApp focus."
+            tone="red"
           />
 
-          <KpiCard
-            icon={Users}
-            label="Meetings"
-            value={summary.meetings}
-            helper="Meeting-based engagements"
-            tone="purple"
-          />
-
-          <KpiCard
-            icon={Clock3}
-            label="Due Today"
-            value={summary.followUpDue}
-            helper="Follow-ups due today"
+          <MetricCard
+            icon={CircleDollarSign}
+            label="Payment Pending"
+            value={
+              leadActions.paymentPending
+            }
+            helper="Revenue-critical payment follow-ups."
             tone="amber"
           />
 
-          <KpiCard
-            icon={AlertTriangle}
-            label="Overdue"
-            value={summary.overdueFollowUp}
-            helper="Pending past due date"
-            tone="red"
+          <MetricCard
+            icon={Workflow}
+            label="Revision Pending"
+            value={
+              leadActions.revisionPending
+            }
+            helper="Revised quotation actions pending."
+            tone="violet"
+          />
+
+          <MetricCard
+            icon={FileText}
+            label="Quote Sent"
+            value={
+              leadActions.quoteSent
+            }
+            helper="Queries awaiting decision after quotation."
+            tone="emerald"
           />
         </section>
 
-        {/* ================= CHARTS / INSIGHTS ================= */}
-        <section className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+        {/* TASK QUEUE */}
+        <EngagementTaskQueue
+          tasks={visibleTaskQueue}
+          bucket={taskBucket}
+          onBucketChange={
+            setTaskBucket
+          }
+          counts={taskMetrics}
+        />
 
-          <div className="xl:col-span-4">
-            <SectionCard
-              title="Channel Breakdown"
-              subtitle="Engagements by communication channel"
-            >
-              {summary.channelRows.length === 0 ? (
-                <EmptyMiniState title="No channel data" />
-              ) : (
-                <div className="space-y-4">
-                  {summary.channelRows.map(row => (
+        {/* PORTFOLIO */}
+        <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+          <SectionCard
+            icon={Users}
+            title="My Agent Portfolio"
+            description="Relationship segments for agents assigned to you."
+          >
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <MetricCard
+                icon={Users}
+                label="Total Agents"
+                value={
+                  agentPortfolio.total
+                }
+                tone="slate"
+              />
+
+              <MetricCard
+                icon={UserPlus}
+                label="New Agents"
+                value={
+                  agentPortfolio.newAgent
+                }
+                tone="violet"
+              />
+
+              <MetricCard
+                icon={CheckCircle2}
+                label="Regular Business"
+                value={
+                  agentPortfolio.regular
+                }
+                tone="emerald"
+              />
+
+              <MetricCard
+                icon={Activity}
+                label="Warm Irregular"
+                value={
+                  agentPortfolio.warm
+                }
+                tone="blue"
+              />
+
+              <MetricCard
+                icon={Clock3}
+                label="Inactive"
+                value={
+                  agentPortfolio.inactive
+                }
+                tone="amber"
+              />
+
+              <MetricCard
+                icon={AlertTriangle}
+                label="Cold"
+                value={
+                  agentPortfolio.cold
+                }
+                tone="red"
+              />
+            </div>
+          </SectionCard>
+
+          <SectionCard
+            icon={Share2}
+            title="Engagement Summary"
+            description="Filtered outreach coverage and shared assets."
+          >
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <MetricCard
+                icon={Activity}
+                label="Engagements"
+                value={summary.total}
+                tone="blue"
+              />
+
+              <MetricCard
+                icon={UserCheck}
+                label="Agents Covered"
+                value={
+                  summary.uniqueAgents
+                }
+                tone="emerald"
+              />
+
+              <MetricCard
+                icon={Share2}
+                label="Asset Shares"
+                value={
+                  summary.assetShares
+                }
+                tone="amber"
+              />
+
+              <MetricCard
+                icon={Clock3}
+                label="Last Activity"
+                value={formatDate(
+                  summary.lastEngagement
+                    ?.createdAt
+                )}
+                tone="slate"
+              />
+            </div>
+          </SectionCard>
+        </section>
+
+        {/* ANALYTICS */}
+        <section className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+          <SectionCard
+            icon={MessageCircle}
+            title="Channel Breakdown"
+            description="Your activity by communication channel."
+          >
+            {summary.channelRows
+              .length ? (
+              <div className="space-y-4">
+                {summary.channelRows.map(
+                  row => (
                     <ProgressRow
                       key={row.label}
-                      label={getChannelLabel(row.label)}
+                      label={getChannelLabel(
+                        row.label
+                      )}
                       value={row.value}
                       total={summary.total}
                     />
-                  ))}
-                </div>
-              )}
-            </SectionCard>
-          </div>
+                  )
+                )}
+              </div>
+            ) : (
+              <EmptyMiniState title="No channel data" />
+            )}
+          </SectionCard>
 
-          <div className="xl:col-span-4">
-            <SectionCard
-              title="Top Destinations"
-              subtitle="Most discussed destinations"
-            >
-              {summary.destinationRows.length === 0 ? (
-                <EmptyMiniState title="No destination data" />
-              ) : (
-                <div className="space-y-4">
-                  {summary.destinationRows.map(row => (
+          <SectionCard
+            icon={MapPin}
+            title="Top Destinations"
+            description="Most discussed destinations in your activity."
+          >
+            {summary.destinationRows
+              .length ? (
+              <div className="space-y-4">
+                {summary.destinationRows.map(
+                  row => (
                     <ProgressRow
                       key={row.label}
                       label={row.label}
                       value={row.value}
                       total={summary.total}
                     />
-                  ))}
-                </div>
-              )}
-            </SectionCard>
-          </div>
+                  )
+                )}
+              </div>
+            ) : (
+              <EmptyMiniState title="No destination data" />
+            )}
+          </SectionCard>
 
-          <div className="xl:col-span-4">
-            <SectionCard
-              title="Top Travel Agents"
-              subtitle="Most engaged agencies"
-            >
-              {summary.agentRows.length === 0 ? (
-                <EmptyMiniState title="No agent data" />
-              ) : (
-                <div className="space-y-4">
-                  {summary.agentRows.map(row => (
+          <SectionCard
+            icon={BarChart3}
+            title="Outcome Summary"
+            description="Most common engagement outcomes."
+          >
+            {summary.outcomeRows
+              .length ? (
+              <div className="space-y-4">
+                {summary.outcomeRows.map(
+                  row => (
                     <ProgressRow
                       key={row.label}
-                      label={row.label}
+                      label={formatLabel(
+                        row.label
+                      )}
                       value={row.value}
                       total={summary.total}
                     />
-                  ))}
-                </div>
-              )}
-            </SectionCard>
-          </div>
+                  )
+                )}
+              </div>
+            ) : (
+              <EmptyMiniState title="No outcome data" />
+            )}
+          </SectionCard>
         </section>
 
-        {/* ================= LOWER GRID ================= */}
-        <section className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-
-          <div className="xl:col-span-4">
-            <SectionCard
-              title="Outcome Summary"
-              subtitle="Common outcomes from engagements"
-            >
-              {summary.outcomeRows.length === 0 ? (
-                <EmptyMiniState title="No outcome data" />
-              ) : (
-                <div className="space-y-4">
-                  {summary.outcomeRows.map(row => (
-                    <ProgressRow
-                      key={row.label}
-                      label={formatLabel(row.label)}
-                      value={row.value}
-                      total={summary.total}
-                    />
-                  ))}
-                </div>
+        {/* RECENT ENGAGEMENTS */}
+        <SectionCard
+          icon={Activity}
+          title="Recent Engagements"
+          description="Latest activity based on your selected filters."
+          rightContent={
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+              {
+                filteredEngagements.length
+              }{" "}
+              records
+            </span>
+          }
+        >
+          {recentEngagements.length ? (
+            <div className="space-y-3">
+              {recentEngagements.map(
+                engagement => (
+                  <RecentEngagementItem
+                    key={engagement.id}
+                    engagement={
+                      engagement
+                    }
+                  />
+                )
               )}
-            </SectionCard>
-          </div>
-
-          <div className="xl:col-span-8">
-            <SectionCard
-              title="Recent Engagements"
-              subtitle="Latest engagement activity based on selected filters"
-            >
-              {recentEngagements.length === 0 ? (
-                <EmptyState
-                  icon="📭"
-                  title="No engagements found"
-                  description="Try changing your filters or date range."
-                />
-              ) : (
-                <div className="space-y-3">
-                  {recentEngagements.map(engagement => (
-                    <RecentEngagementItem
-                      key={engagement.id}
-                      engagement={engagement}
-                    />
-                  ))}
-                </div>
-              )}
-            </SectionCard>
-          </div>
-        </section>
+            </div>
+          ) : (
+            <EmptyState
+              icon="📭"
+              title="No engagements found"
+              description="Change the filters or record a new engagement."
+            />
+          )}
+        </SectionCard>
       </div>
     </main>
   );

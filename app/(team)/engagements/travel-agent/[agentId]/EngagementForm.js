@@ -39,6 +39,10 @@ import {
   getOutcomeLabel
 } from "@/lib/engagementIntentMap";
 
+import {
+  syncAgentCadenceAfterEngagement
+} from "@/lib/engagementTaskService";
+
 /* =========================
    OPTIONS
 ========================= */
@@ -188,6 +192,9 @@ function getAssetKey(asset) {
 
 export default function EngagementForm({
   agent,
+  sourceTaskId = "",
+  sourceTask = null,
+  lead = null,
   onSaved,
   onClose
 }) {
@@ -516,12 +523,10 @@ export default function EngagementForm({
         : null;
 
       const subject = isMeeting
-        ? `${getMeetingModeLabel(form.meetingMode)} meeting with ${
-            agent.agencyName || agent.name || "Travel Agent"
-          }`
-        : `${getChannelLabel(form.channel)} engagement with ${
-            agent.agencyName || agent.name || "Travel Agent"
-          }`;
+        ? `${getMeetingModeLabel(form.meetingMode)} meeting with ${agent.agencyName || agent.name || "Travel Agent"
+        }`
+        : `${getChannelLabel(form.channel)} engagement with ${agent.agencyName || agent.name || "Travel Agent"
+        }`;
 
       const status =
         meetingAtDate || scheduledAtDate ? "scheduled" : "completed";
@@ -611,10 +616,29 @@ export default function EngagementForm({
         customRemark: form.customRemark.trim(),
 
         scheduledAt: scheduledAtDate,
-        nextActionDate: scheduledAtDate,
-        nextFollowUpDate: scheduledAtDate,
-        followUpDate: scheduledAtDate,
-        requiresFollowUp: Boolean(scheduledAtDate),
+
+        manualNextActionDate:
+          scheduledAtDate,
+
+        manualNextFollowUpDate:
+          scheduledAtDate,
+
+        nextActionDate:
+          scheduledAtDate,
+
+        nextFollowUpDate:
+          scheduledAtDate,
+
+        followUpDate:
+          scheduledAtDate,
+
+        requiresFollowUp:
+          Boolean(scheduledAtDate),
+
+        followUpSource:
+          scheduledAtDate
+            ? "manual_engagement_form"
+            : "automatic_cadence",
 
         status,
 
@@ -623,7 +647,47 @@ export default function EngagementForm({
         assignedToEmail: assignee?.email || getUserEmail(user),
         assignedToRole: assignee?.role || getUserRole(user),
 
-        leadId: null,
+        leadId:
+          lead?.id ||
+          lead?.leadId ||
+          sourceTask?.leadId ||
+          null,
+
+        leadCode:
+          lead?.leadCode ||
+          sourceTask?.leadCode ||
+          "",
+
+        sourceTaskId:
+          sourceTaskId ||
+          sourceTask?.id ||
+          sourceTask?.taskId ||
+          "",
+
+        sourceTaskRuleCode:
+          sourceTask?.ruleCode ||
+          agent?.cadenceRuleCode ||
+          "",
+
+        sourceTaskRuleGroup:
+          sourceTask?.ruleGroup ||
+          agent?.cadenceRuleGroup ||
+          "",
+
+        cadencePhase:
+          sourceTask?.cadencePhase ||
+          agent?.cadencePhase ||
+          "",
+
+        cadenceSequenceStep:
+          sourceTask?.sequenceStep ??
+          agent?.newAgentSequenceStep ??
+          null,
+
+        cadenceSequenceDay:
+          sourceTask?.sequenceDay ??
+          agent?.newAgentSequenceDay ??
+          null,
 
         sharedAssets: form.sharedAssets || [],
         sharedAssetIds: (form.sharedAssets || [])
@@ -645,18 +709,62 @@ export default function EngagementForm({
         updatedAt: serverTimestamp()
       };
 
-      const ref = await addDoc(collection(db, "engagements"), payload);
+      const ref = await addDoc(
+        collection(db, "engagements"),
+        payload
+      );
 
       const savedEngagement = {
         id: ref.id,
         ...payload
       };
 
-      alert("Engagement saved");
+      let cadenceResult = null;
 
-      onSaved?.(savedEngagement);
+      try {
+        cadenceResult =
+          await syncAgentCadenceAfterEngagement({
+            agent,
+
+            engagement: savedEngagement,
+
+            user,
+
+            lead,
+
+            sourceTaskId:
+              sourceTaskId ||
+              sourceTask?.id ||
+              sourceTask?.taskId ||
+              "",
+
+            now: new Date()
+          });
+      } catch (cadenceError) {
+        console.error(
+          "Engagement saved, but cadence synchronization failed:",
+          cadenceError
+        );
+      }
+
+      alert(
+        cadenceResult?.plan
+          ? "Engagement saved and next follow-up created."
+          : "Engagement saved."
+      );
+
+      onSaved?.({
+        ...savedEngagement,
+
+        cadenceTaskId:
+          cadenceResult?.taskId || "",
+
+        nextCadencePlan:
+          cadenceResult?.plan || null
+      });
 
       resetAfterSave();
+
     } catch (error) {
       console.error("Failed to save engagement:", error);
       alert("Failed to save engagement");
@@ -700,6 +808,56 @@ export default function EngagementForm({
 
       {/* BODY */}
       <div className="p-5 space-y-5 overflow-y-auto pb-28">
+
+        {sourceTask && (
+          <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-white text-blue-700">
+                <CalendarClock size={17} />
+              </div>
+
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">
+                  Current Engagement Task
+                </p>
+
+                <p className="mt-1 text-sm font-semibold text-slate-900">
+                  {sourceTask.title ||
+                    sourceTask.purpose ||
+                    "Agent follow-up"}
+                </p>
+
+                {sourceTask.purpose && (
+                  <p className="mt-1 text-xs leading-5 text-slate-600">
+                    {sourceTask.purpose}
+                  </p>
+                )}
+
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {sourceTask.frequencyLabel && (
+                    <span className="rounded-full border border-blue-100 bg-white px-2.5 py-1 text-[11px] font-semibold text-blue-700">
+                      {sourceTask.frequencyLabel}
+                    </span>
+                  )}
+
+                  {sourceTask.sequenceDay !== null &&
+                    sourceTask.sequenceDay !== undefined && (
+                      <span className="rounded-full border border-purple-100 bg-purple-50 px-2.5 py-1 text-[11px] font-semibold text-purple-700">
+                        Day {sourceTask.sequenceDay}
+                      </span>
+                    )}
+
+                  {sourceTask.ruleCode && (
+                    <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600">
+                      {sourceTask.ruleCode}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* STEP 1 */}
         <StepLabel number="1" title="Who did you connect with?" />
 
@@ -826,10 +984,9 @@ export default function EngagementForm({
                     }
                     className={`
                       rounded-xl border p-3 text-left transition
-                      ${
-                        form.meetingMode === mode.key
-                          ? "border-blue-500 bg-blue-50 text-blue-700"
-                          : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                      ${form.meetingMode === mode.key
+                        ? "border-blue-500 bg-blue-50 text-blue-700"
+                        : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
                       }
                     `}
                   >
@@ -1421,10 +1578,9 @@ function ContactStatus({ label, value, valid }) {
     <div
       className={`
         rounded-lg border px-3 py-2
-        ${
-          valid
-            ? "border-green-200 bg-green-50"
-            : "border-orange-200 bg-orange-50"
+        ${valid
+          ? "border-green-200 bg-green-50"
+          : "border-orange-200 bg-orange-50"
         }
       `}
     >

@@ -11,13 +11,20 @@ import {
 import {
   Activity,
   AlertTriangle,
+  ArrowLeft,
   BarChart3,
   CalendarDays,
   CheckCircle2,
   ExternalLink,
+  Filter,
+  MapPin,
+  MessageCircle,
   Package,
+  PhoneCall,
+  RefreshCcw,
   Timer,
-  UserRound
+  UserRound,
+  Users
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
@@ -31,6 +38,7 @@ import CardSkeleton from "@/components/ui/CardSkeleton";
 /* =========================
    DEFAULT FILTERS
 ========================= */
+
 const DEFAULT_FILTERS = {
   search: "",
   travelAgent: "",
@@ -45,6 +53,7 @@ const DEFAULT_FILTERS = {
 /* =========================
    DATE HELPERS
 ========================= */
+
 const isSameDay = (a, b) =>
   a.getDate() === b.getDate() &&
   a.getMonth() === b.getMonth() &&
@@ -53,61 +62,246 @@ const isSameDay = (a, b) =>
 const getValidDate = value => {
   if (!value) return null;
 
-  if (value?.toDate) return value.toDate();
+  if (value?.toDate) {
+    return value.toDate();
+  }
 
   if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? null : value;
+    return Number.isNaN(value.getTime())
+      ? null
+      : value;
   }
 
   if (typeof value === "number") {
-    const msValue = value < 10000000000 ? value * 1000 : value;
-    const date = new Date(msValue);
-    return Number.isNaN(date.getTime()) ? null : date;
+    const msValue =
+      value < 10000000000
+        ? value * 1000
+        : value;
+
+    const date =
+      new Date(msValue);
+
+    return Number.isNaN(date.getTime())
+      ? null
+      : date;
   }
 
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+  const parsed =
+    new Date(value);
+
+  return Number.isNaN(parsed.getTime())
+    ? null
+    : parsed;
 };
 
 const formatDateLabel = value => {
-  const d = getValidDate(value);
+  const date =
+    getValidDate(value);
 
-  if (!d) return "Unknown date";
+  if (!date) {
+    return "Unknown date";
+  }
 
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
+  const today =
+    new Date();
 
-  if (isSameDay(d, today)) return "Today";
-  if (isSameDay(d, yesterday)) return "Yesterday";
+  const yesterday =
+    new Date(today);
 
-  return d.toLocaleDateString(undefined, {
-    day: "2-digit",
-    month: "short",
-    year: "numeric"
-  });
+  yesterday.setDate(
+    today.getDate() - 1
+  );
+
+  if (
+    isSameDay(
+      date,
+      today
+    )
+  ) {
+    return "Today";
+  }
+
+  if (
+    isSameDay(
+      date,
+      yesterday
+    )
+  ) {
+    return "Yesterday";
+  }
+
+  return date.toLocaleDateString(
+    undefined,
+    {
+      day: "2-digit",
+      month: "short",
+      year: "numeric"
+    }
+  );
 };
 
 const getLocalDateKey = value => {
-  const d = getValidDate(value);
-  if (!d) return "unknown";
+  const date =
+    getValidDate(value);
 
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
+  if (!date) {
+    return "unknown";
+  }
+
+  const year =
+    date.getFullYear();
+
+  const month =
+    String(
+      date.getMonth() + 1
+    ).padStart(2, "0");
+
+  const day =
+    String(
+      date.getDate()
+    ).padStart(2, "0");
 
   return `${year}-${month}-${day}`;
 };
 
 const getStartOfDay = value => {
-  if (!value) return null;
-  return new Date(`${value}T00:00:00`);
+  if (!value) {
+    return null;
+  }
+
+  return new Date(
+    `${value}T00:00:00`
+  );
 };
 
 const getEndOfDay = value => {
-  if (!value) return null;
-  return new Date(`${value}T23:59:59`);
+  if (!value) {
+    return null;
+  }
+
+  return new Date(
+    `${value}T23:59:59`
+  );
 };
+
+function getQuickDateRange(period) {
+  const today =
+    new Date();
+
+  const end =
+    getLocalDateKey(today);
+
+  if (period === "all") {
+    return {
+      from: "",
+      to: ""
+    };
+  }
+
+  if (period === "today") {
+    return {
+      from: end,
+      to: end
+    };
+  }
+
+  if (period === "yesterday") {
+    const start =
+      new Date(today);
+
+    start.setDate(
+      start.getDate() - 1
+    );
+
+    const key =
+      getLocalDateKey(start);
+
+    return {
+      from: key,
+      to: key
+    };
+  }
+
+  if (period === "7d") {
+    const start =
+      new Date(today);
+
+    start.setDate(
+      start.getDate() - 6
+    );
+
+    return {
+      from:
+        getLocalDateKey(start),
+      to: end
+    };
+  }
+
+  if (period === "30d") {
+    const start =
+      new Date(today);
+
+    start.setDate(
+      start.getDate() - 29
+    );
+
+    return {
+      from:
+        getLocalDateKey(start),
+      to: end
+    };
+  }
+
+  if (period === "thisMonth") {
+    const start =
+      new Date(
+        today.getFullYear(),
+        today.getMonth(),
+        1
+      );
+
+    return {
+      from:
+        getLocalDateKey(start),
+      to: end
+    };
+  }
+
+  return {
+    from: "",
+    to: ""
+  };
+}
+
+function getActiveQuickPeriod(
+  dateFrom,
+  dateTo
+) {
+  const periods = [
+    "today",
+    "yesterday",
+    "7d",
+    "30d",
+    "thisMonth",
+    "all"
+  ];
+
+  return (
+    periods.find(period => {
+      const range =
+        getQuickDateRange(
+          period
+        );
+
+      return (
+        range.from ===
+          (dateFrom || "") &&
+        range.to ===
+          (dateTo || "")
+      );
+    }) || "custom"
+  );
+}
 
 const normalize = value =>
   String(value || "")
@@ -117,197 +311,352 @@ const normalize = value =>
 /* =========================
    COMMON HELPERS
 ========================= */
-function getFirstValue(...values) {
+
+function getFirstValue(
+  ...values
+) {
   return (
     values.find(
-      value => typeof value === "string" && value.trim().length > 0
+      value =>
+        typeof value ===
+          "string" &&
+        value.trim().length >
+          0
     )?.trim() || ""
   );
 }
 
 function stripHtml(value = "") {
   return String(value || "")
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/\s+/g, " ")
+    .replace(
+      /<style[^>]*>[\s\S]*?<\/style>/gi,
+      ""
+    )
+    .replace(
+      /<script[^>]*>[\s\S]*?<\/script>/gi,
+      ""
+    )
+    .replace(
+      /<[^>]+>/g,
+      " "
+    )
+    .replace(
+      /&nbsp;/gi,
+      " "
+    )
+    .replace(
+      /\s+/g,
+      " "
+    )
     .trim();
 }
 
 /* =========================
    FIELD HELPERS
 ========================= */
-const getAgentId = engagement =>
-  engagement?.travelAgentId ||
-  engagement?.agentId ||
-  engagement?.travelAgentRefId ||
-  engagement?.travelAgentDocId ||
-  engagement?.agent?.id ||
-  engagement?.agent?.travelAgentId ||
-  engagement?.travelAgent?.id ||
-  "";
 
-const getAgentName = engagement =>
-  engagement?.travelAgentName ||
-  engagement?.agentName ||
-  engagement?.agent?.agencyName ||
-  engagement?.agent?.name ||
-  engagement?.travelAgent?.agencyName ||
-  engagement?.travelAgent?.name ||
-  engagement?.agencyName ||
-  "";
+const getAgentId =
+  engagement =>
+    engagement
+      ?.travelAgentId ||
+    engagement?.agentId ||
+    engagement
+      ?.travelAgentRefId ||
+    engagement
+      ?.travelAgentDocId ||
+    engagement?.agent?.id ||
+    engagement?.agent
+      ?.travelAgentId ||
+    engagement
+      ?.travelAgent?.id ||
+    "";
 
-const getSpocName = engagement =>
-  engagement?.spoc?.name ||
-  engagement?.spocName ||
-  engagement?.contactPerson ||
-  engagement?.agent?.spocName ||
-  engagement?.travelAgent?.spocName ||
-  "";
+const getAgentName =
+  engagement =>
+    engagement
+      ?.travelAgentName ||
+    engagement?.agentName ||
+    engagement?.agent
+      ?.agencyName ||
+    engagement?.agent?.name ||
+    engagement
+      ?.travelAgent
+      ?.agencyName ||
+    engagement
+      ?.travelAgent?.name ||
+    engagement?.agencyName ||
+    "";
 
-const getDestinationName = (engagement = {}) => {
-  if (Array.isArray(engagement?.destinationNames)) {
-    return engagement.destinationNames.filter(Boolean).join(", ");
+const getSpocName =
+  engagement =>
+    engagement?.spoc?.name ||
+    engagement?.spocName ||
+    engagement
+      ?.contactPerson ||
+    engagement?.agent
+      ?.spocName ||
+    engagement
+      ?.travelAgent
+      ?.spocName ||
+    "";
+
+const getDestinationName = (
+  engagement = {}
+) => {
+  if (
+    Array.isArray(
+      engagement
+        ?.destinationNames
+    )
+  ) {
+    return engagement
+      .destinationNames
+      .filter(Boolean)
+      .join(", ");
   }
 
-  if (Array.isArray(engagement?.destinations)) {
-    return engagement.destinations
+  if (
+    Array.isArray(
+      engagement?.destinations
+    )
+  ) {
+    return engagement
+      .destinations
       .map(item =>
-        typeof item === "string"
+        typeof item ===
+        "string"
           ? item
-          : item?.name || item?.destinationName || ""
+          : item?.name ||
+            item
+              ?.destinationName ||
+            ""
       )
       .filter(Boolean)
       .join(", ");
   }
 
-  if (typeof engagement?.destinationName === "string") {
-    return engagement.destinationName;
+  if (
+    typeof engagement
+      ?.destinationName ===
+    "string"
+  ) {
+    return engagement
+      .destinationName;
   }
 
-  if (typeof engagement?.destination?.name === "string") {
-    return engagement.destination.name;
+  if (
+    typeof engagement
+      ?.destination?.name ===
+    "string"
+  ) {
+    return engagement
+      .destination.name;
   }
 
-  if (typeof engagement?.destination === "string") {
-    return engagement.destination;
+  if (
+    typeof engagement
+      ?.destination ===
+    "string"
+  ) {
+    return engagement
+      .destination;
   }
 
   return "";
 };
 
-const getAgentEmail = engagement =>
-  engagement?.agentEmail ||
-  engagement?.travelAgentEmail ||
-  engagement?.email ||
-  engagement?.spoc?.email ||
-  engagement?.agent?.email ||
-  engagement?.agent?.primaryEmail ||
-  engagement?.agent?.contact?.email ||
-  engagement?.travelAgent?.email ||
-  "";
+const getAgentEmail =
+  engagement =>
+    engagement?.agentEmail ||
+    engagement
+      ?.travelAgentEmail ||
+    engagement?.email ||
+    engagement?.spoc?.email ||
+    engagement?.agent?.email ||
+    engagement?.agent
+      ?.primaryEmail ||
+    engagement?.agent
+      ?.contact?.email ||
+    engagement
+      ?.travelAgent?.email ||
+    "";
 
-const getAgentPhone = engagement =>
-  engagement?.agentPhone ||
-  engagement?.travelAgentPhone ||
-  engagement?.phone ||
-  engagement?.mobile ||
-  engagement?.spoc?.phone ||
-  engagement?.spoc?.mobile ||
-  engagement?.agent?.phone ||
-  engagement?.agent?.mobile ||
-  engagement?.agent?.primaryPhone ||
-  engagement?.agent?.contact?.phone ||
-  engagement?.travelAgent?.phone ||
-  "";
+const getAgentPhone =
+  engagement =>
+    engagement?.agentPhone ||
+    engagement
+      ?.travelAgentPhone ||
+    engagement?.phone ||
+    engagement?.mobile ||
+    engagement?.spoc?.phone ||
+    engagement?.spoc?.mobile ||
+    engagement?.agent?.phone ||
+    engagement?.agent?.mobile ||
+    engagement?.agent
+      ?.primaryPhone ||
+    engagement?.agent
+      ?.contact?.phone ||
+    engagement
+      ?.travelAgent?.phone ||
+    "";
 
-const getAgentCity = engagement =>
-  engagement?.agentCity ||
-  engagement?.travelAgentCity ||
-  engagement?.city ||
-  engagement?.agent?.city ||
-  engagement?.agent?.address?.city ||
-  engagement?.travelAgent?.city ||
-  engagement?.travelAgent?.address?.city ||
-  "";
+const getAgentCity =
+  engagement =>
+    engagement?.agentCity ||
+    engagement
+      ?.travelAgentCity ||
+    engagement?.city ||
+    engagement?.agent?.city ||
+    engagement?.agent
+      ?.address?.city ||
+    engagement
+      ?.travelAgent?.city ||
+    engagement
+      ?.travelAgent?.address
+      ?.city ||
+    "";
 
-const getChannelLabel = channel => {
-  const labels = {
-    call: "Call",
-    email: "Email",
-    whatsapp: "WhatsApp",
-    meeting: "Meeting",
-    online_meeting: "Online Meeting",
-    offline_meeting: "Offline Meeting",
-    site_visit: "Site Visit",
-    other: "Other"
+const getChannelLabel =
+  channel => {
+    const labels = {
+      call: "Call",
+      email: "Email",
+      whatsapp: "WhatsApp",
+      meeting: "Meeting",
+      online_meeting:
+        "Online Meeting",
+      offline_meeting:
+        "Offline Meeting",
+      site_visit:
+        "Site Visit",
+      other: "Other"
+    };
+
+    return (
+      labels[channel] ||
+      channel ||
+      "Other"
+    );
   };
-
-  return labels[channel] || channel || "Other";
-};
 
 /* =========================
    FOLLOW-UP HELPERS
 ========================= */
-function getFollowUpDate(engagement = {}) {
+
+function getFollowUpDate(
+  engagement = {}
+) {
   return (
-    engagement?.nextFollowUpAt ||
-    engagement?.nextActionDueAt ||
-    engagement?.followUpDate ||
-    engagement?.nextFollowUpDate ||
-    engagement?.nextActionDate ||
+    engagement
+      ?.nextFollowUpAt ||
+    engagement
+      ?.nextActionDueAt ||
+    engagement
+      ?.followUpDate ||
+    engagement
+      ?.nextFollowUpDate ||
+    engagement
+      ?.nextActionDate ||
     engagement?.scheduledAt ||
     engagement?.reminderAt ||
     engagement?.dueAt ||
-    engagement?.tentativeMeetingDate ||
+    engagement
+      ?.tentativeMeetingDate ||
     engagement?.meetingAt ||
-    engagement?.nextFollowUpAtMs ||
-    engagement?.nextActionDueAtMs ||
+    engagement
+      ?.nextFollowUpAtMs ||
+    engagement
+      ?.nextActionDueAtMs ||
     null
   );
 }
 
-function hasFollowUpDate(engagement = {}) {
-  return Boolean(getFollowUpDate(engagement));
+function hasFollowUpDate(
+  engagement = {}
+) {
+  return Boolean(
+    getFollowUpDate(
+      engagement
+    )
+  );
 }
 
 function isTodayDate(value) {
-  const key = getLocalDateKey(value);
-  if (!key || key === "unknown") return false;
+  const key =
+    getLocalDateKey(value);
 
-  return key === getLocalDateKey(new Date());
+  if (
+    !key ||
+    key === "unknown"
+  ) {
+    return false;
+  }
+
+  return (
+    key ===
+    getLocalDateKey(
+      new Date()
+    )
+  );
 }
 
 function isOverdueDate(value) {
-  const key = getLocalDateKey(value);
-  if (!key || key === "unknown") return false;
+  const key =
+    getLocalDateKey(value);
 
-  return key < getLocalDateKey(new Date());
+  if (
+    !key ||
+    key === "unknown"
+  ) {
+    return false;
+  }
+
+  return (
+    key <
+    getLocalDateKey(
+      new Date()
+    )
+  );
 }
 
 function formatFollowUpDate(value) {
-  const date = getValidDate(value);
-  if (!date) return "No date";
+  const date =
+    getValidDate(value);
 
-  return date.toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric"
-  });
+  if (!date) {
+    return "No date";
+  }
+
+  return date.toLocaleDateString(
+    "en-IN",
+    {
+      day: "2-digit",
+      month: "short",
+      year: "numeric"
+    }
+  );
 }
 
 function formatFollowUpTime(value) {
-  const date = getValidDate(value);
-  if (!date) return "";
+  const date =
+    getValidDate(value);
 
-  return date.toLocaleTimeString("en-IN", {
-    hour: "2-digit",
-    minute: "2-digit"
-  });
+  if (!date) {
+    return "";
+  }
+
+  return date.toLocaleTimeString(
+    "en-IN",
+    {
+      hour: "2-digit",
+      minute: "2-digit"
+    }
+  );
 }
 
-function isDoneFollowUpStatus(value = "") {
+function isDoneFollowUpStatus(
+  value = ""
+) {
   return [
     "done",
     "completed",
@@ -315,11 +664,18 @@ function isDoneFollowUpStatus(value = "") {
     "cancelled",
     "canceled",
     "deleted"
-  ].includes(normalize(value));
+  ].includes(
+    normalize(value)
+  );
 }
 
-function isPendingEngagementFollowUp(engagement = {}) {
-  if (engagement?.deleted === true || engagement?.isDeleted === true) {
+function isPendingEngagementFollowUp(
+  engagement = {}
+) {
+  if (
+    engagement?.deleted === true ||
+    engagement?.isDeleted === true
+  ) {
     return false;
   }
 
@@ -328,7 +684,9 @@ function isPendingEngagementFollowUp(engagement = {}) {
     engagement?.followUpRequired === true ||
     engagement?.needsFollowUp === true;
 
-  if (!requiresFollowUp) return false;
+  if (!requiresFollowUp) {
+    return false;
+  }
 
   if (
     engagement?.followUpCompleted === true ||
@@ -343,13 +701,26 @@ function isPendingEngagementFollowUp(engagement = {}) {
     engagement?.followUpState ||
     "";
 
-  if (isDoneFollowUpStatus(followUpStatus)) return false;
+  if (
+    isDoneFollowUpStatus(
+      followUpStatus
+    )
+  ) {
+    return false;
+  }
 
-  return hasFollowUpDate(engagement);
+  return hasFollowUpDate(
+    engagement
+  );
 }
 
-function isMissingFollowUpDate(engagement = {}) {
-  if (engagement?.deleted === true || engagement?.isDeleted === true) {
+function isMissingFollowUpDate(
+  engagement = {}
+) {
+  if (
+    engagement?.deleted === true ||
+    engagement?.isDeleted === true
+  ) {
     return false;
   }
 
@@ -358,10 +729,17 @@ function isMissingFollowUpDate(engagement = {}) {
     engagement?.followUpRequired === true ||
     engagement?.needsFollowUp === true;
 
-  return requiresFollowUp && !hasFollowUpDate(engagement);
+  return (
+    requiresFollowUp &&
+    !hasFollowUpDate(
+      engagement
+    )
+  );
 }
 
-function getFollowUpSummary(engagement = {}) {
+function getFollowUpSummary(
+  engagement = {}
+) {
   return (
     engagement?.nextAction ||
     engagement?.messageText ||
@@ -375,44 +753,70 @@ function getFollowUpSummary(engagement = {}) {
 /* =========================
    RELATION HELPERS
 ========================= */
-function getMyRelation(engagement = {}, userUid = "") {
-  const createdByMe = Boolean(userUid && engagement?.createdByUid === userUid);
-  const assignedToMe = Boolean(userUid && engagement?.assignedToUid === userUid);
 
-  if (createdByMe && assignedToMe) {
+function getMyRelation(
+  engagement = {},
+  userUid = ""
+) {
+  const createdByMe =
+    Boolean(
+      userUid &&
+      engagement?.createdByUid ===
+        userUid
+    );
+
+  const assignedToMe =
+    Boolean(
+      userUid &&
+      engagement?.assignedToUid ===
+        userUid
+    );
+
+  if (
+    createdByMe &&
+    assignedToMe
+  ) {
     return {
       key: "both",
-      label: "Created & Assigned",
-      className: "border-violet-100 bg-violet-50 text-violet-700"
+      label:
+        "Created & Assigned",
+      className:
+        "border-violet-100 bg-violet-50 text-violet-700"
     };
   }
 
   if (assignedToMe) {
     return {
       key: "assigned",
-      label: "Assigned to Me",
-      className: "border-emerald-100 bg-emerald-50 text-emerald-700"
+      label:
+        "Assigned to Me",
+      className:
+        "border-emerald-100 bg-emerald-50 text-emerald-700"
     };
   }
 
   if (createdByMe) {
     return {
       key: "created",
-      label: "Created by Me",
-      className: "border-blue-100 bg-blue-50 text-blue-700"
+      label:
+        "Created by Me",
+      className:
+        "border-blue-100 bg-blue-50 text-blue-700"
     };
   }
 
   return {
     key: "other",
     label: "My Work",
-    className: "border-gray-100 bg-gray-50 text-gray-600"
+    className:
+      "border-gray-100 bg-gray-50 text-gray-600"
   };
 }
 
 /* =========================
    ASSET HELPERS
 ========================= */
+
 function getAssetTitle(asset) {
   return getFirstValue(
     asset?.title,
@@ -433,66 +837,148 @@ function getAssetUrl(asset) {
   );
 }
 
-function getSharedAssets(engagement) {
-  const assets = Array.isArray(engagement?.sharedAssets)
-    ? engagement.sharedAssets
-    : [];
-
-  const normalizedAssets = assets
-    .map(asset => ({
-      assetId: asset?.assetId || asset?.id || asset?.documentId || "",
-      title: getAssetTitle(asset),
-      url: getAssetUrl(asset),
-      categoryName: asset?.categoryName || "",
-      assetType: asset?.assetType || asset?.documentType || "",
-      usageType: asset?.usageType || "",
-      currentVersion: asset?.currentVersion || asset?.version || 1
-    }))
-    .filter(asset => asset.assetId || asset.url || asset.title);
-
-  const unique = new Map();
-
-  normalizedAssets.forEach(asset => {
-    const key = asset.assetId || asset.url || asset.title;
-    unique.set(key, asset);
-  });
-
-  return Array.from(unique.values());
-}
-
-function getSharedAssetCount(engagement) {
-  const storedCount = Number(engagement?.assetShareCount || 0);
-  if (storedCount > 0) return storedCount;
-
-  return getSharedAssets(engagement).length;
-}
-
-function getSharedAssetSearchText(engagement) {
-  const assets = getSharedAssets(engagement);
-
-  const assetText = assets
-    .map(asset =>
-      [
-        asset.title,
-        asset.categoryName,
-        asset.assetType,
-        asset.usageType,
-        asset.url
-      ]
-        .map(normalize)
-        .join(" ")
+function getSharedAssets(
+  engagement
+) {
+  const assets =
+    Array.isArray(
+      engagement?.sharedAssets
     )
-    .join(" ");
+      ? engagement.sharedAssets
+      : [];
+
+  const normalizedAssets =
+    assets
+      .map(asset => ({
+        assetId:
+          asset?.assetId ||
+          asset?.id ||
+          asset?.documentId ||
+          "",
+
+        title:
+          getAssetTitle(
+            asset
+          ),
+
+        url:
+          getAssetUrl(
+            asset
+          ),
+
+        categoryName:
+          asset?.categoryName ||
+          "",
+
+        assetType:
+          asset?.assetType ||
+          asset?.documentType ||
+          "",
+
+        usageType:
+          asset?.usageType ||
+          "",
+
+        currentVersion:
+          asset?.currentVersion ||
+          asset?.version ||
+          1
+      }))
+      .filter(
+        asset =>
+          asset.assetId ||
+          asset.url ||
+          asset.title
+      );
+
+  const unique =
+    new Map();
+
+  normalizedAssets.forEach(
+    asset => {
+      const key =
+        asset.assetId ||
+        asset.url ||
+        asset.title;
+
+      unique.set(
+        key,
+        asset
+      );
+    }
+  );
+
+  return Array.from(
+    unique.values()
+  );
+}
+
+function getSharedAssetCount(
+  engagement
+) {
+  const storedCount =
+    Number(
+      engagement
+        ?.assetShareCount ||
+        0
+    );
+
+  if (storedCount > 0) {
+    return storedCount;
+  }
+
+  return getSharedAssets(
+    engagement
+  ).length;
+}
+
+function getSharedAssetSearchText(
+  engagement
+) {
+  const assets =
+    getSharedAssets(
+      engagement
+    );
+
+  const assetText =
+    assets
+      .map(asset =>
+        [
+          asset.title,
+          asset.categoryName,
+          asset.assetType,
+          asset.usageType,
+          asset.url
+        ]
+          .map(normalize)
+          .join(" ")
+      )
+      .join(" ");
 
   return [
     assetText,
-    Array.isArray(engagement?.sharedAssetTitles)
-      ? engagement.sharedAssetTitles.join(" ")
+
+    Array.isArray(
+      engagement
+        ?.sharedAssetTitles
+    )
+      ? engagement
+          .sharedAssetTitles
+          .join(" ")
       : "",
-    Array.isArray(engagement?.sharedAssetIds)
-      ? engagement.sharedAssetIds.join(" ")
+
+    Array.isArray(
+      engagement
+        ?.sharedAssetIds
+    )
+      ? engagement
+          .sharedAssetIds
+          .join(" ")
       : "",
-    engagement?.assetLinksText || ""
+
+    engagement
+      ?.assetLinksText ||
+      ""
   ]
     .map(normalize)
     .join(" ");
@@ -501,37 +987,84 @@ function getSharedAssetSearchText(engagement) {
 /* =========================
    ROUTES
 ========================= */
-const getTravelAgentProfileHref = engagement => {
-  const agentId = getAgentId(engagement);
-  return agentId ? `/travel-agents/${agentId}` : "";
-};
 
-const getViewEngagementHref = engagement => {
-  const agentId = getAgentId(engagement);
-  return agentId ? `/engagements/travel-agent/${agentId}` : "/engagements";
-};
+const getTravelAgentProfileHref =
+  engagement => {
+    const agentId =
+      getAgentId(
+        engagement
+      );
 
-const getLeadCreateHref = engagement => {
-  const params = new URLSearchParams();
+    return agentId
+      ? `/travel-agents/${agentId}`
+      : "";
+  };
 
-  const agentId = getAgentId(engagement);
-  if (agentId) params.set("travelAgentId", agentId);
-  if (engagement?.id) params.set("sourceEngagementId", engagement.id);
+const getViewEngagementHref =
+  engagement => {
+    const agentId =
+      getAgentId(
+        engagement
+      );
 
-  const qs = params.toString();
+    return agentId
+      ? `/engagements/travel-agent/${agentId}`
+      : "/engagements";
+  };
 
-  return qs ? `/leads/create?${qs}` : "/leads/create";
-};
+const getLeadCreateHref =
+  engagement => {
+    const params =
+      new URLSearchParams();
+
+    const agentId =
+      getAgentId(
+        engagement
+      );
+
+    if (agentId) {
+      params.set(
+        "travelAgentId",
+        agentId
+      );
+    }
+
+    if (engagement?.id) {
+      params.set(
+        "sourceEngagementId",
+        engagement.id
+      );
+    }
+
+    const queryString =
+      params.toString();
+
+    return queryString
+      ? `/leads/create?${queryString}`
+      : "/leads/create";
+  };
 
 /* =========================
    PROFILE COMPLETION
 ========================= */
-function getProfileCompletion(engagement) {
+
+function getProfileCompletion(
+  engagement
+) {
   if (
-    engagement?.profileComplete === true ||
-    engagement?.travelAgentProfileComplete === true ||
-    engagement?.agent?.profileComplete === true ||
-    engagement?.travelAgent?.profileComplete === true
+    engagement
+      ?.profileComplete ===
+      true ||
+    engagement
+      ?.travelAgentProfileComplete ===
+      true ||
+    engagement?.agent
+      ?.profileComplete ===
+      true ||
+    engagement
+      ?.travelAgent
+      ?.profileComplete ===
+      true
   ) {
     return {
       complete: true,
@@ -542,33 +1075,80 @@ function getProfileCompletion(engagement) {
 
   const checks = [
     {
-      label: "Agency name",
-      ok: Boolean(getAgentName(engagement))
+      label:
+        "Agency name",
+      ok:
+        Boolean(
+          getAgentName(
+            engagement
+          )
+        )
     },
     {
       label: "SPOC",
-      ok: Boolean(getSpocName(engagement))
+      ok:
+        Boolean(
+          getSpocName(
+            engagement
+          )
+        )
     },
     {
       label: "Phone",
-      ok: Boolean(getAgentPhone(engagement))
+      ok:
+        Boolean(
+          getAgentPhone(
+            engagement
+          )
+        )
     },
     {
       label: "Email",
-      ok: Boolean(getAgentEmail(engagement))
+      ok:
+        Boolean(
+          getAgentEmail(
+            engagement
+          )
+        )
     },
     {
       label: "City",
-      ok: Boolean(getAgentCity(engagement))
+      ok:
+        Boolean(
+          getAgentCity(
+            engagement
+          )
+        )
     }
   ];
 
-  const completed = checks.filter(item => item.ok).length;
-  const missing = checks.filter(item => !item.ok).map(item => item.label);
+  const completed =
+    checks.filter(
+      item => item.ok
+    ).length;
+
+  const missing =
+    checks
+      .filter(
+        item => !item.ok
+      )
+      .map(
+        item => item.label
+      );
 
   return {
-    complete: completed === checks.length,
-    percentage: Math.round((completed / checks.length) * 100),
+    complete:
+      completed ===
+      checks.length,
+
+    percentage:
+      Math.round(
+        (
+          completed /
+          checks.length
+        ) * 100
+      ),
+
     missing
   };
 }
@@ -576,7 +1156,13 @@ function getProfileCompletion(engagement) {
 /* =========================
    MINI KPI CARD
 ========================= */
-function MiniStatCard({ icon: Icon, label, value, hint }) {
+
+function MiniStatCard({
+  icon: Icon,
+  label,
+  value,
+  hint
+}) {
   return (
     <div className="rounded-2xl border border-gray-200 bg-white p-4">
       <div className="flex items-start justify-between gap-3">
@@ -584,14 +1170,16 @@ function MiniStatCard({ icon: Icon, label, value, hint }) {
           <p className="text-xs font-medium text-gray-500">
             {label}
           </p>
+
           <p className="mt-1 truncate text-xl font-semibold text-gray-900">
             {value}
           </p>
-          {hint && (
+
+          {hint ? (
             <p className="mt-1 truncate text-[11px] text-gray-400">
               {hint}
             </p>
-          )}
+          ) : null}
         </div>
 
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
@@ -602,64 +1190,250 @@ function MiniStatCard({ icon: Icon, label, value, hint }) {
   );
 }
 
+function CommandMetric({
+  label,
+  value,
+  icon: Icon,
+  tone = "slate"
+}) {
+  const tones = {
+    slate:
+      "text-slate-100",
+
+    blue:
+      "text-sky-300",
+
+    amber:
+      "text-amber-300",
+
+    emerald:
+      "text-emerald-300",
+
+    red:
+      "text-red-300"
+  };
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur">
+      <div className="flex items-center gap-2 text-xs font-medium text-slate-300">
+        <Icon className="h-4 w-4" />
+
+        {label}
+      </div>
+
+      <p
+        className={`mt-2 text-2xl font-bold ${
+          tones[tone] ||
+          tones.slate
+        }`}
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function QuickDateButton({
+  active,
+  label,
+  onClick
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-xl border px-4 py-2 text-sm font-medium transition ${
+        active
+          ? "border-blue-200 bg-blue-50 text-blue-700"
+          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+function InsightList({
+  items = [],
+  emptyText =
+    "No data available."
+}) {
+  if (!items.length) {
+    return (
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm font-medium text-slate-500">
+        {emptyText}
+      </div>
+    );
+  }
+
+  const maxValue =
+    Math.max(
+      ...items.map(
+        item => item.value
+      ),
+      1
+    );
+
+  return (
+    <div className="space-y-4">
+      {items
+        .slice(0, 6)
+        .map(item => (
+          <div
+            key={item.label}
+            className="space-y-2"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <p className="truncate text-xs font-medium text-slate-700">
+                {item.label}
+              </p>
+
+              <p className="text-xs font-bold text-slate-900">
+                {item.value}
+              </p>
+            </div>
+
+            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="h-full rounded-full bg-blue-600"
+                style={{
+                  width: `${Math.round(
+                    (
+                      item.value /
+                      maxValue
+                    ) * 100
+                  )}%`
+                }}
+              />
+            </div>
+          </div>
+        ))}
+    </div>
+  );
+}
+
+function DashboardSection({
+  title,
+  description,
+  icon: Icon,
+  children,
+  rightContent
+}) {
+  return (
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-4 py-4">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+            <Icon className="h-5 w-5" />
+          </div>
+
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">
+              {title}
+            </h2>
+
+            <p className="mt-0.5 text-xs text-slate-500">
+              {description}
+            </p>
+          </div>
+        </div>
+
+        {rightContent || null}
+      </div>
+
+      <div className="p-4">
+        {children}
+      </div>
+    </section>
+  );
+}
+
 /* =========================
    RELATION TOGGLE
 ========================= */
-function RelationToggle({ value, onChange, summary }) {
+
+function RelationToggle({
+  value,
+  onChange,
+  summary
+}) {
   const items = [
     {
-      label: "All My Work",
+      label:
+        "All My Work",
       value: "all",
-      count: summary.total
+      count:
+        summary?.total ||
+        0
     },
     {
-      label: "Created by Me",
+      label:
+        "Created by Me",
       value: "created",
-      count: summary.createdByMe
+      count:
+        summary
+          ?.createdByMe ||
+        0
     },
     {
-      label: "Assigned to Me",
+      label:
+        "Assigned to Me",
       value: "assigned",
-      count: summary.assignedToMe
+      count:
+        summary
+          ?.assignedToMe ||
+        0
     }
   ];
 
   return (
-    <section className="rounded-2xl border border-gray-200 bg-white p-3">
+    <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="text-sm font-semibold text-gray-900">
+          <p className="text-sm font-semibold text-slate-900">
             Work View
           </p>
-          <p className="mt-0.5 text-xs text-gray-500">
-            Switch between engagements you created and engagements assigned to you.
+
+          <p className="mt-0.5 text-xs text-slate-500">
+            Switch between engagements created by you and engagements assigned to you.
           </p>
         </div>
 
         <div className="flex flex-wrap gap-2">
-          {items.map(item => (
-            <button
-              key={item.value}
-              type="button"
-              onClick={() => onChange(item.value)}
-              className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold transition ${
-                value === item.value
-                  ? "border-blue-200 bg-blue-50 text-blue-700"
-                  : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
-              }`}
-            >
-              {item.label}
-              <span
-                className={`rounded-full px-2 py-0.5 text-[11px] ${
-                  value === item.value
-                    ? "bg-blue-100 text-blue-700"
-                    : "bg-gray-100 text-gray-500"
+          {items.map(item => {
+            const isActive =
+              value ===
+              item.value;
+
+            return (
+              <button
+                key={item.value}
+                type="button"
+                onClick={() =>
+                  onChange(
+                    item.value
+                  )
+                }
+                className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+                  isActive
+                    ? "border-blue-200 bg-blue-50 text-blue-700"
+                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
                 }`}
               >
-                {item.count}
-              </span>
-            </button>
-          ))}
+                {item.label}
+
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[11px] ${
+                    isActive
+                      ? "bg-blue-100 text-blue-700"
+                      : "bg-slate-100 text-slate-500"
+                  }`}
+                >
+                  {item.count}
+                </span>
+              </button>
+            );
+          })}
         </div>
       </div>
     </section>
@@ -669,8 +1443,15 @@ function RelationToggle({ value, onChange, summary }) {
 /* =========================
    FOLLOW-UP QUEUE
 ========================= */
-function FollowUpQueue({ title, description, items, type = "today" }) {
-  const isOverdue = type === "overdue";
+
+function FollowUpQueue({
+  title,
+  description,
+  items,
+  type = "today"
+}) {
+  const isOverdue =
+    type === "overdue";
 
   return (
     <div className="overflow-hidden rounded-3xl border border-gray-200 bg-white">
@@ -680,6 +1461,7 @@ function FollowUpQueue({ title, description, items, type = "today" }) {
             <h2 className="text-sm font-semibold text-gray-900">
               {title}
             </h2>
+
             <p className="mt-0.5 text-xs text-gray-500">
               {description}
             </p>
@@ -704,75 +1486,115 @@ function FollowUpQueue({ title, description, items, type = "today" }) {
               size={24}
               className="mx-auto text-emerald-600"
             />
+
             <p className="mt-2 text-sm font-semibold text-gray-800">
-              {isOverdue ? "No overdue follow-ups" : "No follow-ups due today"}
+              {isOverdue
+                ? "No overdue follow-ups"
+                : "No follow-ups due today"}
             </p>
+
             <p className="mt-1 text-xs text-gray-500">
               Your engagement follow-up queue is clear.
             </p>
           </div>
         ) : (
           <div className="space-y-3">
-            {items.slice(0, 5).map(item => {
-              const dueAt = getFollowUpDate(item);
-              const agentName = getAgentName(item) || "Travel Agent";
-              const destinationName = getDestinationName(item) || "—";
+            {items
+              .slice(0, 5)
+              .map(item => {
+                const dueAt =
+                  getFollowUpDate(
+                    item
+                  );
 
-              return (
-                <div
-                  key={item.id}
-                  className="rounded-2xl border border-gray-200 bg-white p-3 hover:bg-gray-50"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span
-                          className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-semibold ${
-                            isOverdue
-                              ? "border-red-100 bg-red-50 text-red-700"
-                              : "border-blue-100 bg-blue-50 text-blue-700"
-                          }`}
-                        >
-                          {isOverdue ? (
-                            <AlertTriangle size={12} />
-                          ) : (
-                            <CalendarDays size={12} />
-                          )}
-                          {isOverdue ? "Overdue" : "Today"}
-                        </span>
+                const agentName =
+                  getAgentName(
+                    item
+                  ) ||
+                  "Travel Agent";
 
-                        {item.channel ? (
-                          <span className="rounded-full bg-gray-100 px-2 py-1 text-[11px] font-semibold capitalize text-gray-600">
-                            {getChannelLabel(item.channel)}
+                const destinationName =
+                  getDestinationName(
+                    item
+                  ) ||
+                  "—";
+
+                return (
+                  <div
+                    key={item.id}
+                    className="rounded-2xl border border-gray-200 bg-white p-3 hover:bg-gray-50"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-semibold ${
+                              isOverdue
+                                ? "border-red-100 bg-red-50 text-red-700"
+                                : "border-blue-100 bg-blue-50 text-blue-700"
+                            }`}
+                          >
+                            {isOverdue ? (
+                              <AlertTriangle
+                                size={12}
+                              />
+                            ) : (
+                              <CalendarDays
+                                size={12}
+                              />
+                            )}
+
+                            {isOverdue
+                              ? "Overdue"
+                              : "Today"}
                           </span>
-                        ) : null}
+
+                          {item.channel ? (
+                            <span className="rounded-full bg-gray-100 px-2 py-1 text-[11px] font-semibold capitalize text-gray-600">
+                              {getChannelLabel(
+                                item.channel
+                              )}
+                            </span>
+                          ) : null}
+                        </div>
+
+                        <p className="mt-2 truncate text-sm font-semibold text-gray-900">
+                          {agentName}
+                        </p>
+
+                        <p className="mt-1 text-xs text-gray-500">
+                          {destinationName} •{" "}
+                          {formatFollowUpDate(
+                            dueAt
+                          )}{" "}
+                          {formatFollowUpTime(
+                            dueAt
+                          )}
+                        </p>
+
+                        <p className="mt-2 line-clamp-2 text-xs text-gray-600">
+                          {getFollowUpSummary(
+                            item
+                          )}
+                        </p>
                       </div>
 
-                      <p className="mt-2 truncate text-sm font-semibold text-gray-900">
-                        {agentName}
-                      </p>
+                      <Link
+                        href={getViewEngagementHref(
+                          item
+                        )}
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                      >
+                        View
 
-                      <p className="mt-1 text-xs text-gray-500">
-                        {destinationName} • {formatFollowUpDate(dueAt)}{" "}
-                        {formatFollowUpTime(dueAt)}
-                      </p>
-
-                      <p className="mt-2 line-clamp-2 text-xs text-gray-600">
-                        {getFollowUpSummary(item)}
-                      </p>
+                        <ExternalLink
+                          size={12}
+                        />
+                      </Link>
                     </div>
-
-                    <Link
-                      href={getViewEngagementHref(item)}
-                      className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50"
-                    >
-                      View
-                      <ExternalLink size={12} />
-                    </Link>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
 
             {items.length > 5 ? (
               <p className="text-center text-xs font-medium text-gray-500">
@@ -789,30 +1611,64 @@ function FollowUpQueue({ title, description, items, type = "today" }) {
 /* =========================
    AGENT PROFILE STATUS BAR
 ========================= */
-function AgentProfileStatusBar({ engagement, currentUserUid }) {
-  const agentName = getAgentName(engagement) || "Travel Agent";
-  const spocName = getSpocName(engagement);
-  const profile = getProfileCompletion(engagement);
-  const profileHref = getTravelAgentProfileHref(engagement);
-  const relation = getMyRelation(engagement, currentUserUid);
+
+function AgentProfileStatusBar({
+  engagement,
+  currentUserUid
+}) {
+  const agentName =
+    getAgentName(
+      engagement
+    ) || "Travel Agent";
+
+  const spocName =
+    getSpocName(
+      engagement
+    );
+
+  const profile =
+    getProfileCompletion(
+      engagement
+    );
+
+  const profileHref =
+    getTravelAgentProfileHref(
+      engagement
+    );
+
+  const relation =
+    getMyRelation(
+      engagement,
+      currentUserUid
+    );
 
   return (
     <div className="border-b border-gray-100 bg-gradient-to-r from-gray-50 to-white px-4 py-3 md:px-5">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex min-w-0 items-start gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
-            <UserRound size={18} />
+            <UserRound
+              size={18}
+            />
           </div>
 
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               {profileHref ? (
                 <Link
-                  href={profileHref}
+                  href={
+                    profileHref
+                  }
                   className="inline-flex max-w-full items-center gap-1.5 text-sm font-semibold text-gray-900 hover:text-blue-700"
                 >
-                  <span className="truncate">{agentName}</span>
-                  <ExternalLink size={13} className="shrink-0" />
+                  <span className="truncate">
+                    {agentName}
+                  </span>
+
+                  <ExternalLink
+                    size={13}
+                    className="shrink-0"
+                  />
                 </Link>
               ) : (
                 <p className="text-sm font-semibold text-gray-900">
@@ -828,27 +1684,40 @@ function AgentProfileStatusBar({ engagement, currentUserUid }) {
 
               {profile.complete ? (
                 <span className="inline-flex items-center gap-1 rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
-                  <CheckCircle2 size={12} />
+                  <CheckCircle2
+                    size={12}
+                  />
+
                   Profile Complete
                 </span>
               ) : (
                 <span
                   title={
                     profile.missing.length
-                      ? `Missing: ${profile.missing.join(", ")}`
+                      ? `Missing: ${profile.missing.join(
+                          ", "
+                        )}`
                       : "Profile details incomplete"
                   }
                   className="inline-flex items-center gap-1 rounded-full border border-amber-100 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700"
                 >
-                  <AlertTriangle size={12} />
-                  Profile {profile.percentage}%
+                  <AlertTriangle
+                    size={12}
+                  />
+
+                  Profile{" "}
+                  {profile.percentage}%
                 </span>
               )}
             </div>
 
             <p className="mt-1 text-xs text-gray-500">
-              {spocName ? `SPOC: ${spocName}` : "SPOC not available"}
-              {engagement?.assignedToName
+              {spocName
+                ? `SPOC: ${spocName}`
+                : "SPOC not available"}
+
+              {engagement
+                ?.assignedToName
                 ? ` • Assigned to: ${engagement.assignedToName}`
                 : ""}
             </p>
@@ -857,11 +1726,16 @@ function AgentProfileStatusBar({ engagement, currentUserUid }) {
 
         {profileHref ? (
           <Link
-            href={profileHref}
+            href={
+              profileHref
+            }
             className="inline-flex w-fit items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50"
           >
             View Agent Profile
-            <ExternalLink size={12} />
+
+            <ExternalLink
+              size={12}
+            />
           </Link>
         ) : (
           <span className="inline-flex w-fit items-center rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs font-medium text-gray-400">
@@ -874,18 +1748,41 @@ function AgentProfileStatusBar({ engagement, currentUserUid }) {
 }
 
 export default function MyEngagementsPage() {
-  const { user, loading } = useAuth();
+  const {
+    user,
+    loading
+  } = useAuth();
 
-  const [engagements, setEngagements] = useState([]);
-  const [loadingList, setLoadingList] = useState(true);
-  const [error, setError] = useState("");
-  const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const [
+    engagements,
+    setEngagements
+  ] = useState([]);
+
+  const [
+    loadingList,
+    setLoadingList
+  ] = useState(true);
+
+  const [
+    error,
+    setError
+  ] = useState("");
+
+  const [
+    filters,
+    setFilters
+  ] = useState(
+    DEFAULT_FILTERS
+  );
 
   /* =========================
      LOAD MY / ASSIGNED ENGAGEMENTS
   ========================== */
+
   useEffect(() => {
-    if (loading) return;
+    if (loading) {
+      return;
+    }
 
     if (!user?.uid) {
       setEngagements([]);
@@ -896,15 +1793,31 @@ export default function MyEngagementsPage() {
     setLoadingList(true);
     setError("");
 
-    const createdQuery = query(
-      collection(db, "engagements"),
-      where("createdByUid", "==", user.uid)
-    );
+    const createdQuery =
+      query(
+        collection(
+          db,
+          "engagements"
+        ),
+        where(
+          "createdByUid",
+          "==",
+          user.uid
+        )
+      );
 
-    const assignedQuery = query(
-      collection(db, "engagements"),
-      where("assignedToUid", "==", user.uid)
-    );
+    const assignedQuery =
+      query(
+        collection(
+          db,
+          "engagements"
+        ),
+        where(
+          "assignedToUid",
+          "==",
+          user.uid
+        )
+      );
 
     let createdRows = [];
     let assignedRows = [];
@@ -912,335 +1825,885 @@ export default function MyEngagementsPage() {
     let assignedLoaded = false;
 
     function mergeAndSetRows() {
-      const map = new Map();
+      const map =
+        new Map();
 
-      [...createdRows, ...assignedRows].forEach(item => {
-        if (item.deleted === true || item.isDeleted === true) return;
+      [
+        ...createdRows,
+        ...assignedRows
+      ].forEach(item => {
+        if (
+          item.deleted === true ||
+          item.isDeleted === true
+        ) {
+          return;
+        }
 
-        const createdByMe = item.createdByUid === user.uid;
-        const assignedToMe = item.assignedToUid === user.uid;
+        const createdByMe =
+          item.createdByUid ===
+          user.uid;
 
-        map.set(item.id, {
-          ...item,
-          _createdByMe: createdByMe,
-          _assignedToMe: assignedToMe
+        const assignedToMe =
+          item.assignedToUid ===
+          user.uid;
+
+        map.set(
+          item.id,
+          {
+            ...item,
+            _createdByMe:
+              createdByMe,
+            _assignedToMe:
+              assignedToMe
+          }
+        );
+      });
+
+      const rows =
+        Array.from(
+          map.values()
+        ).sort((a, b) => {
+          const aDate =
+            getValidDate(
+              a.createdAt
+            )?.getTime?.() ||
+            0;
+
+          const bDate =
+            getValidDate(
+              b.createdAt
+            )?.getTime?.() ||
+            0;
+
+          return bDate - aDate;
         });
-      });
-
-      const rows = Array.from(map.values()).sort((a, b) => {
-        const aDate = getValidDate(a.createdAt)?.getTime?.() || 0;
-        const bDate = getValidDate(b.createdAt)?.getTime?.() || 0;
-        return bDate - aDate;
-      });
 
       setEngagements(rows);
 
-      if (createdLoaded && assignedLoaded) {
+      if (
+        createdLoaded &&
+        assignedLoaded
+      ) {
         setLoadingList(false);
       }
     }
 
-    const unsubCreated = onSnapshot(
-      createdQuery,
-      snap => {
-        createdRows = snap.docs.map(d => ({
-          id: d.id,
-          ...d.data()
-        }));
+    const unsubCreated =
+      onSnapshot(
+        createdQuery,
+        snapshot => {
+          createdRows =
+            snapshot.docs.map(
+              documentSnapshot => ({
+                id:
+                  documentSnapshot.id,
 
-        createdLoaded = true;
-        mergeAndSetRows();
-      },
-      err => {
-        console.error("Failed to load created engagements:", err);
+                ...documentSnapshot.data()
+              })
+            );
 
-        createdLoaded = true;
-        setError(prev =>
-          prev ||
-          "Unable to load created engagements. Please check Firestore permissions."
-        );
+          createdLoaded = true;
+          mergeAndSetRows();
+        },
+        snapshotError => {
+          console.error(
+            "Failed to load created engagements:",
+            snapshotError
+          );
 
-        mergeAndSetRows();
-      }
-    );
+          createdLoaded = true;
 
-    const unsubAssigned = onSnapshot(
-      assignedQuery,
-      snap => {
-        assignedRows = snap.docs.map(d => ({
-          id: d.id,
-          ...d.data()
-        }));
+          setError(previous =>
+            previous ||
+            "Unable to load created engagements. Please check Firestore permissions."
+          );
 
-        assignedLoaded = true;
-        mergeAndSetRows();
-      },
-      err => {
-        console.error("Failed to load assigned engagements:", err);
+          mergeAndSetRows();
+        }
+      );
 
-        assignedLoaded = true;
-        setError(prev =>
-          prev ||
-          "Unable to load assigned engagements. Please check Firestore permissions."
-        );
+    const unsubAssigned =
+      onSnapshot(
+        assignedQuery,
+        snapshot => {
+          assignedRows =
+            snapshot.docs.map(
+              documentSnapshot => ({
+                id:
+                  documentSnapshot.id,
 
-        mergeAndSetRows();
-      }
-    );
+                ...documentSnapshot.data()
+              })
+            );
+
+          assignedLoaded = true;
+          mergeAndSetRows();
+        },
+        snapshotError => {
+          console.error(
+            "Failed to load assigned engagements:",
+            snapshotError
+          );
+
+          assignedLoaded = true;
+
+          setError(previous =>
+            previous ||
+            "Unable to load assigned engagements. Please check Firestore permissions."
+          );
+
+          mergeAndSetRows();
+        }
+      );
 
     return () => {
       unsubCreated();
       unsubAssigned();
     };
-  }, [user?.uid, loading]);
+  }, [
+    user?.uid,
+    loading
+  ]);
 
   /* =========================
      ACTIVE FILTER COUNT
   ========================== */
-  const activeFilterCount = useMemo(() => {
-    return Object.entries(filters).filter(([key, value]) => {
-      if (["channel", "relation"].includes(key)) {
-        return value && value !== "all";
-      }
 
-      return Boolean(String(value || "").trim());
-    }).length;
-  }, [filters]);
+  const activeFilterCount =
+    useMemo(() => {
+      return Object.entries(
+        filters
+      ).filter(
+        ([
+          key,
+          value
+        ]) => {
+          if (
+            [
+              "channel",
+              "relation"
+            ].includes(key)
+          ) {
+            return (
+              value &&
+              value !== "all"
+            );
+          }
+
+          return Boolean(
+            String(
+              value || ""
+            ).trim()
+          );
+        }
+      ).length;
+    }, [filters]);
 
   /* =========================
      DATE VALIDATION
   ========================== */
-  const dateRangeError = useMemo(() => {
-    if (!filters.dateFrom || !filters.dateTo) return "";
 
-    const fromDate = getStartOfDay(filters.dateFrom);
-    const toDate = getEndOfDay(filters.dateTo);
+  const dateRangeError =
+    useMemo(() => {
+      if (
+        !filters.dateFrom ||
+        !filters.dateTo
+      ) {
+        return "";
+      }
 
-    if (fromDate && toDate && fromDate > toDate) {
-      return "From Date cannot be later than To Date.";
-    }
+      const fromDate =
+        getStartOfDay(
+          filters.dateFrom
+        );
 
-    return "";
-  }, [filters.dateFrom, filters.dateTo]);
+      const toDate =
+        getEndOfDay(
+          filters.dateTo
+        );
+
+      if (
+        fromDate &&
+        toDate &&
+        fromDate > toDate
+      ) {
+        return "From Date cannot be later than To Date.";
+      }
+
+      return "";
+    }, [
+      filters.dateFrom,
+      filters.dateTo
+    ]);
 
   /* =========================
      FILTERED LIST
   ========================== */
-  const filteredEngagements = useMemo(() => {
-    if (dateRangeError) return [];
 
-    const searchText = normalize(filters.search);
-    const destinationText = normalize(filters.destination);
-    const spocText = normalize(filters.spoc);
-    const agentText = normalize(filters.travelAgent);
-
-    const fromDate = getStartOfDay(filters.dateFrom);
-    const toDate = getEndOfDay(filters.dateTo);
-
-    return engagements.filter(e => {
-      const channel = normalize(e.channel);
-      const agentName = getAgentName(e);
-      const spocName = getSpocName(e);
-      const destinationName = getDestinationName(e);
-      const createdDate = getValidDate(e.createdAt);
-
-      const createdByMe = e.createdByUid === user?.uid;
-      const assignedToMe = e.assignedToUid === user?.uid;
-
-      if (filters.relation === "created" && !createdByMe) {
-        return false;
+  const filteredEngagements =
+    useMemo(() => {
+      if (dateRangeError) {
+        return [];
       }
 
-      if (filters.relation === "assigned" && !assignedToMe) {
-        return false;
-      }
+      const searchText =
+        normalize(
+          filters.search
+        );
 
-      if ((fromDate || toDate) && !createdDate) return false;
-      if (fromDate && createdDate < fromDate) return false;
-      if (toDate && createdDate > toDate) return false;
+      const destinationText =
+        normalize(
+          filters.destination
+        );
 
-      if (
-        filters.channel !== "all" &&
-        channel !== normalize(filters.channel)
-      ) {
-        return false;
-      }
+      const spocText =
+        normalize(
+          filters.spoc
+        );
 
-      if (
-        destinationText &&
-        !normalize(destinationName).includes(destinationText)
-      ) {
-        return false;
-      }
+      const agentText =
+        normalize(
+          filters.travelAgent
+        );
 
-      if (spocText && !normalize(spocName).includes(spocText)) {
-        return false;
-      }
+      const fromDate =
+        getStartOfDay(
+          filters.dateFrom
+        );
 
-      if (agentText && !normalize(agentName).includes(agentText)) {
-        return false;
-      }
+      const toDate =
+        getEndOfDay(
+          filters.dateTo
+        );
 
-      if (searchText) {
-        const searchableText = [
-          e.subject,
-          e.message,
-          e.messageText,
-          stripHtml(e.messageHtml),
-          e.customRemark,
-          e.outcomeCode,
-          e.outcomeLabel,
-          e.nextAction,
-          e.status,
-          e.sendStatus,
-          e.channel,
-          e.direction,
-          e.meetingModeLabel,
-          e.templateName,
-          agentName,
-          spocName,
-          destinationName,
-          e.createdByName,
-          e.assignedToName,
-          e.assignedToEmail,
-          getSharedAssetSearchText(e)
-        ]
-          .map(normalize)
-          .join(" ");
+      return engagements.filter(
+        engagement => {
+          const channel =
+            normalize(
+              engagement.channel
+            );
 
-        if (!searchableText.includes(searchText)) {
-          return false;
+          const agentName =
+            getAgentName(
+              engagement
+            );
+
+          const spocName =
+            getSpocName(
+              engagement
+            );
+
+          const destinationName =
+            getDestinationName(
+              engagement
+            );
+
+          const createdDate =
+            getValidDate(
+              engagement.createdAt
+            );
+
+          const createdByMe =
+            engagement.createdByUid ===
+            user?.uid;
+
+          const assignedToMe =
+            engagement.assignedToUid ===
+            user?.uid;
+
+          if (
+            filters.relation ===
+              "created" &&
+            !createdByMe
+          ) {
+            return false;
+          }
+
+          if (
+            filters.relation ===
+              "assigned" &&
+            !assignedToMe
+          ) {
+            return false;
+          }
+
+          if (
+            (
+              fromDate ||
+              toDate
+            ) &&
+            !createdDate
+          ) {
+            return false;
+          }
+
+          if (
+            fromDate &&
+            createdDate <
+              fromDate
+          ) {
+            return false;
+          }
+
+          if (
+            toDate &&
+            createdDate >
+              toDate
+          ) {
+            return false;
+          }
+
+          if (
+            filters.channel !==
+              "all" &&
+            channel !==
+              normalize(
+                filters.channel
+              )
+          ) {
+            return false;
+          }
+
+          if (
+            destinationText &&
+            !normalize(
+              destinationName
+            ).includes(
+              destinationText
+            )
+          ) {
+            return false;
+          }
+
+          if (
+            spocText &&
+            !normalize(
+              spocName
+            ).includes(
+              spocText
+            )
+          ) {
+            return false;
+          }
+
+          if (
+            agentText &&
+            !normalize(
+              agentName
+            ).includes(
+              agentText
+            )
+          ) {
+            return false;
+          }
+
+          if (searchText) {
+            const searchableText =
+              [
+                engagement
+                  .subject,
+                engagement
+                  .message,
+                engagement
+                  .messageText,
+                stripHtml(
+                  engagement
+                    .messageHtml
+                ),
+                engagement
+                  .customRemark,
+                engagement
+                  .outcomeCode,
+                engagement
+                  .outcomeLabel,
+                engagement
+                  .nextAction,
+                engagement.status,
+                engagement
+                  .sendStatus,
+                engagement.channel,
+                engagement
+                  .direction,
+                engagement
+                  .meetingModeLabel,
+                engagement
+                  .templateName,
+                agentName,
+                spocName,
+                destinationName,
+                engagement
+                  .createdByName,
+                engagement
+                  .assignedToName,
+                engagement
+                  .assignedToEmail,
+                getSharedAssetSearchText(
+                  engagement
+                )
+              ]
+                .map(normalize)
+                .join(" ");
+
+            if (
+              !searchableText.includes(
+                searchText
+              )
+            ) {
+              return false;
+            }
+          }
+
+          return true;
         }
-      }
-
-      return true;
-    });
-  }, [engagements, filters, dateRangeError, user?.uid]);
+      );
+    }, [
+      engagements,
+      filters,
+      dateRangeError,
+      user?.uid
+    ]);
 
   /* =========================
      FOLLOW-UP LISTS
   ========================== */
-  const pendingFollowUps = useMemo(() => {
-    return filteredEngagements
-      .filter(item => isPendingEngagementFollowUp(item))
-      .sort((a, b) => {
-        const aDate = getValidDate(getFollowUpDate(a))?.getTime?.() || 0;
-        const bDate = getValidDate(getFollowUpDate(b))?.getTime?.() || 0;
-        return aDate - bDate;
-      });
-  }, [filteredEngagements]);
 
-  const todayFollowUps = useMemo(() => {
-    return pendingFollowUps.filter(item =>
-      isTodayDate(getFollowUpDate(item))
-    );
-  }, [pendingFollowUps]);
+  const pendingFollowUps =
+    useMemo(() => {
+      return filteredEngagements
+        .filter(item =>
+          isPendingEngagementFollowUp(
+            item
+          )
+        )
+        .sort((a, b) => {
+          const aDate =
+            getValidDate(
+              getFollowUpDate(a)
+            )?.getTime?.() ||
+            0;
 
-  const overdueFollowUps = useMemo(() => {
-    return pendingFollowUps.filter(item =>
-      isOverdueDate(getFollowUpDate(item))
-    );
-  }, [pendingFollowUps]);
+          const bDate =
+            getValidDate(
+              getFollowUpDate(b)
+            )?.getTime?.() ||
+            0;
 
-  const missingFollowUpDateCount = useMemo(() => {
-    return filteredEngagements.filter(item =>
-      isMissingFollowUpDate(item)
-    ).length;
-  }, [filteredEngagements]);
+          return aDate - bDate;
+        });
+    }, [
+      filteredEngagements
+    ]);
+
+  const todayFollowUps =
+    useMemo(() => {
+      return pendingFollowUps.filter(
+        item =>
+          isTodayDate(
+            getFollowUpDate(
+              item
+            )
+          )
+      );
+    }, [
+      pendingFollowUps
+    ]);
+
+  const overdueFollowUps =
+    useMemo(() => {
+      return pendingFollowUps.filter(
+        item =>
+          isOverdueDate(
+            getFollowUpDate(
+              item
+            )
+          )
+      );
+    }, [
+      pendingFollowUps
+    ]);
+
+  const missingFollowUpDateCount =
+    useMemo(() => {
+      return filteredEngagements.filter(
+        item =>
+          isMissingFollowUpDate(
+            item
+          )
+      ).length;
+    }, [
+      filteredEngagements
+    ]);
 
   /* =========================
      SUMMARY
   ========================== */
-  const summary = useMemo(() => {
-    const today = new Date();
 
-    const todaysCount = engagements.filter(e => {
-      const d = getValidDate(e.createdAt);
-      return d && isSameDay(d, today);
-    }).length;
+  const summary =
+    useMemo(() => {
+      const today =
+        new Date();
 
-    const createdByMe = engagements.filter(
-      e => e.createdByUid === user?.uid
-    ).length;
+      const todaysCount =
+        engagements.filter(
+          engagement => {
+            const date =
+              getValidDate(
+                engagement
+                  .createdAt
+              );
 
-    const assignedToMe = engagements.filter(
-      e => e.assignedToUid === user?.uid
-    ).length;
+            return (
+              date &&
+              isSameDay(
+                date,
+                today
+              )
+            );
+          }
+        ).length;
 
-    const channelMap = filteredEngagements.reduce((acc, e) => {
-      const key = e.channel || "other";
-      acc[key] = (acc[key] || 0) + 1;
-      return acc;
-    }, {});
+      const createdByMe =
+        engagements.filter(
+          engagement =>
+            engagement
+              .createdByUid ===
+            user?.uid
+        ).length;
 
-    const topChannel = Object.entries(channelMap).sort(
-      (a, b) => b[1] - a[1]
-    )[0];
+      const assignedToMe =
+        engagements.filter(
+          engagement =>
+            engagement
+              .assignedToUid ===
+            user?.uid
+        ).length;
 
-    const filteredAssetCount = filteredEngagements.reduce((sum, e) => {
-      return sum + getSharedAssetCount(e);
-    }, 0);
+      const channelMap =
+        filteredEngagements.reduce(
+          (
+            accumulator,
+            engagement
+          ) => {
+            const key =
+              engagement.channel ||
+              "other";
 
-    return {
-      total: engagements.length,
-      filtered: filteredEngagements.length,
-      createdByMe,
-      assignedToMe,
-      today: todaysCount,
-      todayFollowUps: todayFollowUps.length,
-      overdueFollowUps: overdueFollowUps.length,
-      missingFollowUpDate: missingFollowUpDateCount,
-      topChannel: topChannel
-        ? `${getChannelLabel(topChannel[0])} (${topChannel[1]})`
-        : "—",
-      sharedAssets: filteredAssetCount
-    };
-  }, [
-    engagements,
-    filteredEngagements,
-    user?.uid,
-    todayFollowUps.length,
-    overdueFollowUps.length,
-    missingFollowUpDateCount
-  ]);
+            accumulator[key] =
+              (
+                accumulator[key] ||
+                0
+              ) + 1;
+
+            return accumulator;
+          },
+          {}
+        );
+
+      const topChannel =
+        Object.entries(
+          channelMap
+        ).sort(
+          (a, b) =>
+            b[1] -
+            a[1]
+        )[0];
+
+      const filteredAssetCount =
+        filteredEngagements.reduce(
+          (
+            total,
+            engagement
+          ) => {
+            return (
+              total +
+              getSharedAssetCount(
+                engagement
+              )
+            );
+          },
+          0
+        );
+
+      return {
+        total:
+          engagements.length,
+
+        filtered:
+          filteredEngagements.length,
+
+        createdByMe,
+
+        assignedToMe,
+
+        today:
+          todaysCount,
+
+        todayFollowUps:
+          todayFollowUps.length,
+
+        overdueFollowUps:
+          overdueFollowUps.length,
+
+        missingFollowUpDate:
+          missingFollowUpDateCount,
+
+        topChannel:
+          topChannel
+            ? `${getChannelLabel(
+                topChannel[0]
+              )} (${topChannel[1]})`
+            : "—",
+
+        sharedAssets:
+          filteredAssetCount
+      };
+    }, [
+      engagements,
+      filteredEngagements,
+      user?.uid,
+      todayFollowUps.length,
+      overdueFollowUps.length,
+      missingFollowUpDateCount
+    ]);
+
+  const engagementAnalytics =
+    useMemo(() => {
+      const channelMap =
+        new Map();
+
+      const destinationMap =
+        new Map();
+
+      const outcomeMap =
+        new Map();
+
+      const agentSet =
+        new Set();
+
+      filteredEngagements.forEach(
+        item => {
+          const channel =
+            getChannelLabel(
+              item?.channel ||
+                "other"
+            );
+
+          const destination =
+            getDestinationName(
+              item
+            ) ||
+            "Not Set";
+
+          const outcome =
+            getFirstValue(
+              item
+                ?.outcomeLabel,
+              item
+                ?.outcomeCode,
+              item?.status,
+              "Not Set"
+            );
+
+          const agentName =
+            getAgentName(
+              item
+            );
+
+          channelMap.set(
+            channel,
+            (
+              channelMap.get(
+                channel
+              ) || 0
+            ) + 1
+          );
+
+          destinationMap.set(
+            destination,
+            (
+              destinationMap.get(
+                destination
+              ) || 0
+            ) + 1
+          );
+
+          outcomeMap.set(
+            outcome,
+            (
+              outcomeMap.get(
+                outcome
+              ) || 0
+            ) + 1
+          );
+
+          if (agentName) {
+            agentSet.add(
+              getAgentId(
+                item
+              ) ||
+                agentName
+            );
+          }
+        }
+      );
+
+      const toRows =
+        map =>
+          Array.from(
+            map.entries()
+          )
+            .map(
+              ([
+                label,
+                value
+              ]) => ({
+                label,
+                value
+              })
+            )
+            .sort(
+              (a, b) =>
+                b.value -
+                a.value
+            );
+
+      return {
+        uniqueAgents:
+          agentSet.size,
+
+        channels:
+          toRows(
+            channelMap
+          ),
+
+        destinations:
+          toRows(
+            destinationMap
+          ),
+
+        outcomes:
+          toRows(
+            outcomeMap
+          ),
+
+        lastEngagement:
+          filteredEngagements[0] ||
+          null
+      };
+    }, [
+      filteredEngagements
+    ]);
+
+  const activeQuickPeriod =
+    useMemo(() => {
+      return getActiveQuickPeriod(
+        filters.dateFrom,
+        filters.dateTo
+      );
+    }, [
+      filters.dateFrom,
+      filters.dateTo
+    ]);
+
+  function applyQuickDate(
+    period
+  ) {
+    const range =
+      getQuickDateRange(
+        period
+      );
+
+    setFilters(previous => ({
+      ...previous,
+      dateFrom:
+        range.from,
+      dateTo:
+        range.to
+    }));
+  }
+
+  function resetAllFilters() {
+    setFilters({
+      ...DEFAULT_FILTERS
+    });
+  }
 
   /* =========================
      GROUP BY DATE
   ========================== */
-  const groupedEngagements = useMemo(() => {
-    const map = new Map();
 
-    filteredEngagements.forEach(e => {
-      const date = getValidDate(e.createdAt);
-      const key = getLocalDateKey(date);
-      const label = formatDateLabel(date);
+  const groupedEngagements =
+    useMemo(() => {
+      const map =
+        new Map();
 
-      if (!map.has(key)) {
-        map.set(key, {
-          key,
-          label,
-          sortTime: date?.getTime?.() || 0,
-          items: []
-        });
-      }
+      filteredEngagements.forEach(
+        engagement => {
+          const date =
+            getValidDate(
+              engagement
+                .createdAt
+            );
 
-      map.get(key).items.push(e);
-    });
+          const key =
+            getLocalDateKey(
+              date
+            );
 
-    return Array.from(map.values()).sort(
-      (a, b) => b.sortTime - a.sortTime
-    );
-  }, [filteredEngagements]);
+          const label =
+            formatDateLabel(
+              date
+            );
+
+          if (!map.has(key)) {
+            map.set(
+              key,
+              {
+                key,
+                label,
+                sortTime:
+                  date
+                    ?.getTime?.() ||
+                  0,
+                items: []
+              }
+            );
+          }
+
+          map
+            .get(key)
+            .items
+            .push(
+              engagement
+            );
+        }
+      );
+
+      return Array.from(
+        map.values()
+      ).sort(
+        (a, b) =>
+          b.sortTime -
+          a.sortTime
+      );
+    }, [
+      filteredEngagements
+    ]);
 
   /* =========================
      LOADING
   ========================== */
-  if (loading || loadingList) {
+
+  if (
+    loading ||
+    loadingList
+  ) {
     return (
       <main className="min-h-screen bg-gray-50">
         <div className="mx-auto max-w-screen-2xl space-y-4 px-4 py-6">
           <div className="rounded-3xl border border-gray-200 bg-white p-6">
             <div className="mb-3 h-6 w-52 animate-pulse rounded bg-gray-200" />
+
             <div className="h-4 w-80 animate-pulse rounded bg-gray-100" />
           </div>
 
@@ -1260,213 +2723,585 @@ export default function MyEngagementsPage() {
   }
 
   return (
-    <main className="min-h-screen w-full">
-      <div className="mx-auto w-full space-y-6 px-4 py-6">
-        {/* ================= HERO HEADER ================= */}
-        <section className="overflow-hidden rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700">
-          <div className="p-5 md:p-6">
-            <div className="flex items-start gap-4">
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/15 text-white">
-                <Activity size={24} />
-              </div>
+    <main className="min-h-screen bg-slate-50">
+      <div className="mx-auto w-full max-w-[1700px] space-y-6 px-4 py-6 sm:px-6">
+        {/* ================= COMMAND HEADER ================= */}
 
-              <div>
-                <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white/90">
-                  <Activity size={14} />
-                  My Work Timeline
+        <section className="overflow-hidden rounded-3xl bg-slate-950 shadow-sm">
+          <div className="p-5 text-white sm:p-6">
+            <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+              <div className="max-w-4xl">
+                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-semibold text-slate-200">
+                  <Activity className="h-3.5 w-3.5" />
+
+                  My Engagement Workspace
                 </div>
 
-                <h1 className="text-2xl font-semibold tracking-tight text-white">
+                <h1 className="mt-5 text-3xl font-bold tracking-tight text-white">
                   My Engagements
                 </h1>
 
-                <p className="mt-1 max-w-2xl text-sm leading-6 text-blue-100">
-                  View engagements created by you, assigned to you, follow-up
-                  queue, shared assets, package links, destination communication
-                  and travel agent profile status.
+                <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">
+                  Review work created by you or assigned to you, manage follow-ups,
+                  inspect shared assets, open travel-agent profiles and continue lead
+                  actions from one focused workspace.
                 </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:min-w-[640px]">
+                <CommandMetric
+                  label="Filtered Work"
+                  value={
+                    summary.filtered
+                  }
+                  icon={BarChart3}
+                  tone="slate"
+                />
+
+                <CommandMetric
+                  label="Today"
+                  value={
+                    summary.today
+                  }
+                  icon={CalendarDays}
+                  tone="blue"
+                />
+
+                <CommandMetric
+                  label="Due Today"
+                  value={
+                    summary
+                      .todayFollowUps
+                  }
+                  icon={PhoneCall}
+                  tone="amber"
+                />
+
+                <CommandMetric
+                  label="Overdue"
+                  value={
+                    summary
+                      .overdueFollowUps
+                  }
+                  icon={
+                    AlertTriangle
+                  }
+                  tone={
+                    summary
+                      .overdueFollowUps >
+                    0
+                      ? "red"
+                      : "emerald"
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-col gap-3 border-t border-white/10 pt-5 sm:flex-row sm:items-center sm:justify-between">
+              <p className="flex items-center gap-2 text-sm text-slate-300">
+                <Filter className="h-4 w-4" />
+
+                Use the work view, quick dates and detailed filters to narrow the timeline.
+              </p>
+
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  href="/employee-dashboard"
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/15"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+
+                  Back
+                </Link>
+
+                <button
+                  type="button"
+                  onClick={
+                    resetAllFilters
+                  }
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/15"
+                >
+                  <RefreshCcw className="h-4 w-4" />
+
+                  Reset
+                </button>
               </div>
             </div>
           </div>
         </section>
 
+        {/* ================= QUICK DATE FILTERS ================= */}
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+            <CalendarDays className="h-4 w-4 text-slate-500" />
+
+            Quick Date Filters
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <QuickDateButton
+              label="Today"
+              active={
+                activeQuickPeriod ===
+                "today"
+              }
+              onClick={() =>
+                applyQuickDate(
+                  "today"
+                )
+              }
+            />
+
+            <QuickDateButton
+              label="Yesterday"
+              active={
+                activeQuickPeriod ===
+                "yesterday"
+              }
+              onClick={() =>
+                applyQuickDate(
+                  "yesterday"
+                )
+              }
+            />
+
+            <QuickDateButton
+              label="Last 7 Days"
+              active={
+                activeQuickPeriod ===
+                "7d"
+              }
+              onClick={() =>
+                applyQuickDate(
+                  "7d"
+                )
+              }
+            />
+
+            <QuickDateButton
+              label="Last 30 Days"
+              active={
+                activeQuickPeriod ===
+                "30d"
+              }
+              onClick={() =>
+                applyQuickDate(
+                  "30d"
+                )
+              }
+            />
+
+            <QuickDateButton
+              label="This Month"
+              active={
+                activeQuickPeriod ===
+                "thisMonth"
+              }
+              onClick={() =>
+                applyQuickDate(
+                  "thisMonth"
+                )
+              }
+            />
+
+            <QuickDateButton
+              label="All Time"
+              active={
+                activeQuickPeriod ===
+                "all"
+              }
+              onClick={() =>
+                applyQuickDate(
+                  "all"
+                )
+              }
+            />
+          </div>
+        </section>
+
         {/* ================= RELATION TOGGLE ================= */}
+
         <RelationToggle
-          value={filters.relation}
+          value={
+            filters.relation
+          }
           summary={summary}
           onChange={value =>
-            setFilters(prev => ({
-              ...prev,
-              relation: value
-            }))
+            setFilters(
+              previous => ({
+                ...previous,
+                relation:
+                  value
+              })
+            )
           }
         />
 
-        {/* ================= KPI STRIP ================= */}
-        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        {/* ================= KPI SNAPSHOT ================= */}
+
+        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
           <MiniStatCard
             icon={BarChart3}
             label="Total Work"
-            value={summary.total}
+            value={
+              summary.total
+            }
             hint="Created or assigned to you"
+          />
+
+          <MiniStatCard
+            icon={Users}
+            label="Agents Covered"
+            value={
+              engagementAnalytics
+                .uniqueAgents
+            }
+            hint="Unique agents in the filtered view"
+          />
+
+          <MiniStatCard
+            icon={Activity}
+            label="Created by Me"
+            value={
+              summary
+                .createdByMe
+            }
+            hint="Engagements logged by you"
+          />
+
+          <MiniStatCard
+            icon={UserRound}
+            label="Assigned to Me"
+            value={
+              summary
+                .assignedToMe
+            }
+            hint="Engagements owned by you"
           />
 
           <MiniStatCard
             icon={CalendarDays}
             label="Today's Follow-ups"
-            value={summary.todayFollowUps}
-            hint="Engagement follow-ups due today"
+            value={
+              summary
+                .todayFollowUps
+            }
+            hint="Follow-ups due today"
           />
 
           <MiniStatCard
             icon={Timer}
             label="Overdue"
-            value={summary.overdueFollowUps}
+            value={
+              summary
+                .overdueFollowUps
+            }
             hint="Follow-ups past due date"
           />
 
           <MiniStatCard
-            icon={AlertTriangle}
+            icon={
+              AlertTriangle
+            }
             label="Missing Date"
-            value={summary.missingFollowUpDate}
+            value={
+              summary
+                .missingFollowUpDate
+            }
             hint="Follow-up required but no date"
           />
 
           <MiniStatCard
             icon={Package}
             label="Shared Assets"
-            value={summary.sharedAssets}
+            value={
+              summary
+                .sharedAssets
+            }
             hint="Assets in filtered records"
           />
         </section>
 
         {/* ================= FOLLOW-UP QUEUE ================= */}
+
         <section className="grid grid-cols-1 gap-5 xl:grid-cols-2">
           <FollowUpQueue
             title="Today's Follow-up Queue"
             description="Engagement follow-ups scheduled for today."
-            items={todayFollowUps}
+            items={
+              todayFollowUps
+            }
             type="today"
           />
 
           <FollowUpQueue
             title="Overdue Follow-up Queue"
             description="Pending engagement follow-ups that crossed their due date."
-            items={overdueFollowUps}
+            items={
+              overdueFollowUps
+            }
             type="overdue"
           />
         </section>
 
+        {/* ================= ENGAGEMENT INSIGHTS ================= */}
+
+        <section className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+          <DashboardSection
+            icon={
+              MessageCircle
+            }
+            title="Channel Breakdown"
+            description="Communication channels used in the filtered engagement view."
+          >
+            <InsightList
+              items={
+                engagementAnalytics
+                  .channels
+              }
+              emptyText="No channel data available."
+            />
+          </DashboardSection>
+
+          <DashboardSection
+            icon={MapPin}
+            title="Top Destinations"
+            description="Destinations discussed most frequently in your engagements."
+          >
+            <InsightList
+              items={
+                engagementAnalytics
+                  .destinations
+              }
+              emptyText="No destination data available."
+            />
+          </DashboardSection>
+
+          <DashboardSection
+            icon={
+              CheckCircle2
+            }
+            title="Outcome Summary"
+            description="Most common outcomes across the selected engagement records."
+          >
+            <InsightList
+              items={
+                engagementAnalytics
+                  .outcomes
+              }
+              emptyText="No outcome data available."
+            />
+          </DashboardSection>
+        </section>
+
         {/* ================= MAIN GRID ================= */}
+
         <section className="grid grid-cols-1 gap-5 xl:grid-cols-12">
-          {/* LEFT: LIST */}
           <div className="space-y-5 xl:col-span-8 2xl:col-span-9">
-            {error && (
+            <div className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900">
+                  Engagement Timeline
+                </h2>
+
+                <p className="mt-1 text-xs text-slate-500">
+                  Agent-wise engagement history grouped by activity date.
+                </p>
+              </div>
+
+              <span className="w-fit rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                {summary.filtered} records
+              </span>
+            </div>
+
+            {error ? (
               <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                 {error}
               </div>
-            )}
+            ) : null}
 
-            {dateRangeError && (
+            {dateRangeError ? (
               <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
                 {dateRangeError}
               </div>
-            )}
+            ) : null}
 
-            {!error && filteredEngagements.length === 0 && (
-              <div className="rounded-3xl border border-gray-200 bg-white p-10">
+            {!error &&
+            filteredEngagements.length ===
+              0 ? (
+              <div className="rounded-3xl border border-slate-200 bg-white p-10 shadow-sm">
                 <EmptyState
                   icon="📭"
                   title="No engagements found"
                   description={
-                    engagements.length === 0
+                    engagements.length ===
+                    0
                       ? "No engagements are created by you or assigned to you yet."
-                      : "Try changing your work view, date range, search text, asset name or filters."
+                      : "Change the work view, date range, search text, asset name or filters."
                   }
                 />
               </div>
-            )}
+            ) : null}
 
-            {!error && filteredEngagements.length > 0 && (
+            {!error &&
+            filteredEngagements.length >
+              0 ? (
               <div className="space-y-8">
-                {groupedEngagements.map(group => (
-                  <section key={group.key} className="relative">
-                    {/* DATE HEADER */}
-                    <div className="sticky top-0 z-10 bg-gray-50/90 py-2 backdrop-blur">
-                      <div className="flex items-center gap-3">
-                        <div className="rounded-full border border-gray-200 bg-white px-3 py-1.5">
-                          <p className="text-xs font-semibold text-gray-700">
-                            {group.label}
+                {groupedEngagements.map(
+                  group => (
+                    <section
+                      key={
+                        group.key
+                      }
+                      className="relative"
+                    >
+                      <div className="sticky top-0 z-10 bg-slate-50/90 py-2 backdrop-blur">
+                        <div className="flex items-center gap-3">
+                          <div className="rounded-full border border-slate-200 bg-white px-3 py-1.5 shadow-sm">
+                            <p className="text-xs font-semibold text-slate-700">
+                              {group.label}
+                            </p>
+                          </div>
+
+                          <p className="text-xs text-slate-400">
+                            {group.items.length} engagement
+                            {group.items.length > 1
+                              ? "s"
+                              : ""}
                           </p>
+
+                          <div className="h-px flex-1 bg-slate-200" />
                         </div>
-
-                        <p className="text-xs text-gray-400">
-                          {group.items.length} engagement
-                          {group.items.length > 1 ? "s" : ""}
-                        </p>
-
-                        <div className="h-px flex-1 bg-gray-200" />
                       </div>
-                    </div>
 
-                    {/* TIMELINE LIST */}
-                    <div className="relative mt-3">
-                      <div className="absolute bottom-4 left-4 top-4 hidden w-px bg-gray-200 sm:block" />
+                      <div className="relative mt-3">
+                        <div className="absolute bottom-4 left-4 top-4 hidden w-px bg-slate-200 sm:block" />
 
-                      <div className="space-y-3">
-                        {group.items.map(e => {
-                          const profile = getProfileCompletion(e);
+                        <div className="space-y-3">
+                          {group.items.map(
+                            engagement => {
+                              const profile =
+                                getProfileCompletion(
+                                  engagement
+                                );
 
-                          return (
-                            <div key={e.id} className="relative sm:pl-10">
-                              <div className="absolute left-[10px] top-6 hidden h-3 w-3 rounded-full border-2 border-blue-500 bg-white sm:block" />
+                              return (
+                                <div
+                                  key={
+                                    engagement.id
+                                  }
+                                  className="relative sm:pl-10"
+                                >
+                                  <div className="absolute left-[10px] top-6 hidden h-3 w-3 rounded-full border-2 border-blue-500 bg-white sm:block" />
 
-                              <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white transition-shadow hover:shadow-md">
-                                <AgentProfileStatusBar
-                                  engagement={e}
-                                  currentUserUid={user?.uid}
-                                />
+                                  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:border-blue-200 hover:shadow-md">
+                                    <AgentProfileStatusBar
+                                      engagement={
+                                        engagement
+                                      }
+                                      currentUserUid={
+                                        user?.uid
+                                      }
+                                    />
 
-                                <EngagementCard
-                                  engagement={e}
-                                  agent={{
-                                    id: getAgentId(e),
-                                    name: getAgentName(e),
-                                    agencyName: getAgentName(e),
-                                    spocName: getSpocName(e),
-                                    email: getAgentEmail(e),
-                                    phone: getAgentPhone(e),
-                                    city: getAgentCity(e),
-                                    profileComplete: profile.complete,
-                                    profileCompletionPercentage:
-                                      profile.percentage,
-                                    missingProfileFields: profile.missing
-                                  }}
-                                  agentProfileHref={getTravelAgentProfileHref(e)}
-                                  viewEngagementHref={getViewEngagementHref(e)}
-                                  leadCreateHref={getLeadCreateHref(e)}
-                                  showSendCommunication={false}
-                                />
-                              </div>
-                            </div>
-                          );
-                        })}
+                                    <EngagementCard
+                                      engagement={
+                                        engagement
+                                      }
+                                      agent={{
+                                        id:
+                                          getAgentId(
+                                            engagement
+                                          ),
+
+                                        name:
+                                          getAgentName(
+                                            engagement
+                                          ),
+
+                                        agencyName:
+                                          getAgentName(
+                                            engagement
+                                          ),
+
+                                        spocName:
+                                          getSpocName(
+                                            engagement
+                                          ),
+
+                                        email:
+                                          getAgentEmail(
+                                            engagement
+                                          ),
+
+                                        phone:
+                                          getAgentPhone(
+                                            engagement
+                                          ),
+
+                                        city:
+                                          getAgentCity(
+                                            engagement
+                                          ),
+
+                                        profileComplete:
+                                          profile.complete,
+
+                                        profileCompletionPercentage:
+                                          profile.percentage,
+
+                                        missingProfileFields:
+                                          profile.missing
+                                      }}
+                                      agentProfileHref={
+                                        getTravelAgentProfileHref(
+                                          engagement
+                                        )
+                                      }
+                                      viewEngagementHref={
+                                        getViewEngagementHref(
+                                          engagement
+                                        )
+                                      }
+                                      leadCreateHref={
+                                        getLeadCreateHref(
+                                          engagement
+                                        )
+                                      }
+                                      showSendCommunication={
+                                        false
+                                      }
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            }
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  </section>
-                ))}
+                    </section>
+                  )
+                )}
               </div>
-            )}
+            ) : null}
           </div>
 
-          {/* RIGHT: FILTER PANEL */}
           <aside className="xl:col-span-4 2xl:col-span-3">
             <div className="xl:sticky xl:top-5">
               <EngagementFilterBar
-                filters={filters}
-                setFilters={setFilters}
-                activeFilterCount={activeFilterCount}
-                onClearFilters={() => setFilters({ ...DEFAULT_FILTERS })}
+                filters={
+                  filters
+                }
+                setFilters={
+                  setFilters
+                }
+                activeFilterCount={
+                  activeFilterCount
+                }
+                onClearFilters={
+                  resetAllFilters
+                }
               />
             </div>
           </aside>

@@ -656,7 +656,10 @@ export default function EngagementPage() {
         {/* DESKTOP FORM */}
         {!isMobile && (
           <aside className="lg:sticky lg:top-6 h-fit">
-            <EngagementForm agent={agent} />
+            <EngagementForm
+              agent={agent}
+              sourceTaskId={agent?.nextEngagementTaskId || ""}
+            />
           </aside>
         )}
 
@@ -763,18 +766,19 @@ export default function EngagementPage() {
       </div>
 
       {/* MOBILE ADD ENGAGEMENT */}
+      {/* MOBILE ADD ENGAGEMENT */}
       {isMobile && (
         <>
           <button
             type="button"
             onClick={() => setFormOpen(true)}
             className="
-              fixed bottom-6 right-6 z-30
-              bg-blue-600 text-white
-              rounded-full p-4 shadow-xl
-              border border-blue-500
-              hover:bg-blue-700
-            "
+        fixed bottom-6 right-6 z-30
+        bg-blue-600 text-white
+        rounded-full p-4 shadow-xl
+        border border-blue-500
+        hover:bg-blue-700
+      "
             aria-label="Add engagement"
           >
             <Plus className="w-6 h-6" />
@@ -785,7 +789,12 @@ export default function EngagementPage() {
             onClose={() => setFormOpen(false)}
             title="New Engagement"
           >
-            <EngagementForm agent={agent} />
+            <EngagementForm
+              agent={agent}
+              sourceTaskId={agent?.nextEngagementTaskId || ""}
+              onSaved={() => setFormOpen(false)}
+              onClose={() => setFormOpen(false)}
+            />
           </BottomSheetModal>
         </>
       )}
@@ -898,10 +907,9 @@ function TimelineItemWrapper({ children, engagement, highlight }) {
         <div
           className={`
             absolute left-0 top-5 hidden sm:flex h-4 w-4 rounded-full border-2 bg-white items-center justify-center
-            ${
-              highlight
-                ? "border-blue-500 ring-4 ring-blue-100"
-                : "border-slate-300"
+            ${highlight
+              ? "border-blue-500 ring-4 ring-blue-100"
+              : "border-slate-300"
             }
           `}
         >

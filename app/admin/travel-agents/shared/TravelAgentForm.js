@@ -42,6 +42,16 @@ import AdminGuard from "@/components/AdminGuard";
 import { generateTravelAgentCode } from "@/lib/generateTravelAgentCode";
 import { checkDuplicateAgent, normalize } from "@/lib/checkDuplicateAgent";
 
+import {
+  getEngagementSegmentOptions,
+  inferAgentEngagementSegment
+} from "@/lib/engagementCadenceEngine";
+
+import {
+  cancelPendingAgentTasks,
+  initializeAgentCadence
+} from "@/lib/engagementTaskService";
+
 /* =========================
    DRAFT KEY
 ========================= */
@@ -152,6 +162,11 @@ const EMPTY_FORM = {
 
   riskFlags: [],
   internalRating: 3,
+
+  engagementSegment: "new_agent",
+  cadenceAutoManaged: true,
+  newAgentSequenceActive: true,
+  newAgentSequenceStep: 0,
 
   followUpFrequency: "Monthly",
   nextReviewDate: "",
@@ -308,6 +323,8 @@ const FOLLOW_UP_FREQUENCIES = [
   "Quarterly"
 ];
 
+const ENGAGEMENT_SEGMENT_OPTIONS = getEngagementSegmentOptions();
+
 const STATUS_OPTIONS = [
   { value: "active", label: "Active" },
   { value: "inactive", label: "Inactive" },
@@ -365,14 +382,37 @@ function buildMapUrl(form) {
   return `https://www.google.com/maps?q=${encodeURIComponent(address)}`;
 }
 
+
+function hasCadenceConfigurationChanged(previous = {}, current = {}) {
+  const fields = [
+    "engagementSegment",
+    "cadenceAutoManaged",
+    "relationshipStage",
+    "lifecycleStatus",
+    "partnerSegment",
+    "followUpFrequency",
+    "assignedTo",
+    "accountManagerUid",
+    "team"
+  ];
+
+  return fields.some(
+    field =>
+      JSON.stringify(previous?.[field] ?? null) !==
+      JSON.stringify(current?.[field] ?? null)
+  );
+}
+
 function normalizeTravelAgentForm(data = {}) {
+  const inferredEngagementSegment = inferAgentEngagementSegment(data);
+
   const existingDestinations = Array.isArray(data.destinations)
     ? data.destinations
     : [];
 
   const existingDestinationIds = Array.isArray(data.destinationIds)
-    ? data.destinationIds
-    : existingDestinations.map(item => item.id).filter(Boolean);
+    ? data.destinationIds.filter(Boolean)
+    : existingDestinations.map(item => item?.id).filter(Boolean);
 
   const existingSpocs =
     Array.isArray(data.spocs) && data.spocs.length > 0
@@ -405,7 +445,10 @@ function normalizeTravelAgentForm(data = {}) {
       ...(data.bankDetails || {})
     },
 
-    destinations: existingDestinations,
+    destinations: existingDestinations.filter(
+      destination => destination?.id || destination?.name
+    ),
+
     destinationIds: existingDestinationIds,
 
     productTypes: Array.isArray(data.productTypes)
@@ -431,9 +474,9 @@ function normalizeTravelAgentForm(data = {}) {
     spocs: hasPrimary
       ? existingSpocs
       : existingSpocs.map((spoc, index) => ({
-          ...spoc,
-          isPrimary: index === 0
-        })),
+        ...spoc,
+        isPrimary: index === 0
+      })),
 
     avgTicketSize:
       data.avgTicketSize === null || data.avgTicketSize === undefined
@@ -451,11 +494,27 @@ function normalizeTravelAgentForm(data = {}) {
         : String(data.creditDays),
 
     responseSlaHours:
-      data.responseSlaHours === null || data.responseSlaHours === undefined
+      data.responseSlaHours === null ||
+        data.responseSlaHours === undefined
         ? 24
         : String(data.responseSlaHours),
 
-    internalRating: data.internalRating || 3
+    internalRating: data.internalRating || 3,
+
+    engagementSegment:
+      data.engagementSegment || inferredEngagementSegment,
+
+    cadenceAutoManaged: data.cadenceAutoManaged !== false,
+
+    newAgentSequenceActive:
+      data.newAgentSequenceActive !== undefined
+        ? Boolean(data.newAgentSequenceActive)
+        : inferredEngagementSegment === "new_agent",
+
+    newAgentSequenceStep:
+      Number.isFinite(Number(data.newAgentSequenceStep))
+        ? Number(data.newAgentSequenceStep)
+        : 0
   };
 }
 
@@ -595,11 +654,16 @@ function buildTravelAgentPayload(form) {
   }));
 
   const destinations = Array.isArray(form.destinations)
-    ? form.destinations.map(destination => ({
-        id: destination.id,
-        name: destination.name
+    ? form.destinations
+      .filter(destination => destination?.id || destination?.name)
+      .map(destination => ({
+        id: destination.id || null,
+        name: destination.name || ""
       }))
+      .filter(destination => destination.id)
     : [];
+
+
 
   return {
     agencyName: cleanString(form.agencyName),
@@ -694,6 +758,24 @@ function buildTravelAgentPayload(form) {
     riskFlags: Array.isArray(form.riskFlags) ? form.riskFlags : [],
     internalRating: numberOrNull(form.internalRating) || 3,
 
+    engagementSegment: cleanString(form.engagementSegment),
+
+    cadenceAutoManaged:
+      form.cadenceAutoManaged !== false,
+
+    newAgentSequenceActive:
+      form.engagementSegment === "new_agent"
+        ? form.newAgentSequenceActive !== false
+        : false,
+
+    newAgentSequenceStep:
+      form.engagementSegment === "new_agent"
+        ? Math.max(
+          0,
+          Number(form.newAgentSequenceStep || 0)
+        )
+        : 0,
+
     followUpFrequency: cleanString(form.followUpFrequency),
     nextReviewDate: cleanString(form.nextReviewDate),
     relationshipGoal: cleanString(form.relationshipGoal),
@@ -740,8 +822,8 @@ function getSectionStatuses(form) {
 
     communication:
       form.preferredCommunication?.whatsapp ||
-      form.preferredCommunication?.email ||
-      form.preferredCommunication?.call
+        form.preferredCommunication?.email ||
+        form.preferredCommunication?.call
         ? "success"
         : "warning",
 
@@ -764,11 +846,13 @@ function getSectionStatuses(form) {
       form.kycStatus === "Approved"
         ? "success"
         : form.gstNumber || form.panNumber
-        ? "warning"
-        : "default",
+          ? "warning"
+          : "default",
 
     review:
-      form.followUpFrequency || form.nextReviewDate ? "success" : "default",
+      form.engagementSegment && form.followUpFrequency
+        ? "success"
+        : "warning",
 
     notes:
       form.internalNotes || form.strengths?.length || form.weaknesses?.length
@@ -1253,6 +1337,26 @@ export default function TravelAgentForm({ mode = "add", agentId }) {
     }));
   };
 
+
+  const handleEngagementSegmentChange = value => {
+    setForm(prev => ({
+      ...prev,
+
+      engagementSegment: value,
+
+      newAgentSequenceActive:
+        value === "new_agent",
+
+      newAgentSequenceStep:
+        value === "new_agent"
+          ? Math.max(
+            0,
+            Number(prev.newAgentSequenceStep || 0)
+          )
+          : 0
+    }));
+  };
+
   const scrollToSection = sectionId => {
     document.getElementById(sectionId)?.scrollIntoView({
       behavior: "smooth",
@@ -1270,73 +1374,203 @@ export default function TravelAgentForm({ mode = "add", agentId }) {
     setErrors(validationErrors);
 
     if (Object.keys(validationErrors).length > 0) {
-      alert("Please complete the required fields before saving.");
+      alert(
+        "Please complete the required fields before saving."
+      );
       return;
     }
 
     if (!user?.uid && !isEdit) {
-      alert("User session not found. Please login again.");
+      alert(
+        "User session not found. Please login again."
+      );
       return;
     }
 
     try {
       setSubmitting(true);
 
-      const phone = normalize(form.genericContact?.phone || "");
-      const email = normalize(form.genericContact?.email || "");
+      const phone = normalize(
+        form.genericContact?.phone || ""
+      );
+
+      const email = normalize(
+        form.genericContact?.email || ""
+      );
 
       const genericContactChanged =
         phone !== originalGenericContact.phone ||
         email !== originalGenericContact.email;
 
       const shouldCheckDuplicate =
-        !!phone || !!email ? !isEdit || genericContactChanged : false;
+        phone || email
+          ? !isEdit || genericContactChanged
+          : false;
 
       if (shouldCheckDuplicate) {
-        const isDuplicate = await checkDuplicateAgent(
-          phone,
-          email,
-          isEdit ? agentId : null
-        );
+        const isDuplicate =
+          await checkDuplicateAgent(
+            phone,
+            email,
+            isEdit ? agentId : null
+          );
 
         if (isDuplicate) {
-          alert("Generic contact already exists for another Travel Agent.");
-          setSubmitting(false);
+          alert(
+            "Generic contact already exists for another Travel Agent."
+          );
           return;
         }
       }
 
-      const payload = buildTravelAgentPayload(form);
+      const payload =
+        buildTravelAgentPayload(form);
+
+      let savedAgentId = agentId || "";
+      let savedAgentCode =
+        form.agentCode || "";
 
       if (isEdit) {
-        await updateDoc(doc(db, "travelAgents", agentId), {
-          ...payload,
-          updatedAt: serverTimestamp(),
-          updatedByUid: user?.uid || null
-        });
-      } else {
-        const ref = doc(collection(db, "travelAgents"));
+        await updateDoc(
+          doc(db, "travelAgents", agentId),
+          {
+            ...payload,
 
-        await setDoc(ref, {
+            updatedAt:
+              serverTimestamp(),
+
+            updatedByUid:
+              user?.uid || null
+          }
+        );
+      } else {
+        const agentRef = doc(
+          collection(db, "travelAgents")
+        );
+
+        savedAgentId = agentRef.id;
+        savedAgentCode =
+          await generateTravelAgentCode();
+
+        await setDoc(agentRef, {
           ...payload,
-          agentCode: await generateTravelAgentCode(),
+
+          agentCode: savedAgentCode,
+
           createdByUid: user.uid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
+
+          createdAt:
+            serverTimestamp(),
+
+          updatedAt:
+            serverTimestamp()
         });
 
         try {
           localStorage.removeItem(DRAFT_KEY);
         } catch {
-          // ignore
+          // Ignore local storage errors.
         }
       }
 
+      const previousForm = (() => {
+        try {
+          return JSON.parse(
+            initialSnapshotRef.current || "{}"
+          );
+        } catch {
+          return {};
+        }
+      })();
+
+      const shouldRefreshCadence =
+        !isEdit ||
+        !previousForm.nextEngagementTaskId ||
+        hasCadenceConfigurationChanged(
+          previousForm,
+          form
+        );
+
+      const savedAgent = {
+        ...previousForm,
+        ...form,
+        ...payload,
+
+        id: savedAgentId,
+        agentCode: savedAgentCode
+      };
+
+      try {
+        if (payload.cadenceAutoManaged) {
+          if (shouldRefreshCadence) {
+            await initializeAgentCadence({
+              agent: savedAgent,
+              user,
+              now: new Date(),
+              cancelExisting: true
+            });
+          }
+        } else {
+          await cancelPendingAgentTasks({
+            agentId: savedAgentId,
+            user,
+            reason:
+              "Automatic engagement cadence disabled"
+          });
+
+          await updateDoc(
+            doc(
+              db,
+              "travelAgents",
+              savedAgentId
+            ),
+            {
+              cadenceRuleCode: "",
+              cadenceRuleGroup: "",
+              cadencePriority: null,
+              cadenceFrequencyLabel: "",
+              cadencePhase: "",
+              cadenceSnapshot: null,
+
+              nextEngagementAt: null,
+              nextEngagementTaskId: "",
+
+              newAgentSequenceActive: false,
+
+              cadenceUpdatedAt:
+                serverTimestamp(),
+
+              updatedAt:
+                serverTimestamp()
+            }
+          );
+        }
+      } catch (cadenceError) {
+        console.error(
+          "Travel agent saved, but cadence synchronization failed:",
+          cadenceError
+        );
+
+        alert(
+          "Travel agent was saved, but the first engagement task could not be created."
+        );
+      }
+
       setHasUnsavedChanges(false);
-      router.replace("/admin/travel-agents");
+
+      router.replace(
+        "/admin/travel-agents"
+      );
     } catch (error) {
-      console.error("Failed to save travel agent:", error);
-      alert("Unable to save travel agent. Please try again.");
+      console.error(
+        "Failed to save travel agent:",
+        error
+      );
+
+      alert(
+        error?.message ||
+        "Unable to save travel agent. Please try again."
+      );
     } finally {
       setSubmitting(false);
     }
@@ -1571,10 +1805,9 @@ export default function TravelAgentForm({ mode = "add", agentId }) {
                         onClick={() => setCategoryDefaults(category)}
                         className={`
                           rounded-full border px-3 py-1 text-xs font-semibold transition
-                          ${
-                            form.agentCategory === category
-                              ? "border-blue-200 bg-blue-50 text-blue-700"
-                              : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                          ${form.agentCategory === category
+                            ? "border-blue-200 bg-blue-50 text-blue-700"
+                            : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
                           }
                         `}
                       >
@@ -1805,10 +2038,9 @@ export default function TravelAgentForm({ mode = "add", agentId }) {
                             key={destination.id}
                             className={`
                               flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition
-                              ${
-                                checked
-                                  ? "border-blue-200 bg-blue-50 text-blue-700"
-                                  : "border-slate-200 bg-white text-slate-700 hover:border-blue-200"
+                              ${checked
+                                ? "border-blue-200 bg-blue-50 text-blue-700"
+                                : "border-slate-200 bg-white text-slate-700 hover:border-blue-200"
                               }
                             `}
                           >
@@ -2708,29 +2940,92 @@ export default function TravelAgentForm({ mode = "add", agentId }) {
               </Section>
 
               {/* REVIEW */}
+              {/* REVIEW */}
               <Section
                 id="review"
                 title="Review & Follow-up Plan"
-                description="Plan relationship review and future growth action."
+                description="Plan relationship review and future engagement activity."
                 icon={<CheckCircle2 size={18} />}
                 status={sectionStatuses.review}
               >
+                <InfoBox
+                  tone="blue"
+                  title="Automatic Engagement Cadence"
+                  text="When enabled, the system automatically creates the next engagement task according to the selected agent segment. Payment pending, hot leads, active queries and quotation stages will override the normal relationship cadence."
+                />
+
                 <Grid cols={3}>
+                  <Field label="Engagement Segment">
+                    <Select
+                      value={form.engagementSegment}
+                      onChange={event =>
+                        handleEngagementSegmentChange(
+                          event.target.value
+                        )
+                      }
+                    >
+                      {ENGAGEMENT_SEGMENT_OPTIONS.map(
+                        option => (
+                          <option
+                            key={option.value}
+                            value={option.value}
+                          >
+                            {option.label}
+                          </option>
+                        )
+                      )}
+                    </Select>
+                  </Field>
+
+                  <Field label="Automatic Cadence">
+                    <Select
+                      value={
+                        form.cadenceAutoManaged
+                          ? "enabled"
+                          : "disabled"
+                      }
+                      onChange={event =>
+                        setForm(prev => ({
+                          ...prev,
+
+                          cadenceAutoManaged:
+                            event.target.value ===
+                            "enabled"
+                        }))
+                      }
+                    >
+                      <option value="enabled">
+                        Enabled
+                      </option>
+
+                      <option value="disabled">
+                        Disabled
+                      </option>
+                    </Select>
+                  </Field>
+
                   <Field label="Follow-up Frequency">
                     <Select
                       value={form.followUpFrequency}
-                      onChange={e =>
-                        setForm({
-                          ...form,
-                          followUpFrequency: e.target.value
-                        })
+                      onChange={event =>
+                        setForm(prev => ({
+                          ...prev,
+
+                          followUpFrequency:
+                            event.target.value
+                        }))
                       }
                     >
-                      {FOLLOW_UP_FREQUENCIES.map(freq => (
-                        <option key={freq} value={freq}>
-                          {freq}
-                        </option>
-                      ))}
+                      {FOLLOW_UP_FREQUENCIES.map(
+                        frequency => (
+                          <option
+                            key={frequency}
+                            value={frequency}
+                          >
+                            {frequency}
+                          </option>
+                        )
+                      )}
                     </Select>
                   </Field>
 
@@ -2738,11 +3033,13 @@ export default function TravelAgentForm({ mode = "add", agentId }) {
                     <Input
                       type="date"
                       value={form.nextReviewDate}
-                      onChange={e =>
-                        setForm({
-                          ...form,
-                          nextReviewDate: e.target.value
-                        })
+                      onChange={event =>
+                        setForm(prev => ({
+                          ...prev,
+
+                          nextReviewDate:
+                            event.target.value
+                        }))
                       }
                     />
                   </Field>
@@ -2750,34 +3047,115 @@ export default function TravelAgentForm({ mode = "add", agentId }) {
                   <Field label="Internal Rating">
                     <Select
                       value={form.internalRating}
-                      onChange={e =>
-                        setForm({
-                          ...form,
-                          internalRating: Number(e.target.value)
-                        })
+                      onChange={event =>
+                        setForm(prev => ({
+                          ...prev,
+
+                          internalRating:
+                            Number(
+                              event.target.value
+                            )
+                        }))
                       }
                     >
-                      <option value={1}>1 - Poor</option>
-                      <option value={2}>2 - Average</option>
-                      <option value={3}>3 - Good</option>
-                      <option value={4}>4 - Very Good</option>
-                      <option value={5}>5 - Excellent</option>
+                      <option value={1}>
+                        1 - Poor
+                      </option>
+
+                      <option value={2}>
+                        2 - Average
+                      </option>
+
+                      <option value={3}>
+                        3 - Good
+                      </option>
+
+                      <option value={4}>
+                        4 - Very Good
+                      </option>
+
+                      <option value={5}>
+                        5 - Excellent
+                      </option>
                     </Select>
                   </Field>
 
-                  <Field label="Relationship Goal" className="md:col-span-3">
+                  <Field
+                    label="Relationship Goal"
+                    className="md:col-span-3"
+                  >
                     <Input
-                      placeholder="Example: Convert to A category, improve payment behavior, increase Europe group leads..."
+                      placeholder="Example: Convert to A category, increase destination queries or improve conversion."
                       value={form.relationshipGoal}
-                      onChange={e =>
-                        setForm({
-                          ...form,
-                          relationshipGoal: e.target.value
-                        })
+                      onChange={event =>
+                        setForm(prev => ({
+                          ...prev,
+
+                          relationshipGoal:
+                            event.target.value
+                        }))
                       }
                     />
                   </Field>
                 </Grid>
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex flex-col gap-1">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Selected cadence
+                    </p>
+
+                    <p className="text-sm font-semibold text-slate-800">
+                      {ENGAGEMENT_SEGMENT_OPTIONS.find(
+                        option =>
+                          option.value ===
+                          form.engagementSegment
+                      )?.label ||
+                        "Cadence not selected"}
+                    </p>
+
+                    <p className="text-xs leading-5 text-slate-500">
+                      {ENGAGEMENT_SEGMENT_OPTIONS.find(
+                        option =>
+                          option.value ===
+                          form.engagementSegment
+                      )?.description ||
+                        "The system will calculate the next engagement automatically."}
+                    </p>
+                  </div>
+
+                  {form.engagementSegment ===
+                    "new_agent" && (
+                      <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2">
+                        <p className="text-xs font-medium text-blue-700">
+                          New-agent sequence will begin
+                          from step{" "}
+                          {Number(
+                            form.newAgentSequenceStep ||
+                            0
+                          )}
+                          .
+                        </p>
+
+                        <p className="mt-1 text-[11px] leading-4 text-blue-600">
+                          The sequence covers Day 0,
+                          Day 1, Day 3, Day 5, Day 7
+                          and Day 10 before moving to
+                          weekly follow-up.
+                        </p>
+                      </div>
+                    )}
+
+                  {!form.cadenceAutoManaged && (
+                    <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2">
+                      <p className="text-xs font-medium text-amber-700">
+                        Automatic cadence is disabled.
+                        No future engagement task will
+                        be created for this agent.
+                      </p>
+                    </div>
+                  )}
+                </div>
               </Section>
 
               {/* INTERNAL */}
@@ -2935,10 +3313,9 @@ function Input({ className = "", error, value, ...props }) {
         placeholder:text-slate-400
         focus:ring-4
         disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500
-        ${
-          error
-            ? "border-red-300 focus:border-red-400 focus:ring-red-100"
-            : "border-slate-200 focus:border-blue-400 focus:ring-blue-100"
+        ${error
+          ? "border-red-300 focus:border-red-400 focus:ring-red-100"
+          : "border-slate-200 focus:border-blue-400 focus:ring-blue-100"
         }
         ${className}
       `}
@@ -3091,10 +3468,9 @@ function TogglePill({ label, checked, onChange }) {
     <label
       className={`
         inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium transition
-        ${
-          checked
-            ? "border-blue-200 bg-blue-50 text-blue-700"
-            : "border-slate-200 bg-white text-slate-600 hover:border-blue-200"
+        ${checked
+          ? "border-blue-200 bg-blue-50 text-blue-700"
+          : "border-slate-200 bg-white text-slate-600 hover:border-blue-200"
         }
       `}
     >
@@ -3121,12 +3497,11 @@ function ChipSelector({ options, selected = [], onToggle, danger = false }) {
             onClick={() => onToggle(option)}
             className={`
               rounded-full border px-3 py-1.5 text-xs font-semibold transition
-              ${
-                checked
-                  ? danger
-                    ? "border-red-200 bg-red-50 text-red-700"
-                    : "border-blue-200 bg-blue-50 text-blue-700"
-                  : "border-slate-200 bg-white text-slate-600 hover:border-blue-200"
+              ${checked
+                ? danger
+                  ? "border-red-200 bg-red-50 text-red-700"
+                  : "border-blue-200 bg-blue-50 text-blue-700"
+                : "border-slate-200 bg-white text-slate-600 hover:border-blue-200"
               }
             `}
           >
@@ -3150,10 +3525,9 @@ function SpocCard({
     <div
       className={`
         rounded-2xl border p-4 transition
-        ${
-          spoc.isPrimary
-            ? "border-blue-200 bg-blue-50/50"
-            : "border-slate-200 bg-white"
+        ${spoc.isPrimary
+          ? "border-blue-200 bg-blue-50/50"
+          : "border-slate-200 bg-white"
         }
       `}
     >
@@ -3260,14 +3634,13 @@ function SummaryCard({
         <span
           className={`
             rounded-full px-2.5 py-1 text-xs font-semibold
-            ${
-              form.agentCategory === "A+"
-                ? "bg-purple-50 text-purple-700"
-                : form.agentCategory === "A"
+            ${form.agentCategory === "A+"
+              ? "bg-purple-50 text-purple-700"
+              : form.agentCategory === "A"
                 ? "bg-emerald-50 text-emerald-700"
                 : form.agentCategory === "B"
-                ? "bg-blue-50 text-blue-700"
-                : "bg-slate-100 text-slate-600"
+                  ? "bg-blue-50 text-blue-700"
+                  : "bg-slate-100 text-slate-600"
             }
           `}
         >
@@ -3286,6 +3659,25 @@ function SummaryCard({
         <SummaryRow label="Agency" value={form.agencyName || "Not added"} />
         <SummaryRow label="Segment" value={form.partnerSegment || "Not set"} />
         <SummaryRow label="Lifecycle" value={form.lifecycleStatus || "Prospect"} />
+        <SummaryRow
+          label="Cadence"
+          value={
+            ENGAGEMENT_SEGMENT_OPTIONS.find(
+              option =>
+                option.value ===
+                form.engagementSegment
+            )?.label || "Not set"
+          }
+        />
+
+        <SummaryRow
+          label="Auto Cadence"
+          value={
+            form.cadenceAutoManaged
+              ? "Enabled"
+              : "Disabled"
+          }
+        />
         <SummaryRow label="Primary SPOC" value={primarySpoc?.name || "Not added"} />
         <SummaryRow
           label="Generic Contact"
@@ -3403,7 +3795,7 @@ function StickySaveBar({
           </div>
 
           <p className="mt-1 text-xs text-slate-500">
-            Category, payment terms, bank details and KYC will be saved in this travel agent profile.
+            Profile details and the automatic engagement cadence will be saved together.
           </p>
         </div>
 
