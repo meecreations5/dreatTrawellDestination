@@ -32,6 +32,8 @@ import {
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
+import { useAuth } from "@/hooks/useAuth";
+import { canAccess } from "@/lib/rolePermissions";
 import { generateDestinationId } from "@/lib/generateDestinationId";
 
 import {
@@ -108,6 +110,7 @@ function reorderItems(items = [], fromIndex, toIndex) {
 }
 
 export default function DestinationOverviewPage() {
+  const { user } = useAuth();
   const { destinationId } = useParams();
   const router = useRouter();
 
@@ -444,6 +447,11 @@ export default function DestinationOverviewPage() {
   ========================= */
   const save = async () => {
     if (saving) return;
+    const requiredPermission = isNew ? "destinations.create" : "destinations.edit";
+    if (!canAccess(user, requiredPermission)) {
+      setSaveError("You do not have permission to save this destination.");
+      return;
+    }
     if (!validate()) return;
 
     try {

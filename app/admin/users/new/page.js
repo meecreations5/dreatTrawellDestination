@@ -6,6 +6,7 @@ import {
   AlertCircle,
   ArrowLeft,
   Briefcase,
+  ChartNoAxesCombined,
   Building2,
   CheckCircle2,
   Crown,
@@ -25,8 +26,10 @@ import {
   MODULE_PERMISSIONS,
   ROLE_OPTIONS,
   getPermissionsByRole,
-  isManagementRole
+  isManagementRole,
+  isSuperAdmin as isSuperAdminUser
 } from "@/lib/rolePermissions";
+import { useAuth } from "@/hooks/useAuth";
 
 const inputClass = `
   w-full rounded-xl border border-gray-200 bg-white
@@ -43,7 +46,9 @@ const roleIcons = {
   admin: ShieldCheck,
   employee: Users,
   associate: Handshake,
-  partner: Building2
+  partner: Building2,
+  manager: Briefcase,
+  finance: ChartNoAxesCombined
 };
 
 const providers = [
@@ -61,11 +66,13 @@ const providers = [
 
 export default function AddUserPage() {
   const router = useRouter();
+  const { user: currentUser } = useAuth();
 
   const [form, setForm] = useState({
     email: "",
     name: "",
     mobile: "",
+    teamName: "",
     role: "employee",
     isAdmin: false,
     isSuperAdmin: false,
@@ -78,9 +85,14 @@ export default function AddUserPage() {
   const [errors, setErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
 
+  const availableRoles = useMemo(
+    () => ROLE_OPTIONS.filter(role => role.value !== "super_admin" || isSuperAdminUser(currentUser)),
+    [currentUser]
+  );
+
   const selectedRole = useMemo(
-    () => ROLE_OPTIONS.find((role) => role.value === form.role),
-    [form.role]
+    () => availableRoles.find((role) => role.value === form.role),
+    [availableRoles, form.role]
   );
 
   const selectedPermissions = useMemo(
@@ -148,7 +160,7 @@ export default function AddUserPage() {
       e.authProvider = "Please select login provider";
     }
 
-    if (!ROLE_OPTIONS.some((role) => role.value === form.role)) {
+    if (!availableRoles.some((role) => role.value === form.role)) {
       e.role = "Please select user role";
     }
 
@@ -173,6 +185,7 @@ export default function AddUserPage() {
         email: form.email.trim().toLowerCase(),
         name: form.name.trim(),
         mobile: form.mobile.trim(),
+        teamName: form.teamName.trim(),
         role: form.role,
         associateType: form.role === "associate" ? form.associateType : "",
         active: form.active,
@@ -190,7 +203,7 @@ export default function AddUserPage() {
   };
 
   return (
-    <AdminGuard permission="userManagement">
+    <AdminGuard permission="users.create">
       <main className="min-h-screen">
         <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
           <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -209,7 +222,7 @@ export default function AddUserPage() {
               </h1>
 
               <p className="mt-1 text-sm text-gray-500">
-                Create a user and assign role-based module access.
+                Create a user with role defaults. Individual overrides can be added from the user profile after creation.
               </p>
             </div>
 
@@ -283,6 +296,20 @@ export default function AddUserPage() {
                       />
                     </div>
                     {errors.email && <p className={errorText}>{errors.email}</p>}
+                  </div>
+
+                  <div>
+                    <label className={labelClass}>Team / Department</label>
+                    <div className="relative mt-1">
+                      <Building2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                      <input
+                        className={`${inputClass} pl-10`}
+                        value={form.teamName}
+                        placeholder="e.g. Sales, Operations, Management"
+                        onChange={(e) => updateForm("teamName", e.target.value)}
+                      />
+                    </div>
+                    {errors.teamName && <p className={errorText}>{errors.teamName}</p>}
                   </div>
 
                   <div>
@@ -362,7 +389,7 @@ export default function AddUserPage() {
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                  {ROLE_OPTIONS.map((role) => {
+                  {availableRoles.map((role) => {
                     const Icon = roleIcons[role.value] || User;
                     const active = form.role === role.value;
 
@@ -440,8 +467,8 @@ export default function AddUserPage() {
                       {form.role === "super_admin"
                         ? "Super Admin automatically gets access to all modules."
                         : form.role === "admin"
-                        ? "Admin gets access only to selected management modules."
-                        : "This role does not receive admin module access by default."}
+                        ? "Admin gets the existing operational management defaults; individual access can be adjusted later."
+                        : "This role receives its configured role defaults; individual access can be adjusted later."}
                     </p>
                   </div>
 

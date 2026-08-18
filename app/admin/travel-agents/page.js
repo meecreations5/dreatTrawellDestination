@@ -19,10 +19,22 @@ import {
   UserCheck
 } from "lucide-react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 
 import { db } from "@/lib/firebase";
+import { getTravelAgentStatusMeta, normalizeTravelAgentStatus } from "@/lib/travelAgentStatus";
+import { getTravelAgentPotentialMeta, normalizeTravelAgentPotential } from "@/lib/travelAgentPotential";
+import { buildLocationOptions, getTravelAgentLocationParts, matchesLocation, formatLocationParts } from "@/lib/locationFilters";
+import {
+  getMembersForTeam,
+  resolveDirectoryIdentity,
+  teamMatchesScope
+} from "@/lib/teamDirectory";
 import { useAuth } from "@/hooks/useAuth";
+import { useAdminScope } from "@/components/admin/AdminScopeProvider";
+import { matchesAdminDateScope } from "@/lib/adminScope";
 import AdminGuard from "@/components/AdminGuard";
+import { canAccess, canAccessRecord } from "@/lib/rolePermissions";
 
 import TravelAgentFilterBar from "@/components/travel-agents/TravelAgentFilters";
 import TravelAgentExportCSV from "@/components/travel-agents/TravelAgentExportCSV";
@@ -47,16 +59,19 @@ const EngagementBadge = ({ status }) => (
 );
 
 const StatusBadge = ({ status }) => {
-  const active = status === "active";
+  const meta = getTravelAgentStatusMeta(status);
+  const toneClass = {
+    green: "border-emerald-100 bg-emerald-50 text-emerald-700",
+    amber: "border-amber-100 bg-amber-50 text-amber-700",
+    red: "border-rose-100 bg-rose-50 text-rose-700",
+    slate: "border-slate-200 bg-slate-100 text-slate-600"
+  }[meta.tone] || "border-slate-200 bg-slate-100 text-slate-600";
 
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium ${active
-        ? "border-emerald-100 bg-emerald-50 text-emerald-700"
-        : "border-slate-200 bg-slate-100 text-slate-600"
-        }`}
+      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium ${toneClass}`}
     >
-      {active ? "Active" : "Inactive"}
+      {meta.label}
     </span>
   );
 };
@@ -116,6 +131,17 @@ const CategoryBadge = ({ category }) => {
       {value}
     </span>
   );
+};
+
+const PotentialBadge = ({ agent }) => {
+  const meta = getTravelAgentPotentialMeta(agent);
+  const style =
+    meta.tone === "emerald" ? "bg-emerald-50 text-emerald-700" :
+    meta.tone === "blue" ? "bg-blue-50 text-blue-700" :
+    meta.tone === "amber" ? "bg-amber-50 text-amber-700" :
+    meta.tone === "rose" ? "bg-rose-50 text-rose-700" :
+    "bg-slate-100 text-slate-600";
+  return <span className={`rounded-md px-2 py-[2px] text-[11px] font-semibold ${style}`}>{meta.label}</span>;
 };
 
 const RiskBadge = ({ risk }) => {
@@ -221,6 +247,28 @@ const getDaysSince = date => {
   const diffMs = new Date().getTime() - date.getTime();
   return Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
 };
+
+const getAgentCreatedDate = agent =>
+  toDate(agent?.createdAt || agent?.createdOn || agent?.created_at);
+
+const getNextContactDate = agent =>
+  toDate(
+    agent?.nextFollowUpAt ||
+      agent?.nextActionDueAt ||
+      agent?.followUpDate ||
+      agent?.nextFollowUpDate ||
+      agent?.nextActionDate ||
+      agent?.nextContactAt
+  );
+
+const isSameLocalDay = (a, b) =>
+  Boolean(
+    a &&
+      b &&
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate()
+  );
 
 const formatRelativeDate = date => {
   if (!date) return "No engagement";
@@ -461,12 +509,8 @@ const getAgentLocation = agent => {
   );
 };
 
-const getAgentStatus = agent => {
-  const status = String(agent.status || "").toLowerCase();
-
-  if (status === "active" || agent.active === true) return "active";
-  return "inactive";
-};
+const getAgentStatus = agent =>
+  normalizeTravelAgentStatus(agent.status, agent.active);
 
 const getLatestEngagement = agent => {
   if (Array.isArray(agent.engagements) && agent.engagements.length > 0) {
@@ -571,7 +615,9 @@ const getPaymentRisk = agent =>
   agent.paymentRisk || "Low";
 
 export default function AdminTravelAgentsPage() {
+  const searchParams = useSearchParams();
   const { user } = useAuth();
+  const { scope, teamDirectory, userLookup: teamDirectoryLookup } = useAdminScope();
 
   const [agents, setAgents] = useState([]);
   const [destinations, setDestinations] = useState([]);
@@ -584,6 +630,8 @@ export default function AdminTravelAgentsPage() {
   const [actionLoading, setActionLoading] = useState({});
 
   const isSuperAdmin = isUserSuperAdmin(user);
+  const canChangeAgentStatus = canAccess(user, "travel_agents.change_status");
+  const canAssignAgents = canAccess(user, "travel_agents.assign");
 
   const [sort, setSort] = useState({
     key: "agencyName",
@@ -592,17 +640,41 @@ export default function AdminTravelAgentsPage() {
 
   const [filters, setFilters] = useState({
     search: "",
+    createdBy: "all",
+    potential: "all",
     status: "",
-    agencyType: "",
-    destinationId: "",
-    relationshipStage: "",
+    contactStatus: "all",
+    state: "",
     city: "",
-    engagement: "",
-    assignmentStatus: "",
-    assignmentPriority: "",
-    assignedTeam: "",
-    assignedUser: ""
+    subArea: "",
+    createdRange: ""
   });
+
+  useEffect(() => {
+    setFilters(prev => ({ ...prev, createdBy: "all" }));
+  }, [scope.team]);
+
+  useEffect(() => {
+    const contactStatus = searchParams.get("contactStatus");
+    const potential = searchParams.get("potential");
+    const status = searchParams.get("status");
+    const state = searchParams.get("state");
+    const city = searchParams.get("city");
+    const subArea = searchParams.get("subArea");
+    const createdRange = searchParams.get("createdRange");
+
+    if (!contactStatus && !potential && !status && !state && !city && !subArea && !createdRange) return;
+    setFilters(prev => ({
+      ...prev,
+      contactStatus: contactStatus || prev.contactStatus,
+      potential: potential || prev.potential,
+      status: status || prev.status,
+      state: state || prev.state,
+      city: city || prev.city,
+      subArea: subArea || prev.subArea,
+      createdRange: createdRange || prev.createdRange
+    }));
+  }, [searchParams]);
 
   const setBusy = (agentId, action, value) => {
     setActionLoading(prev => ({
@@ -649,7 +721,7 @@ export default function AdminTravelAgentsPage() {
   }, [loadData]);
 
   const handleStatusChange = async agent => {
-    if (!isSuperAdmin) return;
+    if (!canAccessRecord(user, "travel_agents.change_status", agent, "travel_agent", { userLookup: teamDirectoryLookup })) return;
 
     const currentStatus = getAgentStatus(agent);
     const nextStatus = currentStatus === "active" ? "inactive" : "active";
@@ -766,45 +838,42 @@ export default function AdminTravelAgentsPage() {
     [destinationMap]
   );
 
-  const cityOptions = useMemo(() => {
-    const cities = agents
-      .map(agent => getAgentLocation(agent))
-      .filter(city => city && city !== "No city");
+  const locationOptions = useMemo(
+    () => buildLocationOptions(agents, getTravelAgentLocationParts, filters.state, filters.city),
+    [agents, filters.state, filters.city]
+  );
 
-    return [...new Set(cities)].sort();
-  }, [agents]);
+  const creatorOptions = useMemo(
+    () => getMembersForTeam(teamDirectory, scope.team),
+    [teamDirectory, scope.team]
+  );
 
-  const assignedTeamOptions = useMemo(() => {
-    return [
-      ...new Set(
-        agents
-          .map(agent => getAssignedTeam(agent))
-          .filter(Boolean)
-      )
-    ].sort();
-  }, [agents]);
-
-  const assignedUserOptions = useMemo(() => {
-    return [
-      ...new Set(
-        agents
-          .map(agent => getAssignedName(agent))
-          .filter(Boolean)
-      )
-    ].sort();
-  }, [agents]);
+  const getCreatorIdentity = useCallback(
+    agent =>
+      resolveDirectoryIdentity(
+        {
+          uid: agent?.createdByUid || agent?.creatorUid || agent?.createdByUserId || "",
+          email: agent?.createdByEmail || agent?.creatorEmail || "",
+          name: agent?.createdByName || agent?.creatorName || ""
+        },
+        teamDirectoryLookup
+      ),
+    [teamDirectoryLookup]
+  );
 
   const filteredAgents = useMemo(() => {
+    const today = new Date();
+
     return agents.filter(agent => {
+      if (!canAccessRecord(user, "travel_agents.view", agent, "travel_agent", { userLookup: teamDirectoryLookup })) {
+        return false;
+      }
+
       const spoc = getPrimarySpoc(agent);
       const s = filters.search.trim().toLowerCase();
       const location = getAgentLocation(agent);
-      const agentDestinations = getAgentDestinations(agent);
-
-      const assignedName = getAssignedName(agent);
-      const assignedTeam = getAssignedTeam(agent);
-      const assignmentStatus = getAssignmentStatus(agent);
-      const assignmentPriority = getAssignmentPriority(agent);
+      const structuredLocation = getTravelAgentLocationParts(agent);
+      const creator = getCreatorIdentity(agent);
 
       if (
         s &&
@@ -814,9 +883,20 @@ export default function AdminTravelAgentsPage() {
         !spoc?.email?.toLowerCase().includes(s) &&
         !spoc?.mobile?.toLowerCase().includes(s) &&
         !location?.toLowerCase().includes(s) &&
-        !normalizeText(assignedName).includes(s) &&
-        !normalizeText(assignedTeam).includes(s)
+        !String(creator.name || "").toLowerCase().includes(s)
       ) {
+        return false;
+      }
+
+      if (scope.team !== "all" && !teamMatchesScope(creator.team, scope.team)) {
+        return false;
+      }
+
+      if (filters.createdBy !== "all" && creator.key !== filters.createdBy) {
+        return false;
+      }
+
+      if (filters.potential !== "all" && normalizeTravelAgentPotential(agent) !== filters.potential) {
         return false;
       }
 
@@ -824,80 +904,48 @@ export default function AdminTravelAgentsPage() {
         return false;
       }
 
-      if (filters.agencyType && agent.agencyType !== filters.agencyType) {
+      if (!matchesLocation(structuredLocation, filters)) {
         return false;
       }
 
-      if (
-        filters.relationshipStage &&
-        agent.relationshipStage !== filters.relationshipStage
-      ) {
+      // Action Center deep-links use an explicit rolling 7-day creation window.
+      // In that case do not also intersect it with the global creation-date scope,
+      // otherwise the KPI and its drill-down can show different records.
+      if (filters.createdRange !== "7d" && !matchesAdminDateScope(getAgentCreatedDate(agent), scope.dateRange, scope.dateFrom, scope.dateTo)) {
         return false;
       }
 
-      if (
-        filters.destinationId &&
-        !agentDestinations.some(d => d.id === filters.destinationId)
-      ) {
-        return false;
+      if (filters.createdRange === "7d") {
+        const createdAt = getAgentCreatedDate(agent);
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+        sevenDaysAgo.setHours(0, 0, 0, 0);
+        if (!createdAt || createdAt < sevenDaysAgo) return false;
       }
 
-      if (filters.city && location !== filters.city) {
-        return false;
-      }
-
-      if (
-        filters.assignmentStatus &&
-        assignmentStatus !== filters.assignmentStatus
-      ) {
-        return false;
-      }
-
-      if (
-        filters.assignmentPriority &&
-        assignmentPriority !== filters.assignmentPriority
-      ) {
-        return false;
-      }
-
-      if (
-        filters.assignedTeam &&
-        assignedTeam !== filters.assignedTeam
-      ) {
-        return false;
-      }
-
-      if (
-        filters.assignedUser &&
-        assignedName !== filters.assignedUser
-      ) {
-        return false;
-      }
-
-      if (filters.engagement) {
+      if (filters.contactStatus !== "all") {
         const engagement = getLatestEngagement(agent);
-        const days = getDaysSince(engagement.date);
+        const nextContact = getNextContactDate(agent);
+        const hasContact = Boolean(engagement.date);
+        const startToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+        const endToday = new Date(startToday.getTime() + 86400000);
 
-        if (filters.engagement === "no_contact" && engagement.date) {
-          return false;
+        if (filters.contactStatus === "never_contacted" && hasContact) return false;
+        if (filters.contactStatus === "contacted" && !hasContact) return false;
+        if (filters.contactStatus === "contacted_today" && !isSameLocalDay(engagement.date, today)) return false;
+        if (filters.contactStatus === "follow_up_due") {
+          if (!nextContact || nextContact < startToday || nextContact >= endToday) return false;
         }
-
-        if (filters.engagement === "7d") {
-          if (!engagement.date || days > 7) return false;
-        }
-
-        if (filters.engagement === "30d") {
-          if (!engagement.date || days > 30) return false;
-        }
-
-        if (filters.engagement === "follow_up") {
-          if (engagement.date && days <= 30) return false;
+        if (filters.contactStatus === "overdue") {
+          const explicitOverdue = nextContact && nextContact < startToday;
+          const staleWithoutDue = !nextContact && hasContact && getDaysSince(engagement.date) > 30;
+          if (!explicitOverdue && !staleWithoutDue) return false;
         }
       }
 
       return true;
     });
-  }, [agents, filters, getAgentDestinations]);
+  }, [agents, filters, getCreatorIdentity, scope.team, scope.dateRange, scope.dateFrom, scope.dateTo, user, teamDirectoryLookup]);
 
   const sortedAgents = useMemo(() => {
     const normalize = value =>
@@ -986,7 +1034,7 @@ export default function AdminTravelAgentsPage() {
         <div className="flex items-center gap-2">
           <StatusBadge status={status} />
 
-          {isSuperAdmin && (
+          {canChangeAgentStatus && canAccessRecord(user, "travel_agents.change_status", agent, "travel_agent", { userLookup: teamDirectoryLookup }) && (
             <button
               type="button"
               disabled={busy}
@@ -1005,9 +1053,9 @@ export default function AdminTravelAgentsPage() {
           )}
         </div>
 
-        {!isSuperAdmin && (
+        {!canChangeAgentStatus && (
           <span className="text-[10px] text-gray-400">
-            Super admin only
+            Status change restricted
           </span>
         )}
       </div>
@@ -1030,6 +1078,8 @@ export default function AdminTravelAgentsPage() {
   };
 
   const renderAssignAction = agent => {
+    if (!canAssignAgents || !canAccessRecord(user, "travel_agents.assign", agent, "travel_agent", { userLookup: teamDirectoryLookup })) return null;
+
     const status = getAssignmentStatus(agent);
     const label = status === "Unassigned" ? "Assign" : "Reassign";
 
@@ -1046,7 +1096,7 @@ export default function AdminTravelAgentsPage() {
   };
 
   return (
-    <AdminGuard>
+    <AdminGuard permission="travel_agents.view">
       <main className="p-6 w-full mx-auto space-y-4">
         <div className="flex items-center justify-between gap-3">
           <div>
@@ -1076,85 +1126,9 @@ export default function AdminTravelAgentsPage() {
           setView={setView}
           filters={filters}
           setFilters={setFilters}
-          destinations={destinations}
-          cityOptions={cityOptions}
-          exportAgents={filteredAgents}
+          creatorOptions={creatorOptions}
+          locationOptions={locationOptions}
         />
-
-        {/* COMPACT ASSIGNMENT FILTERS */}
-        <div className="rounded-xl border border-gray-100 bg-white p-3">
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
-            <select
-              value={filters.assignmentStatus}
-              onChange={e =>
-                setFilters(prev => ({
-                  ...prev,
-                  assignmentStatus: e.target.value
-                }))
-              }
-              className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-xs"
-            >
-              <option value="">All Assignment Status</option>
-              <option value="Assigned">Assigned</option>
-              <option value="Reassigned">Reassigned</option>
-              <option value="Unassigned">Unassigned</option>
-              <option value="On Hold">On Hold</option>
-            </select>
-
-            <select
-              value={filters.assignmentPriority}
-              onChange={e =>
-                setFilters(prev => ({
-                  ...prev,
-                  assignmentPriority: e.target.value
-                }))
-              }
-              className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-xs"
-            >
-              <option value="">All Priority</option>
-              <option value="Critical">Critical</option>
-              <option value="High">High</option>
-              <option value="Medium">Medium</option>
-              <option value="Low">Low</option>
-            </select>
-
-            <select
-              value={filters.assignedTeam}
-              onChange={e =>
-                setFilters(prev => ({
-                  ...prev,
-                  assignedTeam: e.target.value
-                }))
-              }
-              className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-xs"
-            >
-              <option value="">All Assigned Teams</option>
-              {assignedTeamOptions.map(team => (
-                <option key={team} value={team}>
-                  {team}
-                </option>
-              ))}
-            </select>
-
-            <select
-              value={filters.assignedUser}
-              onChange={e =>
-                setFilters(prev => ({
-                  ...prev,
-                  assignedUser: e.target.value
-                }))
-              }
-              className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-xs"
-            >
-              <option value="">All Assigned Users</option>
-              {assignedUserOptions.map(name => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
 
         <div className="flex flex-wrap justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -1181,10 +1155,6 @@ export default function AdminTravelAgentsPage() {
               <option value="relationshipStage:asc">Stage A-Z</option>
               <option value="destinations:desc">Most Destinations</option>
               <option value="destinations:asc">Least Destinations</option>
-              <option value="assignedTo:asc">Assigned User A-Z</option>
-              <option value="assignmentStatus:asc">Assignment Status A-Z</option>
-              <option value="assignmentPriority:desc">Highest Priority</option>
-              <option value="assignmentPriority:asc">Lowest Priority</option>
             </select>
           </div>
 
@@ -1281,9 +1251,11 @@ export default function AdminTravelAgentsPage() {
                   {sortedAgents.map(agent => {
                     const spoc = getPrimarySpoc(agent);
                     const agentDestinations = getAgentDestinations(agent);
-                    const location = getAgentLocation(agent);
+                    const structuredLocation = getTravelAgentLocationParts(agent);
+                    const location = formatLocationParts(structuredLocation);
                     const engagement = getLatestEngagement(agent);
                     const engagementStatus = getEngagementStatus(agent);
+                    const creator = getCreatorIdentity(agent);
 
                     return (
                       <tr
@@ -1296,10 +1268,14 @@ export default function AdminTravelAgentsPage() {
                               {agent.agencyName || "Unnamed agency"}
                             </p>
                             <CategoryBadge category={getAgentCategory(agent)} />
+                            <PotentialBadge agent={agent} />
                           </div>
 
                           <p className="text-xs text-gray-500">
                             {agent.agentCode || "No code"}
+                          </p>
+                          <p className="mt-0.5 max-w-[220px] truncate text-[11px] text-gray-400">
+                            Added by {creator.name || "Legacy / Unmapped"}
                           </p>
 
                           <div className="mt-1 flex flex-wrap gap-1">
@@ -1456,6 +1432,7 @@ export default function AdminTravelAgentsPage() {
               const location = getAgentLocation(agent);
               const engagement = getLatestEngagement(agent);
               const engagementStatus = getEngagementStatus(agent);
+              const creator = getCreatorIdentity(agent);
 
               return (
                 <div
@@ -1473,6 +1450,9 @@ export default function AdminTravelAgentsPage() {
 
                       <p className="text-xs text-gray-500">
                         {agent.agentCode || "No code"}
+                      </p>
+                      <p className="mt-0.5 max-w-[230px] truncate text-[11px] text-gray-400">
+                        Added by {creator.name || "Legacy / Unmapped"}
                       </p>
                     </div>
 

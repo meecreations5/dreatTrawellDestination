@@ -3,16 +3,18 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   collection,
-  getDocs,
-  updateDoc,
-  doc
+  getDocs
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { LayoutGrid, List, Download, Trash2 } from "lucide-react";
+import { LayoutGrid, List, Download, Trash2, AlertTriangle, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import AdminGuard from "@/components/AdminGuard";
 import PageSkeleton from "@/components/ui/PageSkeleton";
 import { getFunctions, httpsCallable } from "firebase/functions";
+import { getDirectoryUserEmail, getDirectoryUserName } from "@/lib/teamDirectory";
+import { useAuth } from "@/hooks/useAuth";
+import { canAccess, isSuperAdmin } from "@/lib/rolePermissions";
+import { updateUserAccess } from "@/lib/updateUserAccess";
 /* =========================
    UI ATOMS
 ========================= */
@@ -23,28 +25,51 @@ const RoleChip = ({ label }) => (
   </span>
 );
 
-const UserStatusToggle = ({ user }) => (
-  <button
-    onClick={async () => {
-      await updateDoc(doc(db, "users", user.id), {
-        active: !user.active
-      });
-    }}
-    className={`text-xs px-2 py-1 rounded-md border
-      ${user.active
-        ? "bg-green-50 text-green-700 border-green-200"
-        : "bg-gray-100 text-gray-600 border-gray-200"
-      }`}
-  >
-    {user.active ? "Active" : "Inactive"}
-  </button>
+const isSameUser = (currentUser, targetUser) => Boolean(
+  currentUser && targetUser && (
+    currentUser.id === targetUser.id ||
+    (currentUser.uid && targetUser.uid && currentUser.uid === targetUser.uid)
+  )
 );
 
+const UserStatusToggle = ({ user, currentUser, onUpdated }) => {
+  const canEdit = canAccess(currentUser, "users.edit");
+  const locked = !canEdit || isSameUser(currentUser, user) || isSuperAdmin(user);
 
-const deleteUserFn = httpsCallable(
-  getFunctions(),
-  "deleteUser"
-);
+  return (
+    <button
+      type="button"
+      disabled={locked}
+      onClick={async () => {
+        const nextActive = !user.active;
+        await updateUserAccess({
+          userId: user.id,
+          active: nextActive,
+          changeReason: "Status changed from Team Management"
+        });
+        onUpdated?.(user.id, nextActive);
+      }}
+      className={`text-xs px-2 py-1 rounded-md border disabled:cursor-not-allowed disabled:opacity-50
+        ${user.active
+          ? "bg-green-50 text-green-700 border-green-200"
+          : "bg-gray-100 text-gray-600 border-gray-200"
+        }`}
+      title={locked ? "Status cannot be changed for this user" : "Change user status"}
+    >
+      {user.active ? "Active" : "Inactive"}
+    </button>
+  );
+};
+
+
+const getUserTeamName = user => String(
+  user?.teamName ||
+  user?.teamLabel ||
+  (typeof user?.team === "string" ? user.team : user?.team?.name || user?.team?.label) ||
+  user?.departmentName ||
+  (typeof user?.department === "string" ? user.department : user?.department?.name || user?.department?.label) ||
+  ""
+).trim();
 
 /* =========================
    CSV EXPORT
@@ -57,6 +82,7 @@ function exportUsersCsv(users) {
     "Email",
     "Employee ID",
     "Role",
+    "Team / Department",
     "Active"
   ];
 
@@ -65,6 +91,7 @@ function exportUsersCsv(users) {
     u.email || "",
     u.employeeId || "",
     u.role || "",
+    getUserTeamName(u),
     u.active ? "Active" : "Inactive"
   ]);
 
@@ -89,16 +116,19 @@ function exportUsersCsv(users) {
 ========================= */
 
 export default function AdminUsersPage() {
+  const { user: currentUser } = useAuth();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const [view, setView] = useState("table");
   const [search, setSearch] = useState("");
   const [role, setRole] = useState("all");
+  const [team, setTeam] = useState("all");
   const [selected, setSelected] = useState([]);
 
-  const router = useRouter(); // ✅ ADD THIS
-
+  const router = useRouter();
+  const canEditUsers = canAccess(currentUser, "users.edit");
+  const canCreateUsers = canAccess(currentUser, "users.create");
 
   const functions = getFunctions();
   const deleteUserFn = httpsCallable(functions, "deleteUser");
@@ -127,6 +157,31 @@ export default function AdminUsersPage() {
     );
   }, [users]);
 
+  const teams = useMemo(() => {
+    return Array.from(new Set(users.map(getUserTeamName).filter(Boolean)))
+      .sort((a, b) => a.localeCompare(b));
+  }, [users]);
+
+  const dataHealth = useMemo(() => {
+    const emailCounts = new Map();
+    const nameCounts = new Map();
+
+    users.forEach(item => {
+      const email = getDirectoryUserEmail(item);
+      const name = getDirectoryUserName(item).toLowerCase();
+      if (email) emailCounts.set(email, (emailCounts.get(email) || 0) + 1);
+      if (name) nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
+    });
+
+    const duplicateEmails = Array.from(emailCounts.values()).filter(count => count > 1).length;
+    const duplicateNames = Array.from(nameCounts.values()).filter(count => count > 1).length;
+    const missingUid = users.filter(item => !String(item.uid || item.userUid || item.authUid || item.firebaseUid || "").trim()).length;
+    const missingName = users.filter(item => item.active !== false && !getDirectoryUserName(item)).length;
+    const missingTeam = users.filter(item => item.active !== false && !getUserTeamName(item)).length;
+
+    return { duplicateEmails, duplicateNames, missingUid, missingName, missingTeam };
+  }, [users]);
+
   /* =========================
      FILTERED USERS
   ========================= */
@@ -138,7 +193,8 @@ export default function AdminUsersPage() {
         s &&
         !u.name?.toLowerCase().includes(s) &&
         !u.email?.toLowerCase().includes(s) &&
-        !u.employeeId?.toLowerCase().includes(s)
+        !u.employeeId?.toLowerCase().includes(s) &&
+        !getUserTeamName(u).toLowerCase().includes(s)
       ) {
         return false;
       }
@@ -147,23 +203,36 @@ export default function AdminUsersPage() {
         return false;
       }
 
+      if (team !== "all" && getUserTeamName(u) !== team) {
+        return false;
+      }
+
       return true;
     });
-  }, [users, search, role]);
+  }, [users, search, role, team]);
 
   /* =========================
      BULK ACTIONS
   ========================= */
   const bulkUpdateStatus = async active => {
-    for (const id of selected) {
-      await updateDoc(doc(db, "users", id), { active });
+    if (!canEditUsers) return;
+
+    const eligibleIds = selected.filter(id => {
+      const target = users.find(item => item.id === id);
+      return target && !isSameUser(currentUser, target) && !isSuperAdmin(target);
+    });
+
+    for (const id of eligibleIds) {
+      await updateUserAccess({
+        userId: id,
+        active,
+        changeReason: "Bulk status change from Team Management"
+      });
     }
 
-    setUsers(u =>
-      u.map(user =>
-        selected.includes(user.id)
-          ? { ...user, active }
-          : user
+    setUsers(rows =>
+      rows.map(item =>
+        eligibleIds.includes(item.id) ? { ...item, active } : item
       )
     );
 
@@ -176,12 +245,27 @@ export default function AdminUsersPage() {
   if (loading) return <PageSkeleton lines={6} />;
 
   return (
-    <AdminGuard>
+    <AdminGuard permission="users.view">
       <main className="p-6 w-full mx-auto space-y-4">
 
         <h1 className="text-xl font-semibold">
           Team Management
         </h1>
+
+        {(dataHealth.duplicateEmails || dataHealth.duplicateNames || dataHealth.missingUid || dataHealth.missingName || dataHealth.missingTeam) ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+            <div className="flex items-start gap-2">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              <div>
+                <p className="font-semibold">User Master Data Health</p>
+                <p className="mt-1">
+                  {dataHealth.duplicateEmails} duplicate email group(s) · {dataHealth.duplicateNames} duplicate display-name group(s) · {dataHealth.missingUid} user(s) without Auth UID · {dataHealth.missingName} active user(s) without a display name · {dataHealth.missingTeam} active user(s) without Team / Department.
+                  Staff filters use this Users master only. Duplicate-name groups are review warnings only; the CRM never auto-merges two people when their identities conflict.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {/* FILTER + ACTION BAR */}
         <div
@@ -200,7 +284,7 @@ export default function AdminUsersPage() {
               <input
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder="Search name, email, employee ID"
+                placeholder="Search name, email, employee ID, team"
                 className="text-xs px-3 py-2 border border-gray-100 rounded-lg bg-white w-64"
               />
 
@@ -216,12 +300,23 @@ export default function AdminUsersPage() {
                   </option>
                 ))}
               </select>
+
+              <select
+                value={team}
+                onChange={e => setTeam(e.target.value)}
+                className="text-xs px-3 py-2 border border-gray-100 rounded-lg bg-white"
+              >
+                <option value="all">All Teams</option>
+                {teams.map(item => (
+                  <option key={item} value={item}>{item}</option>
+                ))}
+              </select>
             </div>
 
             {/* RIGHT ACTIONS */}
             <div className="flex items-center gap-2">
 
-              {selected.length > 0 && (
+              {selected.length > 0 && canEditUsers && (
                 <>
                   <button
                     onClick={() => bulkUpdateStatus(true)}
@@ -236,6 +331,17 @@ export default function AdminUsersPage() {
                     Deactivate ({selected.length})
                   </button>
                 </>
+              )}
+
+              {canCreateUsers && (
+                <button
+                  type="button"
+                  onClick={() => router.push("/admin/users/new")}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
+                >
+                  <Plus size={14} />
+                  Add User
+                </button>
               )}
 
               <button
@@ -286,6 +392,7 @@ export default function AdminUsersPage() {
                   <th className="px-4 py-3">
                     <input
                       type="checkbox"
+                      disabled={!canEditUsers}
                       checked={
                         selected.length === filteredUsers.length &&
                         filteredUsers.length > 0
@@ -301,6 +408,7 @@ export default function AdminUsersPage() {
                   </th>
                   <th className="px-4 py-3 text-left">User</th>
                   <th className="px-4 py-3 text-left">Role</th>
+                  <th className="px-4 py-3 text-left">Team / Department</th>
                   <th className="px-4 py-3 text-left">Status</th>
                   <th className="px-4 py-3 text-left">Action</th>
                 </tr>
@@ -315,6 +423,7 @@ export default function AdminUsersPage() {
                     <td className="px-4 py-3">
                       <input
                         type="checkbox"
+                        disabled={!canEditUsers || isSameUser(currentUser, u) || isSuperAdmin(u)}
                         checked={selected.includes(u.id)}
                         onChange={e =>
                           setSelected(s =>
@@ -341,10 +450,19 @@ export default function AdminUsersPage() {
                       <RoleChip label={u.role} />
                     </td>
 
+                    <td className="px-4 py-3 text-xs text-gray-600">
+                      {getUserTeamName(u) || <span className="text-amber-600">Not assigned</span>}
+                    </td>
+
                     <td className="px-4 py-3">
-                      <UserStatusToggle user={u} />
+                      <UserStatusToggle
+                        user={u}
+                        currentUser={currentUser}
+                        onUpdated={(id, active) => setUsers(rows => rows.map(item => item.id === id ? { ...item, active } : item))}
+                      />
                     </td>
                     <td className="px-4 py-3">
+                      {canEditUsers && !isSameUser(currentUser, u) && !isSuperAdmin(u) && (
                       <button
                         onClick={async () => {
                           if (
@@ -354,7 +472,7 @@ export default function AdminUsersPage() {
                           )
                             return;
 
-                          await deleteUserFn({ uid: u.id });
+                          await deleteUserFn({ id: u.id });
 
                           // Remove immediately from UI
                           setUsers(users =>
@@ -366,6 +484,7 @@ export default function AdminUsersPage() {
                       >
                         <Trash2 size={16} />
                       </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -390,6 +509,7 @@ export default function AdminUsersPage() {
 
                   <input
                     type="checkbox"
+                    disabled={!canEditUsers || isSameUser(currentUser, u) || isSuperAdmin(u)}
                     checked={selected.includes(u.id)}
                     onChange={e =>
                       setSelected(s =>
@@ -401,9 +521,17 @@ export default function AdminUsersPage() {
                   />
                 </div>
 
+                <p className="mt-3 text-xs text-gray-500">
+                  Team: <span className="font-medium text-gray-700">{getUserTeamName(u) || "Not assigned"}</span>
+                </p>
+
                 <div className="mt-3 flex justify-between items-center">
                   <RoleChip label={u.role} />
-                  <UserStatusToggle user={u} />
+                  <UserStatusToggle
+                    user={u}
+                    currentUser={currentUser}
+                    onUpdated={(id, active) => setUsers(rows => rows.map(item => item.id === id ? { ...item, active } : item))}
+                  />
                 </div>
               </div>
             ))}

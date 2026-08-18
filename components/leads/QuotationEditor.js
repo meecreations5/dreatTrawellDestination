@@ -14,11 +14,15 @@ import {
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { canAccess, canAccessRecord } from "@/lib/rolePermissions";
+import { getLeadAssignee } from "@/lib/leadOwnership";
+import { buildLeadTravelPayloadFromQuotationData } from "@/lib/leadTravelDates";
 
 import { sendEmailViaBrevo } from "@/lib/sendEmailViaBrevo";
 import { sendWhatsAppWeb } from "@/lib/whatsapp";
 import { createQuotationRevision } from "@/lib/createQuotationRevision";
 import { saveQuotationDraft } from "@/lib/saveQuotationDraft";
+import { deleteQuotationDraft } from "@/lib/deleteQuotationDraft";
 
 import { getCommunicationSettings } from "@/lib/communicationSettings";
 import { getBrandingSettings } from "@/lib/brandingSettings";
@@ -1668,7 +1672,9 @@ function ConfirmSendModal({
   grossProfit,
   marginPercent,
   isDraftSend,
-  vendorCostingMode = "single_vendor"
+  vendorCostingMode = "single_vendor",
+  canViewVendorCost = false,
+  canViewRevenueGp = false
 }) {
   if (!open) return null;
 
@@ -1721,20 +1727,26 @@ function ConfirmSendModal({
                 <p className="font-semibold text-gray-900">{customerAmount}</p>
               </div>
 
-              <div>
-                <span className="text-gray-500">Vendor Cost</span>
-                <p className="font-semibold text-gray-900">{vendorCost}</p>
-              </div>
+              {canViewVendorCost && (
+                <div>
+                  <span className="text-gray-500">Vendor Cost</span>
+                  <p className="font-semibold text-gray-900">{vendorCost}</p>
+                </div>
+              )}
 
-              <div>
-                <span className="text-gray-500">Gross Profit</span>
-                <p className="font-semibold text-gray-900">{grossProfit}</p>
-              </div>
+              {canViewRevenueGp && (
+                <>
+                  <div>
+                    <span className="text-gray-500">Gross Profit</span>
+                    <p className="font-semibold text-gray-900">{grossProfit}</p>
+                  </div>
 
-              <div>
-                <span className="text-gray-500">Margin</span>
-                <p className="font-semibold text-gray-900">{marginPercent}</p>
-              </div>
+                  <div>
+                    <span className="text-gray-500">Margin</span>
+                    <p className="font-semibold text-gray-900">{marginPercent}</p>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -1774,6 +1786,12 @@ export default function QuotationEditor({
 }) {
   const { user } = useAuth();
 
+  const canSendQuotation = Boolean(
+    user && lead && canAccessRecord(user, "quotations.send", lead, "lead")
+  );
+  const canViewVendorCost = Boolean(user && canAccess(user, "payments.view_vendor_cost"));
+  const canViewRevenueGp = Boolean(user && canAccess(user, "payments.view_revenue_gp"));
+
   const [teamMembers, setTeamMembers] = useState([]);
   const [selectedSignatureUid, setSelectedSignatureUid] = useState("");
 
@@ -1798,6 +1816,7 @@ export default function QuotationEditor({
 
   const [saving, setSaving] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
+  const [deletingDraft, setDeletingDraft] = useState(false);
   const [draftQuotationId, setDraftQuotationId] = useState("");
   const [draftRevision, setDraftRevision] = useState(null);
 
@@ -2051,11 +2070,11 @@ export default function QuotationEditor({
   useEffect(() => {
     if (!user || !signatureOptions.length || selectedSignatureUid) return;
 
+    const currentAssignee = getLeadAssignee(lead || {});
     const assignedUid = getFirstValue(
-      lead?.assignedTo,
-      lead?.assignedToUid,
-      lead?.teamLeadUid,
-      lead?.ownerUid
+      currentAssignee.uid,
+      currentAssignee.email,
+      lead?.teamLeadUid
     );
 
     const assignedMember = signatureOptions.find(
@@ -3549,6 +3568,8 @@ export default function QuotationEditor({
     const safeQuotationAssetLinksText = quotationAssetLinksText || "";
     const safeQuotationAssetLinksHtml = quotationAssetLinksHtml || "";
 
+    const leadTravelPayload = buildLeadTravelPayloadFromQuotationData(quotationData || {});
+
     const signaturePayload = {
       uid: getMemberUid(signatureUser),
       name: getMemberName(signatureUser),
@@ -3682,6 +3703,8 @@ export default function QuotationEditor({
       latestQuotationSentByName:
         user?.displayName || user?.name || user?.email || "",
 
+      ...leadTravelPayload,
+
       stage: "quote_sent",
       stageLabel: "Quote sent",
       updatedAt: serverTimestamp(),
@@ -3731,8 +3754,38 @@ export default function QuotationEditor({
     };
   };
 
+  const handleDeleteCurrentDraft = async () => {
+    if (!draftQuotationId || !lead?.id || deletingDraft) return;
+
+    const confirmed = window.confirm(
+      `Delete Draft${draftRevision ? ` Rev ${draftRevision}` : ""}? This removes only the unsent draft and keeps the lead and previous quotations intact.`
+    );
+    if (!confirmed) return;
+
+    try {
+      setDeletingDraft(true);
+      await deleteQuotationDraft({
+        leadId: lead.id,
+        quotationId: draftQuotationId,
+        user
+      });
+      setDraftQuotationId("");
+      setDraftRevision(null);
+      onClose?.();
+    } catch (error) {
+      console.error("Delete draft failed:", error);
+      alert(error?.message || "Failed to delete draft quotation");
+    } finally {
+      setDeletingDraft(false);
+    }
+  };
+
   const openSendConfirmation = () => {
     if (saving || savingDraft) return;
+    if (!canSendQuotation) {
+      alert("You do not have permission to send this quotation.");
+      return;
+    }
     if (!validateBeforeSend()) return;
     setConfirmOpen(true);
   };
@@ -3743,6 +3796,10 @@ export default function QuotationEditor({
 
   const submit = async () => {
     if (saving) return;
+    if (!canSendQuotation) {
+      alert("You do not have permission to send this quotation.");
+      return;
+    }
     if (!validateBeforeSend()) return;
 
     const selectedSignatureBaseUser =
@@ -6461,7 +6518,7 @@ export default function QuotationEditor({
                 )}
               </div>
 
-              {(selectedVendorName || hasVendorCost) && (
+              {canViewVendorCost && (selectedVendorName || hasVendorCost) && (
                 <div className="bg-green-50 border border-green-100 rounded-lg p-4 space-y-3">
                   <div>
                     <p className="text-sm font-semibold text-gray-900">
@@ -6532,25 +6589,29 @@ export default function QuotationEditor({
                   onChange={e => setCustomerQuotedAmount(e.target.value)}
                 />
 
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min="0"
-                  className={inputClass}
-                  placeholder="Vendor Cost (₹)"
-                  value={vendorCost}
-                  readOnly={vendorCostLocked}
-                  onChange={e => {
-                    if (!vendorCostLocked) {
-                      setVendorCost(e.target.value);
-                    }
-                  }}
-                />
+                {canViewVendorCost && (
+                  <>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      className={inputClass}
+                      placeholder="Vendor Cost (₹)"
+                      value={vendorCost}
+                      readOnly={vendorCostLocked}
+                      onChange={e => {
+                        if (!vendorCostLocked) {
+                          setVendorCost(e.target.value);
+                        }
+                      }}
+                    />
 
-                {vendorCostLocked && (
-                  <p className="text-[11px] text-green-700">
-                    Vendor cost is locked from final selected vendor quote.
-                  </p>
+                    {vendorCostLocked && (
+                      <p className="text-[11px] text-green-700">
+                        Vendor cost is locked from final selected vendor quote.
+                      </p>
+                    )}
+                  </>
                 )}
 
                 {(customerQuotedAmount || hasVendorCost) && (
@@ -6560,36 +6621,43 @@ export default function QuotationEditor({
                       <b>{formatCurrency(customerAmountNumber)}</b>
                     </div>
 
-                    <div className="flex justify-between">
-                      <span>Vendor Cost</span>
-                      <b>
-                        {hasVendorCost
-                          ? formatCurrency(vendorCostNumber)
-                          : "—"}
-                      </b>
-                    </div>
+                    {canViewVendorCost && (
+                      <div className="flex justify-between">
+                        <span>Vendor Cost</span>
+                        <b>
+                          {hasVendorCost
+                            ? formatCurrency(vendorCostNumber)
+                            : "—"}
+                        </b>
+                      </div>
+                    )}
 
-                    <div className="flex justify-between">
-                      <span>Gross Profit</span>
-                      <b>
-                        {grossProfit === null
-                          ? "—"
-                          : formatCurrency(grossProfit)}
-                      </b>
-                    </div>
+                    {canViewRevenueGp && (
+                      <>
+                        <div className="flex justify-between">
+                          <span>Gross Profit</span>
+                          <b>
+                            {grossProfit === null
+                              ? "—"
+                              : formatCurrency(grossProfit)}
+                          </b>
+                        </div>
 
-                    <div className="flex justify-between">
-                      <span>Margin</span>
-                      <b>
-                        {marginPercent === null
-                          ? "—"
-                          : `${marginPercent.toFixed(1)}%`}
-                      </b>
-                    </div>
+                        <div className="flex justify-between">
+                          <span>Margin</span>
+                          <b>
+                            {marginPercent === null
+                              ? "—"
+                              : `${marginPercent.toFixed(1)}%`}
+                          </b>
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
 
-                {hasVendorCost &&
+                {canViewVendorCost &&
+                  hasVendorCost &&
                   Number.isFinite(vendorCostNumber) &&
                   customerAmountNumber > 0 &&
                   customerAmountNumber < vendorCostNumber && (
@@ -6759,16 +6827,27 @@ export default function QuotationEditor({
               <button
                 type="button"
                 onClick={onClose}
-                disabled={saving || savingDraft}
+                disabled={saving || savingDraft || deletingDraft}
                 className="flex-1 md:flex-none border border-gray-200 rounded-md px-5 py-2 text-sm disabled:opacity-60"
               >
                 Cancel
               </button>
 
+              {draftQuotationId ? (
+                <button
+                  type="button"
+                  onClick={handleDeleteCurrentDraft}
+                  disabled={saving || savingDraft || deletingDraft}
+                  className="flex-1 md:flex-none border border-red-200 text-red-700 bg-red-50 rounded-md px-5 py-2 text-sm disabled:opacity-60"
+                >
+                  {deletingDraft ? "Deleting..." : "Delete Draft"}
+                </button>
+              ) : null}
+
               <button
                 type="button"
                 onClick={saveDraft}
-                disabled={saving || savingDraft}
+                disabled={saving || savingDraft || deletingDraft}
                 className="flex-1 md:flex-none border border-blue-200 text-blue-700 bg-blue-50 rounded-md px-5 py-2 text-sm disabled:opacity-60"
               >
                 {savingDraft
@@ -6778,18 +6857,20 @@ export default function QuotationEditor({
                     : "Save Draft"}
               </button>
 
-              <button
-                type="button"
-                onClick={openSendConfirmation}
-                disabled={saving || savingDraft || (!hasEmail && !hasWhatsApp)}
-                className="flex-1 md:flex-none bg-blue-600 text-white rounded-md px-5 py-2 text-sm disabled:opacity-60"
-              >
-                {saving
-                  ? "Sending..."
-                  : draftQuotationId
-                    ? "Send Draft"
-                    : "Send Quotation"}
-              </button>
+              {canSendQuotation && (
+                <button
+                  type="button"
+                  onClick={openSendConfirmation}
+                  disabled={saving || savingDraft || deletingDraft || (!hasEmail && !hasWhatsApp)}
+                  className="flex-1 md:flex-none bg-blue-600 text-white rounded-md px-5 py-2 text-sm disabled:opacity-60"
+                >
+                  {saving
+                    ? "Sending..."
+                    : draftQuotationId
+                      ? "Send Draft"
+                      : "Send Quotation"}
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -6817,6 +6898,8 @@ export default function QuotationEditor({
         }
         isDraftSend={Boolean(draftQuotationId)}
         vendorCostingMode={vendorCostingMode}
+        canViewVendorCost={canViewVendorCost}
+        canViewRevenueGp={canViewRevenueGp}
       />
 
       <AssetPickerModal

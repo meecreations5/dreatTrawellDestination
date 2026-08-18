@@ -22,7 +22,8 @@ import {
   Copy,
   Check,
   Sparkles,
-  FileText
+  FileText,
+  CalendarClock
 } from "lucide-react";
 
 import InitialAvatar from "@/components/ui/InitialAvatar";
@@ -433,6 +434,7 @@ export default function EngagementCard({
   agentProfileHref = "",
   viewEngagementHref = "",
   leadCreateHref = "",
+  meetingScheduleHref = "",
   showSendCommunication = true,
   showProfileBadge = true
 }) {
@@ -939,8 +941,7 @@ export default function EngagementCard({
 
         {/* ACTIONS */}
         <div
-          className={`grid gap-2 pt-1 ${showSendCommunication ? "grid-cols-3" : "grid-cols-2"
-            }`}
+          className={`grid grid-cols-2 gap-2 pt-1 ${showSendCommunication ? "sm:grid-cols-4" : "sm:grid-cols-3"}`}
         >
           <button
             type="button"
@@ -965,6 +966,17 @@ export default function EngagementCard({
                   : "Send"}
             </button>
           )}
+
+          {meetingScheduleHref ? (
+            <button
+              type="button"
+              onClick={() => router.push(meetingScheduleHref)}
+              className="py-1.5 rounded-md text-xs font-medium border border-violet-200 bg-violet-50 text-violet-700 flex items-center justify-center gap-1 hover:bg-violet-100"
+            >
+              <CalendarClock className="w-3.5 h-3.5" />
+              Meeting
+            </button>
+          ) : null}
 
           {!engagement?.leadId ? (
             <button

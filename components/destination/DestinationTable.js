@@ -3,6 +3,7 @@
 import { doc, deleteDoc, updateDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { canAccess } from "@/lib/rolePermissions";
 import Link from "next/link";
 
 import DestinationStatusChip from "@/components/destination/DestinationStatusChip";
@@ -12,20 +13,25 @@ export default function DestinationTable({
   onRowClick
 }) {
   const { user } = useAuth();
+  const canEdit = canAccess(user, "destinations.edit");
+  const canDelete = canAccess(user, "destinations.delete");
 
   const publishDraft = async id => {
+    if (!canEdit) return;
     await updateDoc(doc(db, "destinations", id), {
       status: "published"
     });
   };
 
   const toggleActive = async (id, active) => {
+    if (!canEdit) return;
     await updateDoc(doc(db, "destinations", id), {
       active: !active
     });
   };
 
   const deleteDestination = async id => {
+    if (!canDelete) return;
     const ok = window.confirm(
       "This will permanently delete the destination. Continue?"
     );
@@ -93,14 +99,16 @@ export default function DestinationTable({
                 onClick={e => e.stopPropagation()}
               >
                 <div className="flex gap-2 flex-wrap">
-                  <Link
-                    href={`/admin/destinations/${d.id}`}
-                    className="text-xs border px-2 py-1 rounded-md"
-                  >
-                    Edit
-                  </Link>
+                  {canEdit && (
+                    <Link
+                      href={`/admin/destinations/${d.id}`}
+                      className="text-xs border px-2 py-1 rounded-md"
+                    >
+                      Edit
+                    </Link>
+                  )}
 
-                  {d.status === "draft" && (
+                  {canEdit && d.status === "draft" && (
                     <button
                       onClick={() => publishDraft(d.id)}
                       className="text-xs border border-green-300 text-green-700 px-2 py-1 rounded-md"
@@ -109,6 +117,7 @@ export default function DestinationTable({
                     </button>
                   )}
 
+                  {canEdit && (
                   <button
                     onClick={() => toggleActive(d.id, d.active)}
                     className={`text-xs border px-2 py-1 rounded-md
@@ -120,13 +129,16 @@ export default function DestinationTable({
                   >
                     {d.active ? "Deactivate" : "Activate"}
                   </button>
+                  )}
 
+                  {canDelete && (
                   <button
                     onClick={() => deleteDestination(d.id)}
                     className="text-xs border border-red-400 text-red-700 px-2 py-1 rounded-md"
                   >
                     Delete
                   </button>
+                  )}
                 </div>
               </td>
             </tr>

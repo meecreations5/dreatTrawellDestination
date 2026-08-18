@@ -26,6 +26,22 @@ import {
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
+import { useAdminScope } from "@/components/admin/AdminScopeProvider";
+import { useAuth } from "@/hooks/useAuth";
+import { exportLeadsCsv } from "@/lib/exportLeadsCsv";
+import { canAccess } from "@/lib/rolePermissions";
+import {
+  getLeadAssignee as getLeadAssigneeIdentity,
+  getLeadOwner as getLeadOwnerIdentity
+} from "@/lib/leadOwnership";
+import { LEAD_STAGES, isTerminalLeadStage, normalizeLeadStage } from "@/lib/leadStages";
+import {
+  findDirectoryMember,
+  getMembersForTeam,
+  memberMatchesValues,
+  resolveDirectoryIdentity,
+  teamMatchesScope
+} from "@/lib/teamDirectory";
 
 /* DASHBOARD COMPONENTS */
 import DashboardFilters from "@/components/admin/dashboard/DashboardFilters";
@@ -35,17 +51,21 @@ import LeadsByStageChart from "@/components/admin/dashboard/LeadsByStageChart";
 import TeamPerformanceTable from "@/components/admin/dashboard/TeamPerformanceTable";
 import LeadsByDestinationChart from "@/components/admin/dashboard/LeadsByDestinationChart";
 import RevenueByDestinationChart from "@/components/admin/dashboard/RevenueByDestinationChart";
+import OpenLeadTravelMonthBoard from "@/components/admin/OpenLeadTravelMonthBoard";
 
 /* =========================
    INITIAL FILTERS
 ========================== */
 
 const INITIAL_FILTERS = {
+  team: "all",
   stage: "all",
+  owner: "all",
   assignedTo: "all",
+  followUp: "all",
+  destination: "all",
   from: "",
-  to: "",
-  overdue: false
+  to: ""
 };
 
 function getAssignedKey(lead) {
@@ -57,6 +77,13 @@ function getAssignedKey(lead) {
     "";
 
   return String(raw).trim().toLowerCase();
+}
+
+function getOwnerKey(lead) {
+  const owner = getLeadOwnerIdentity(lead);
+  return String(owner?.uid || owner?.email || owner?.name || "")
+    .trim()
+    .toLowerCase();
 }
 
 /* =========================
@@ -134,6 +161,16 @@ function getDateRangeByPreset(preset) {
   if (preset === "last7") {
     const from = new Date(today);
     from.setDate(today.getDate() - 6);
+
+    return {
+      from: formatDateInput(from),
+      to: formatDateInput(today)
+    };
+  }
+
+  if (preset === "last30") {
+    const from = new Date(today);
+    from.setDate(today.getDate() - 29);
 
     return {
       from: formatDateInput(from),
@@ -220,7 +257,7 @@ function getNextActionDate(lead) {
 }
 
 function isLeadClosed(lead) {
-  return lead.stage === "closed_won" || lead.stage === "closed_lost";
+  return isTerminalLeadStage(lead?.stage || lead?.status || "");
 }
 
 function isLeadOverdue(lead) {
@@ -282,128 +319,19 @@ function getStageLabel(stage = "") {
     follow_up: "Follow Up",
     negotiation: "Negotiation",
     closed_won: "Won",
-    closed_lost: "Lost"
+    closed_lost: "Lost",
+    converted: "Closed - Won",
+    lost: "Closed - Lost",
+    cancelled_invalid: "Closed - Cancelled / Invalid"
   };
 
   return map[stage] || stage?.replaceAll("_", " ") || "Unknown";
 }
 
-/* =========================
-   EXPORT HELPER
-========================== */
-
-function exportLeadsCsv(leads) {
-  const headers = [
-    "Lead Code",
-    "Agent Name",
-    "Client Name",
-    "Destination",
-    "Stage",
-    "Assigned To",
-    "Created At",
-    "Next Action",
-    "Quoted Amount",
-    "Gross Profit"
-  ];
-
-  const rows = leads.map(lead => {
-    const created = getLeadCreatedDate(lead);
-    const nextAction = getNextActionDate(lead);
-
-    return [
-      lead.leadCode || lead.code || lead.id || "",
-      lead.agentName || lead.agencyName || "",
-      lead.clientName || lead.clientReference || "",
-      lead.destination || lead.destinationName || lead.city || "",
-      getStageLabel(lead.stage),
-      lead.assignedToName || lead.assignedToEmail || "",
-      created ? created.toLocaleDateString("en-IN") : "",
-      nextAction ? nextAction.toLocaleDateString("en-IN") : "",
-      getLeadAmount(lead),
-      getGrossProfit(lead)
-    ];
-  });
-
-  const csv = [headers, ...rows]
-    .map(row =>
-      row
-        .map(value => `"${String(value ?? "").replaceAll('"', '""')}"`)
-        .join(",")
-    )
-    .join("\n");
-
-  const blob = new Blob([csv], {
-    type: "text/csv;charset=utf-8;"
-  });
-
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-
-  link.href = url;
-  link.download = `lead-dashboard-${formatDateInput(new Date())}.csv`;
-  link.click();
-
-  URL.revokeObjectURL(url);
-}
 
 /* =========================
    SMALL UI COMPONENTS
 ========================== */
-
-function DatePresetBar({ activePreset, onPresetChange }) {
-  const presets = [
-    {
-      key: "today",
-      label: "Today"
-    },
-    {
-      key: "yesterday",
-      label: "Yesterday"
-    },
-    {
-      key: "last7",
-      label: "Last 7 Days"
-    },
-    {
-      key: "thisMonth",
-      label: "This Month"
-    },
-    {
-      key: "lastMonth",
-      label: "Last Month"
-    }
-  ];
-
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      {presets.map(preset => {
-        const active = activePreset === preset.key;
-
-        return (
-          <button
-            key={preset.key}
-            type="button"
-            onClick={() => onPresetChange(preset.key)}
-            className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${active
-              ? "border-slate-900 bg-slate-900 text-white "
-              : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
-              }`}
-          >
-            {preset.label}
-          </button>
-        );
-      })}
-
-      <button
-        type="button"
-        onClick={() => onPresetChange("clear")}
-        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-500 transition hover:bg-slate-50"
-      >
-        Clear Date
-      </button>
-    </div>
-  );
-}
 
 function HeaderStat({ icon: Icon, label, value, tone = "white" }) {
   const toneMap = {
@@ -414,7 +342,7 @@ function HeaderStat({ icon: Icon, label, value, tone = "white" }) {
   };
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/10 p-3">
+    <div className="rounded-2xl border border-white/10 bg-white/10 p-3 backdrop-blur-sm">
       <div className="flex items-center gap-2 text-xs text-slate-300">
         <Icon size={14} />
         {label}
@@ -436,7 +364,7 @@ function DashboardHeader({
   onExport
 }) {
   return (
-    <section className="rounded-[28px] border border-slate-200 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 p-5  md:p-6">
+    <section className="rounded-[28px] border border-slate-800 bg-gradient-to-br from-slate-950 via-slate-900 to-blue-950 p-5 shadow-[0_16px_40px_rgba(15,23,42,0.14)] md:p-6">
       <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
         <div>
           <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-medium text-slate-200">
@@ -449,22 +377,22 @@ function DashboardHeader({
           </h1>
 
           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
-            Monitor lead flow, follow-up health, team performance, destination
-            demand, quotations, won value and gross profit in one place.
+            Separate permanent lead ownership from current assignment, then monitor
+            workload, follow-up health, conversions, value and destination demand.
           </p>
         </div>
 
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:min-w-[560px]">
           <HeaderStat
             icon={Activity}
-            label="Active Leads"
+            label="Visible Leads"
             value={totalLeads}
             tone="white"
           />
 
           <HeaderStat
             icon={Users}
-            label="Team Users"
+            label="Lead Owners"
             value={activeUsers}
             tone="blue"
           />
@@ -663,7 +591,7 @@ function TodayActionCenter({ counts, quickView, setQuickView }) {
         ) : null}
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-6">
         {actions.map(action => (
           <ActionCard
             key={action.key}
@@ -760,52 +688,14 @@ function PipelineHealth({ counts, activeView, setQuickView }) {
 
 function ActiveFilterChips({
   filters,
+  ownerOptions,
   assignedOptions,
   quickView,
-  datePreset,
   setFilters,
   setQuickView,
-  setDatePreset,
   resetAll
 }) {
   const chips = [];
-
-  if (datePreset && filters.from && filters.to) {
-    const presetLabelMap = {
-      today: "Today",
-      yesterday: "Yesterday",
-      last7: "Last 7 Days",
-      thisMonth: "This Month",
-      lastMonth: "Last Month"
-    };
-
-    chips.push({
-      key: "datePreset",
-      label: presetLabelMap[datePreset] || "Date Filter",
-      onClear: () => {
-        setDatePreset("");
-        setFilters(prev => ({
-          ...prev,
-          from: "",
-          to: ""
-        }));
-      }
-    });
-  } else if (filters.from || filters.to) {
-    chips.push({
-      key: "customDate",
-      label: `Date: ${filters.from || "Start"} to ${filters.to || "End"
-        }`,
-      onClear: () => {
-        setDatePreset("");
-        setFilters(prev => ({
-          ...prev,
-          from: "",
-          to: ""
-        }));
-      }
-    });
-  }
 
   if (filters.stage !== "all") {
     chips.push({
@@ -815,6 +705,22 @@ function ActiveFilterChips({
         setFilters(prev => ({
           ...prev,
           stage: "all"
+        }))
+    });
+  }
+
+
+  if (filters.owner !== "all") {
+    const ownerLabel =
+      ownerOptions.find(item => item.value === filters.owner)?.label || filters.owner;
+
+    chips.push({
+      key: "owner",
+      label: `Owner: ${ownerLabel}`,
+      onClear: () =>
+        setFilters(prev => ({
+          ...prev,
+          owner: "all"
         }))
     });
   }
@@ -835,14 +741,28 @@ function ActiveFilterChips({
     });
   }
 
-  if (filters.overdue) {
+  if (filters.destination !== "all") {
     chips.push({
-      key: "overdue",
-      label: "Overdue Only",
+      key: "destination",
+      label: `Destination: ${filters.destination}`,
+      onClear: () => setFilters(prev => ({ ...prev, destination: "all" }))
+    });
+  }
+
+  if (filters.followUp !== "all") {
+    const followUpLabels = {
+      today: "Due Today",
+      overdue: "Overdue",
+      upcoming: "Upcoming",
+      none: "No Next Action"
+    };
+    chips.push({
+      key: "followUp",
+      label: `Follow-up: ${followUpLabels[filters.followUp] || filters.followUp}`,
       onClear: () =>
         setFilters(prev => ({
           ...prev,
-          overdue: false
+          followUp: "all"
         }))
     });
   }
@@ -993,8 +913,7 @@ function EmptyDashboardState({ resetAll }) {
       </h2>
 
       <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">
-        Try changing the date range, clearing action filters, or resetting all
-        filters to view dashboard data.
+        Try changing the Global Date + Team scope above, or clear the page-specific owner, assignee, stage and follow-up filters.
       </p>
 
       <button
@@ -1003,7 +922,7 @@ function EmptyDashboardState({ resetAll }) {
         className="mt-5 inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800"
       >
         <RotateCcw size={16} />
-        Reset Filters
+        Reset Page Filters
       </button>
     </section>
   );
@@ -1014,14 +933,41 @@ function EmptyDashboardState({ resetAll }) {
 ========================== */
 
 export default function AdminDashboardPage() {
+  const { user } = useAuth();
+  const { scope, teamDirectory, userLookup } = useAdminScope();
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
 
   const [filters, setFilters] = useState(INITIAL_FILTERS);
-  const [datePreset, setDatePreset] = useState("");
   const [quickView, setQuickView] = useState("all");
   const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    const presetMap = {
+      all: "",
+      today: "today",
+      yesterday: "yesterday",
+      "7d": "last7",
+      "30d": "last30",
+      thisMonth: "thisMonth",
+      lastMonth: "lastMonth"
+    };
+    const localPreset = presetMap[scope.dateRange] ?? "";
+    const range = scope.dateRange === "custom"
+      ? { from: scope.dateFrom || "", to: scope.dateTo || "" }
+      : localPreset
+        ? getDateRangeByPreset(localPreset)
+        : { from: "", to: "" };
+
+    setFilters(prev => ({
+      ...prev,
+      team: scope.team || "all",
+      from: range.from,
+      to: range.to,
+      ...(prev.team !== (scope.team || "all") ? { owner: "all", assignedTo: "all" } : {})
+    }));
+  }, [scope.team, scope.dateRange, scope.dateFrom, scope.dateTo]);
 
   /* =========================
      REALTIME LOAD
@@ -1051,6 +997,8 @@ export default function AdminDashboardPage() {
     return () => unsub();
   }, [refreshKey]);
 
+
+
   /* =========================
      ACTIVE LEADS ONLY
   ========================== */
@@ -1065,62 +1013,79 @@ export default function AdminDashboardPage() {
   }, [leads]);
 
   /* =========================
-     ASSIGNED OPTIONS
+     CANONICAL TEAM DIRECTORY
+     Sourced only from the global Users master.
   ========================== */
-  const assignedOptions = useMemo(() => {
-    const map = new Map();
+  const scopedMembers = useMemo(
+    () => getMembersForTeam(teamDirectory, filters.team),
+    [teamDirectory, filters.team]
+  );
 
-    activeLeads.forEach(lead => {
-      const value = getAssignedKey(lead);
-      if (!value) return;
+  const ownerOptions = useMemo(
+    () => scopedMembers.map(member => ({
+      value: member.key,
+      label: member.label,
+      email: member.email,
+      team: member.team
+    })),
+    [scopedMembers]
+  );
 
-      const label =
-        lead.assignedToName ||
-        lead.assignedToEmail ||
-        lead.assignedTo ||
-        "Unassigned";
+  const assignedOptions = ownerOptions;
 
-      map.set(value, label);
-    });
+  const destinationOptions = useMemo(() =>
+    Array.from(new Set(activeLeads
+      .map(lead => String(lead.destination || lead.destinationName || lead.city || "").trim())
+      .filter(Boolean)))
+      .sort((a, b) => a.localeCompare(b)),
+    [activeLeads]
+  );
 
-    return Array.from(map.entries())
-      .map(([value, label]) => ({
-        value,
-        label
-      }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }, [activeLeads]);
+  const resolveMember = identity => {
+    if (!identity) return null;
+    const resolved = resolveDirectoryIdentity(
+      { uid: identity.uid, email: identity.email, name: identity.name },
+      userLookup
+    );
+    return resolved?.isUnmapped ? null : resolved;
+  };
 
   /* =========================
-     DATE PRESET HANDLER
+     OPEN TRAVEL PIPELINE
+     Intentionally ignores lead-created date/page filters.
+     It reflects every currently open query, optionally scoped by Team.
   ========================== */
-  const handleDatePresetChange = preset => {
-    if (preset === "clear") {
-      setDatePreset("");
-      setFilters(prev => ({
-        ...prev,
-        from: "",
-        to: ""
-      }));
-      return;
-    }
+  const openTravelLeads = useMemo(() => {
+    return activeLeads.filter(lead => {
+      if (isLeadClosed(lead)) return false;
 
-    const range = getDateRangeByPreset(preset);
+      if (filters.team !== "all") {
+        const ownerMember = resolveMember(getLeadOwnerIdentity(lead));
+        const assigneeMember = resolveMember(getLeadAssigneeIdentity(lead));
+        const ownerInTeam = ownerMember ? teamMatchesScope(ownerMember.team, filters.team) : false;
+        const assigneeInTeam = assigneeMember ? teamMatchesScope(assigneeMember.team, filters.team) : false;
+        if (!ownerInTeam && !assigneeInTeam) return false;
+      }
 
-    setDatePreset(preset);
-    setFilters(prev => ({
-      ...prev,
-      from: range.from,
-      to: range.to
-    }));
-  };
+      return true;
+    });
+  }, [activeLeads, filters.team, userLookup]);
+
+  const openTravelTeamLabel = useMemo(() => {
+    if (filters.team === "all") return "All Teams";
+    return filters.team;
+  }, [filters.team]);
 
   /* =========================
      FILTER RESET
   ========================== */
   const resetAll = () => {
-    setFilters(INITIAL_FILTERS);
-    setDatePreset("");
+    setFilters(prev => ({
+      ...INITIAL_FILTERS,
+      team: scope.team || "all",
+      from: prev.from,
+      to: prev.to
+    }));
     setQuickView("all");
   };
 
@@ -1130,43 +1095,58 @@ export default function AdminDashboardPage() {
   ========================== */
   const baseFilteredLeads = useMemo(() => {
     return activeLeads.filter(lead => {
-      if (filters.stage !== "all" && lead.stage !== filters.stage) {
-        return false;
+      if (filters.stage !== "all" && normalizeLeadStage(lead.stage) !== filters.stage) return false;
+
+      const destination = String(lead.destination || lead.destinationName || lead.city || "").trim();
+      if (filters.destination !== "all" && destination !== filters.destination) return false;
+
+      const owner = getLeadOwnerIdentity(lead);
+      const assignee = getLeadAssigneeIdentity(lead);
+      const ownerMember = resolveMember(owner);
+      const assigneeMember = resolveMember(assignee);
+
+      if (filters.team !== "all") {
+        const ownerInTeam = ownerMember ? teamMatchesScope(ownerMember.team, filters.team) : false;
+        const assigneeInTeam = assigneeMember ? teamMatchesScope(assigneeMember.team, filters.team) : false;
+        if (!ownerInTeam && !assigneeInTeam) return false;
       }
 
-      if (filters.assignedTo !== "all") {
-        const assignedValue = getAssignedKey(lead);
-
-        if (assignedValue !== filters.assignedTo) {
+      if (filters.owner !== "all") {
+        const member = findDirectoryMember(teamDirectory, filters.owner);
+        if (!member || !memberMatchesValues(member, [owner.uid, owner.email, owner.name])) {
           return false;
         }
       }
 
-      if (filters.overdue && !isLeadOverdue(lead)) {
-        return false;
+      if (filters.assignedTo === "unassigned") {
+        if (assignee.uid || assignee.email || assignee.name) return false;
+      } else if (filters.assignedTo !== "all") {
+        const member = findDirectoryMember(teamDirectory, filters.assignedTo);
+        if (!member || !memberMatchesValues(member, [assignee.uid, assignee.email, assignee.name])) {
+          return false;
+        }
       }
+
+      const nextAction = getNextActionDate(lead);
+      const today = new Date();
+      if (filters.followUp === "today" && (!nextAction || !isSameDay(nextAction, today))) return false;
+      if (filters.followUp === "overdue" && !isLeadOverdue(lead)) return false;
+      if (filters.followUp === "upcoming" && (!nextAction || nextAction <= today || isSameDay(nextAction, today))) return false;
+      if (filters.followUp === "none" && nextAction) return false;
 
       const created = getLeadCreatedDate(lead);
-
       if (filters.from) {
         const fromDate = startOfDay(filters.from);
-
-        if (!created || created < fromDate) {
-          return false;
-        }
+        if (!created || created < fromDate) return false;
       }
-
       if (filters.to) {
         const toDateValue = endOfDay(filters.to);
-
-        if (!created || created > toDateValue) {
-          return false;
-        }
+        if (!created || created > toDateValue) return false;
       }
 
       return true;
     });
-  }, [activeLeads, filters]);
+  }, [activeLeads, filters, teamDirectory, userLookup]);
 
   /* =========================
      ACTION COUNTS
@@ -1251,6 +1231,15 @@ export default function AdminDashboardPage() {
     });
   }, [baseFilteredLeads, quickView]);
 
+  const hasPageFilters = Boolean(
+    filters.owner !== "all" ||
+    filters.assignedTo !== "all" ||
+    filters.stage !== "all" ||
+    filters.followUp !== "all" ||
+    filters.destination !== "all" ||
+    quickView !== "all"
+  );
+
   /* =========================
      METRICS
   ========================== */
@@ -1262,6 +1251,7 @@ export default function AdminDashboardPage() {
     let quotedCount = 0;
     let wonCount = 0;
     let lostCount = 0;
+    let cancelledInvalidCount = 0;
     let overdueCount = 0;
 
     filteredLeads.forEach(lead => {
@@ -1273,14 +1263,19 @@ export default function AdminDashboardPage() {
         quotedCount += 1;
       }
 
-      if (lead.stage === "closed_won") {
+      const normalizedStage = normalizeLeadStage(lead.stage || lead.status || "");
+      if (normalizedStage === LEAD_STAGES.CONVERTED) {
         wonCount += 1;
         totalWonValue += amount;
         totalGrossProfit += grossProfit;
       }
 
-      if (lead.stage === "closed_lost") {
+      if (normalizedStage === LEAD_STAGES.LOST) {
         lostCount += 1;
+      }
+
+      if (normalizedStage === LEAD_STAGES.CANCELLED_INVALID) {
+        cancelledInvalidCount += 1;
       }
 
       if (isLeadOverdue(lead)) {
@@ -1298,6 +1293,7 @@ export default function AdminDashboardPage() {
       quotedCount,
       wonCount,
       lostCount,
+      cancelledInvalidCount,
       openCount,
       overdueCount,
       avgDeal:
@@ -1348,52 +1344,60 @@ export default function AdminDashboardPage() {
   }
 
   return (
-    <main className="w-full space-y-6 p-4 md:p-6">
+    <main className="mx-auto w-full max-w-[1600px] space-y-6 p-4 md:p-6">
       {/* HEADER */}
       <DashboardHeader
-        totalLeads={activeLeads.length}
-        activeUsers={assignedOptions.length}
-        overdueCount={actionCounts.overdue}
-        wonCount={activeLeads.filter(lead => lead.stage === "closed_won").length}
+        totalLeads={filteredLeads.length}
+        activeUsers={ownerOptions.length}
+        overdueCount={metrics.overdueCount}
+        wonCount={metrics.wonCount}
         onRefresh={() => setRefreshKey(prev => prev + 1)}
-        onExport={() => exportLeadsCsv(filteredLeads)}
+        onExport={canAccess(user, "leads.export") ? () => exportLeadsCsv(filteredLeads, {
+          includeVendorCost: canAccess(user, "payments.view_vendor_cost"),
+          includeRevenueGp: canAccess(user, "payments.view_revenue_gp"),
+          fileName: `lead-dashboard-${formatDateInput(new Date())}.csv`
+        }) : null}
       />
 
-      {/* DATE PRESET BAR */}
-      <section className="rounded-2xl border border-slate-200 bg-white p-4 ">
-        <div className="mb-3 flex items-center gap-2">
-          <CalendarDays size={17} className="text-slate-500" />
-          <h2 className="text-sm font-semibold text-slate-900">
-            Quick Date Filters
-          </h2>
+      {/* FILTERS */}
+      <div className="sticky top-20 z-20 space-y-3 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-sm backdrop-blur">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+          <div>
+            <p className="text-xs font-semibold text-slate-700">
+              Lead Filters
+            </p>
+            <p className="mt-0.5 text-[11px] text-slate-500">
+              Showing {filteredLeads.length} of {activeLeads.length} non-deleted leads
+            </p>
+          </div>
+
+          {hasPageFilters ? (
+            <button
+              type="button"
+              onClick={resetAll}
+              className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+            >
+              <RotateCcw size={13} />
+              Reset Page Filters
+            </button>
+          ) : null}
         </div>
 
-        <DatePresetBar
-          activePreset={datePreset}
-          onPresetChange={handleDatePresetChange}
-        />
-      </section>
-
-      {/* FILTERS */}
-      <div className="sticky top-20 z-20 space-y-3 rounded-2xl border border-slate-200 bg-white/95 p-3  backdrop-blur">
         <DashboardFilters
           filters={filters}
-          setFilters={next => {
-            setDatePreset("");
-            setFilters(next);
-          }}
-          leads={activeLeads}
+          setFilters={setFilters}
+          ownerOptions={ownerOptions}
           assignedOptions={assignedOptions}
+          destinationOptions={destinationOptions}
         />
 
         <ActiveFilterChips
           filters={filters}
+          ownerOptions={ownerOptions}
           assignedOptions={assignedOptions}
           quickView={quickView}
-          datePreset={datePreset}
           setFilters={setFilters}
           setQuickView={setQuickView}
-          setDatePreset={setDatePreset}
           resetAll={resetAll}
         />
       </div>
@@ -1403,6 +1407,12 @@ export default function AdminDashboardPage() {
         counts={actionCounts}
         quickView={quickView}
         setQuickView={setQuickView}
+      />
+
+      {/* OPEN QUERY TRAVEL MONTH */}
+      <OpenLeadTravelMonthBoard
+        leads={openTravelLeads}
+        teamLabel={openTravelTeamLabel}
       />
 
       {/* KPI ROW */}
@@ -1450,7 +1460,7 @@ export default function AdminDashboardPage() {
       />
 
       {/* SECONDARY INSIGHTS */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-6">
         <InsightCard
           icon={Activity}
           label="Open Leads"
@@ -1473,6 +1483,14 @@ export default function AdminDashboardPage() {
           value={metrics.lostCount}
           helper="Closed-lost leads in selected filters."
           tone="red"
+        />
+
+        <InsightCard
+          icon={XCircle}
+          label="Cancelled / Invalid"
+          value={metrics.cancelledInvalidCount}
+          helper="Closed without counting as a lost sales opportunity."
+          tone="gray"
         />
 
         <InsightCard
@@ -1563,13 +1581,18 @@ export default function AdminDashboardPage() {
                 </h2>
 
                 <p className="text-xs text-slate-500">
-                  Assigned leads, won leads, quotation value and follow-up
-                  health by team member.
+                  Owner credit and conversion are separated from current assignee
+                  workload and follow-up responsibility.
                 </p>
               </div>
             </div>
 
-            <TeamPerformanceTable leads={filteredLeads} />
+            <TeamPerformanceTable
+              leads={filteredLeads}
+              teamDirectory={teamDirectory}
+              visibleMembers={scopedMembers}
+              includeUnmapped={filters.team === "all"}
+            />
           </section>
 
           {/* DESTINATION ANALYTICS */}

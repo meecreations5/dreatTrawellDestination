@@ -11,6 +11,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { canAccessRecord } from "@/lib/rolePermissions";
 import { sendEmailViaBrevo } from "@/lib/sendEmailViaBrevo";
 import { sendWhatsAppWeb } from "@/lib/whatsapp";
 
@@ -152,6 +153,10 @@ Thank you,
      SEND
   ========================== */
   const send = async () => {
+    if (!canAccessRecord(user, "engagements.create", agent, "travel_agent")) {
+      alert("You do not have permission to create an engagement for this travel agent.");
+      return;
+    }
     if (!selectedTemplate && !form.body.trim()) {
       alert("Message required");
       return;

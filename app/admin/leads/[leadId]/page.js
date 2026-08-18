@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import {
   collection,
   doc,
@@ -36,6 +37,7 @@ import {
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { canAccessRecord } from "@/lib/rolePermissions";
 
 import Card from "@/components/ui/Card";
 import CardSkeleton from "@/components/ui/CardSkeleton";
@@ -43,28 +45,37 @@ import InitialAvatar from "@/components/ui/InitialAvatar";
 
 import LeadTimeline from "@/components/leads/LeadTimeline";
 import AddFollowUpModal from "@/components/leads/AddFollowUpModal";
-import QuotationEditor from "@/components/leads/QuotationEditor";
-import AssignLeadModal from "@/components/leads/AssignLeadModal";
-import ActivityViewerModal from "@/components/leads/ActivityViewerModal";
 import ClientReferenceCard from "@/components/leads/ClientReferenceCard";
 import LeadStageCloseModal from "@/components/leads/LeadStageCloseModal";
 
 import LeadStatusChip from "@/components/leads/LeadStatusChip";
 import LeadHealthChip from "@/components/leads/LeadHealthChip";
+import LeadPotentialControl, { LeadPotentialBadge } from "@/components/leads/LeadPotentialControl";
+import LeadTravelDatesControl from "@/components/leads/LeadTravelDatesControl";
 
-import LeadVendorsTab from "@/components/vendors/LeadVendorsTab";
-import VendorQuoteForm from "@/components/vendors/VendorQuoteForm";
-import VendorFollowUpModal from "@/components/vendors/VendorFollowUpModal";
-import VendorQuotesSidePanel from "@/components/vendors/VendorQuotesSidePanel";
 
-import CustomerQuotationTab from "@/components/leads/CustomerQuotationTab";
-import QuotationHistory from "@/components/leads/QuotationHistory";
-import LeadPaymentsTab from "@/components/payments/LeadPaymentsTab";
 
 import { reopenLead } from "@/lib/reopenLead";
 import { updateLeadStage } from "@/lib/updateLeadStage";
 import { getLeadHealth } from "@/lib/getLeadHealth";
 import { saveVendorQuote } from "@/lib/leadVendorQuotes";
+import {
+  LEAD_OWNERSHIP_MODEL,
+  getLeadOwner as getLeadOwnerIdentity
+} from "@/lib/leadOwnership";
+import { useLeadTravelAgent } from "@/hooks/useLeadTravelAgent";
+
+/* Heavy lead workspaces are loaded only when the related tab/modal is opened. */
+const QuotationEditor = dynamic(() => import("@/components/leads/QuotationEditor"), { ssr: false });
+const AssignLeadModal = dynamic(() => import("@/components/leads/AssignLeadModal"), { ssr: false });
+const ActivityViewerModal = dynamic(() => import("@/components/leads/ActivityViewerModal"), { ssr: false });
+const LeadVendorsTab = dynamic(() => import("@/components/vendors/LeadVendorsTab"), { ssr: false });
+const VendorQuoteForm = dynamic(() => import("@/components/vendors/VendorQuoteForm"), { ssr: false });
+const VendorFollowUpModal = dynamic(() => import("@/components/vendors/VendorFollowUpModal"), { ssr: false });
+const VendorQuotesSidePanel = dynamic(() => import("@/components/vendors/VendorQuotesSidePanel"), { ssr: false });
+const CustomerQuotationTab = dynamic(() => import("@/components/leads/CustomerQuotationTab"), { ssr: false });
+const QuotationHistory = dynamic(() => import("@/components/leads/QuotationHistory"), { ssr: false });
+const LeadPaymentsTab = dynamic(() => import("@/components/payments/LeadPaymentsTab"), { ssr: false });
 
 /* =========================
    HELPERS
@@ -489,8 +500,11 @@ const fallbackStageOptions = [
 const closingStages = [
   LEAD_STAGES?.CONVERTED,
   LEAD_STAGES?.LOST,
+  LEAD_STAGES?.CANCELLED_INVALID,
   "closed_won",
-  "closed_lost"
+  "closed_lost",
+  "closed_invalid",
+  "cancelled"
 ].filter(Boolean);
 
 const timelineFilters = [
@@ -531,6 +545,10 @@ export default function AdminLeadDetailPage() {
   const [quotationToEdit, setQuotationToEdit] = useState(null);
   const [assignedUser, setAssignedUser] = useState(null);
 
+  const linkedTravelAgent = useLeadTravelAgent(lead);
+  const leadOwner = useMemo(() => getLeadOwnerIdentity(lead || {}), [lead]);
+  const usesCreatorOwnerModel = lead?.ownershipModel === LEAD_OWNERSHIP_MODEL;
+
   const [stageSaving, setStageSaving] = useState(false);
   const [stageError, setStageError] = useState("");
   const [stageModal, setStageModal] = useState({
@@ -555,13 +573,13 @@ export default function AdminLeadDetailPage() {
       lead?.assignedToUid,
       lead?.assignedTo,
       lead?.assignedUserUid,
-      lead?.ownerUid,
+      !usesCreatorOwnerModel ? lead?.ownerUid : "",
       lead?.teamLeadUid,
       lead?.assignedToEmail,
       lead?.assignedUserEmail,
-      lead?.ownerEmail
+      !usesCreatorOwnerModel ? lead?.ownerEmail : ""
     );
-  }, [lead]);
+  }, [lead, usesCreatorOwnerModel]);
 
   /* =========================
      LOAD LEAD REALTIME
@@ -720,6 +738,7 @@ export default function AdminLeadDetailPage() {
   );
 
   const travelAgentName = getFirstValue(
+    linkedTravelAgent?.agencyName,
     lead?.travelAgentName,
     lead?.agentName,
     lead?.agencyName,
@@ -727,6 +746,7 @@ export default function AdminLeadDetailPage() {
   );
 
   const travelAgentId = getFirstValue(
+    linkedTravelAgent?.travelAgentId,
     lead?.travelAgentId,
     lead?.agentId,
     lead?.agencyId,
@@ -738,6 +758,20 @@ export default function AdminLeadDetailPage() {
   const travelAgentProfileHref = travelAgentId
     ? `/admin/travel-agents/${travelAgentId}`
     : "";
+
+  const linkedPrimarySpoc = Array.isArray(linkedTravelAgent?.agent?.spocs)
+    ? linkedTravelAgent.agent.spocs.find(item => item?.isPrimary) || linkedTravelAgent.agent.spocs[0] || null
+    : null;
+
+  const travelAgentSpocName = getFirstValue(linkedPrimarySpoc?.name, lead?.spoc?.name);
+  const travelAgentSpocEmail = getFirstValue(linkedPrimarySpoc?.email, lead?.spoc?.email);
+  const travelAgentSpocMobile = getFirstValue(
+    linkedPrimarySpoc?.mobile,
+    linkedPrimarySpoc?.phone,
+    linkedPrimarySpoc?.whatsapp,
+    lead?.spoc?.mobile
+  );
+
 
   const destinationName = getFirstValue(
     lead?.destinationName,
@@ -756,7 +790,7 @@ export default function AdminLeadDetailPage() {
     lead?.assignedUserName,
     lead?.assignedName,
     lead?.teamLeadName,
-    lead?.ownerName,
+    !usesCreatorOwnerModel ? lead?.ownerName : "",
     getUserName(assignedUser),
     isEmail(assignedLookupValue) ? titleFromEmail(assignedLookupValue) : ""
   );
@@ -764,7 +798,7 @@ export default function AdminLeadDetailPage() {
   const assignedEmail = getFirstValue(
     lead?.assignedToEmail,
     lead?.assignedUserEmail,
-    lead?.ownerEmail,
+    !usesCreatorOwnerModel ? lead?.ownerEmail : "",
     getUserEmail(assignedUser),
     isEmail(assignedLookupValue) ? assignedLookupValue : ""
   );
@@ -772,14 +806,14 @@ export default function AdminLeadDetailPage() {
   const assignedRole = getFirstValue(
     lead?.assignedToRole,
     lead?.assignedUserRole,
-    lead?.ownerRole,
+    !usesCreatorOwnerModel ? lead?.ownerRole : "",
     getUserRole(assignedUser)
   );
 
   const assignedUid = getFirstValue(
     lead?.assignedToUid,
     lead?.assignedUserUid,
-    lead?.ownerUid,
+    !usesCreatorOwnerModel ? lead?.ownerUid : "",
     lead?.teamLeadUid,
     !isEmail(assignedLookupValue) ? assignedLookupValue : ""
   );
@@ -789,7 +823,7 @@ export default function AdminLeadDetailPage() {
     assignedEmail ||
     assignedName ||
     lead?.assignedTo ||
-    lead?.ownerUid
+    (!usesCreatorOwnerModel && lead?.ownerUid)
   );
 
   const finalVendorCost = getNumericValue(
@@ -926,6 +960,7 @@ export default function AdminLeadDetailPage() {
         newStage: stageModal.newStage,
         remark: payload?.remark || "",
         lostReason: payload?.lostReason || "",
+        cancelReason: payload?.cancelReason || "",
         user
       });
 
@@ -1036,6 +1071,16 @@ export default function AdminLeadDetailPage() {
     );
   }
 
+  if (!canAccessRecord(user, "leads.view", lead, "lead")) {
+    return (
+      <main className="min-h-screen bg-gray-50 p-6">
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-800">
+          This lead is outside your permitted data scope.
+        </div>
+      </main>
+    );
+  }
+
   /* =========================
      UI
   ========================== */
@@ -1059,6 +1104,7 @@ export default function AdminLeadDetailPage() {
 
                   <LeadStatusChip stage={stage} />
                   <LeadHealthChip health={leadHealth} />
+                  <LeadPotentialBadge lead={lead} />
                 </div>
 
                 <h1 className="mt-4 text-2xl font-bold tracking-tight sm:text-3xl">
@@ -1074,7 +1120,7 @@ export default function AdminLeadDetailPage() {
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 xl:min-w-[260px] xl:grid-cols-1">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:min-w-[300px] xl:grid-cols-1">
                 <button
                   type="button"
                   disabled={isClosed}
@@ -1101,6 +1147,13 @@ export default function AdminLeadDetailPage() {
                 >
                   Assign Team
                 </button>
+
+                <Link
+                  href={`/admin/meetings?agentId=${encodeURIComponent(lead.travelAgentId || lead.agentId || "")}&leadId=${encodeURIComponent(lead.id || "")}`}
+                  className="rounded-2xl bg-emerald-500 px-4 py-3 text-center text-sm font-semibold text-white hover:bg-emerald-600"
+                >
+                  Schedule Agent Meeting
+                </Link>
               </div>
             </div>
           </div>
@@ -1149,6 +1202,10 @@ export default function AdminLeadDetailPage() {
             />
           </div>
         </section>
+
+        <LeadPotentialControl lead={lead} user={user} disabled={isClosed} />
+
+          <LeadTravelDatesControl lead={lead} user={user} disabled={isClosed} />
 
         {/* ================= WORKSPACE ================= */}
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_390px]">
@@ -1393,52 +1450,86 @@ export default function AdminLeadDetailPage() {
 
             <Card className="space-y-4">
               <AdminPanelTitle
-                label="Ownership"
-                title="Assigned Team Member"
-                description="Current owner responsible for this lead."
+                label="Responsibility"
+                title="Lead Owner & Assignee"
+                description="Owner is the creator and never changes. Assignee is the current person responsible for follow-up."
               />
 
-              {assignedName || assignedEmail || assignedUid ? (
-                <div className="flex items-center gap-3 rounded-2xl border border-gray-100 bg-gray-50 p-3">
-                  <InitialAvatar
-                    name={assignedName || assignedEmail || assignedUid || "User"}
-                  />
-
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-gray-900">
-                      {assignedName || "Unassigned"}
+              <div className="grid gap-3">
+                <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-blue-700">
+                      Lead Owner
                     </p>
+                    <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                      Permanent
+                    </span>
+                  </div>
 
-                    {assignedRole && (
-                      <p className="truncate text-xs text-gray-500">
-                        {assignedRole}
+                  <div className="flex items-center gap-3">
+                    <InitialAvatar
+                      name={leadOwner.name || leadOwner.email || leadOwner.uid || "Owner"}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-gray-900">
+                        {leadOwner.name || "Creator not available"}
                       </p>
-                    )}
-
-                    {assignedEmail && (
-                      <p className="mt-0.5 truncate text-xs text-gray-500">
-                        {assignedEmail}
+                      {leadOwner.email && (
+                        <p className="mt-0.5 truncate text-xs text-gray-500">
+                          {leadOwner.email}
+                        </p>
+                      )}
+                      <p className="mt-1 text-[11px] text-blue-700">
+                        Lead credit and conversion attribution stay with this owner.
                       </p>
-                    )}
-
-                    {!assignedEmail && assignedUid && (
-                      <p className="mt-0.5 truncate text-xs text-gray-500">
-                        ID: {assignedUid}
-                      </p>
-                    )}
+                    </div>
                   </div>
                 </div>
-              ) : (
-                <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-4">
-                  <p className="text-sm font-semibold text-gray-800">
-                    Not assigned yet
-                  </p>
 
-                  <p className="mt-1 text-xs text-gray-500">
-                    Assign this lead to a team member for ownership and follow-up.
-                  </p>
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-600">
+                      Current Assignee
+                    </p>
+                    <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-gray-600">
+                      Changeable
+                    </span>
+                  </div>
+
+                  {assignedName || assignedEmail || assignedUid ? (
+                    <div className="flex items-center gap-3">
+                      <InitialAvatar
+                        name={assignedName || assignedEmail || assignedUid || "User"}
+                      />
+
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-gray-900">
+                          {assignedName || "Unassigned"}
+                        </p>
+                        {assignedRole && (
+                          <p className="truncate text-xs text-gray-500">
+                            {assignedRole}
+                          </p>
+                        )}
+                        {assignedEmail && (
+                          <p className="mt-0.5 truncate text-xs text-gray-500">
+                            {assignedEmail}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <p className="text-sm font-semibold text-gray-800">
+                        Not assigned yet
+                      </p>
+                      <p className="mt-1 text-xs text-gray-500">
+                        Assign a team member for follow-up. Ownership will remain unchanged.
+                      </p>
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
 
               {!isClosed && (
                 <button
@@ -1446,7 +1537,7 @@ export default function AdminLeadDetailPage() {
                   onClick={() => setAssignOpen(true)}
                   className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-800 hover:bg-gray-50"
                 >
-                  Change Assignment
+                  Change Assignee
                 </button>
               )}
             </Card>
@@ -1498,29 +1589,29 @@ export default function AdminLeadDetailPage() {
                     href={travelAgentProfileHref}
                     className="text-sm font-semibold text-blue-700 hover:underline"
                   >
-                    {travelAgentName || lead.spoc?.name || "View Travel Agent"}
+                    {travelAgentName || travelAgentSpocName || "View Travel Agent"}
                   </Link>
                 ) : (
                   <p className="text-sm font-semibold text-gray-900">
-                    {travelAgentName || lead.spoc?.name || "—"}
+                    {travelAgentName || travelAgentSpocName || "—"}
                   </p>
                 )}
 
-                {lead.spoc?.name && travelAgentName && (
+                {travelAgentSpocName && travelAgentName && (
                   <p className="mt-1 text-xs text-gray-500">
-                    SPOC: {lead.spoc.name}
+                    SPOC: {travelAgentSpocName}
                   </p>
                 )}
 
-                {lead.spoc?.email && (
+                {travelAgentSpocEmail && (
                   <p className="mt-1 truncate text-xs text-gray-500">
-                    {lead.spoc.email}
+                    {travelAgentSpocEmail}
                   </p>
                 )}
 
-                {lead.spoc?.mobile && (
+                {travelAgentSpocMobile && (
                   <p className="mt-1 text-xs text-gray-500">
-                    {lead.spoc.mobile}
+                    {travelAgentSpocMobile}
                   </p>
                 )}
 
@@ -1639,26 +1730,30 @@ export default function AdminLeadDetailPage() {
         />
       )}
 
-      <VendorQuotesSidePanel
-        open={Boolean(activeVendorQuotesRequest)}
-        lead={lead}
-        leadId={lead.id}
-        vendorRequest={activeVendorQuotesRequest}
-        onClose={() => setActiveVendorQuotesRequest(null)}
-        onSelected={() => {
+      {activeVendorQuotesRequest && (
+        <VendorQuotesSidePanel
+          open={true}
+          lead={lead}
+          leadId={lead.id}
+          vendorRequest={activeVendorQuotesRequest}
+          onClose={() => setActiveVendorQuotesRequest(null)}
+          onSelected={() => {
           // Keep panel open after final quote selection.
           // Firestore realtime refresh will update selected vendor state.
-        }}
-      />
+          }}
+        />
+      )}
 
-      <VendorFollowUpModal
-        open={Boolean(activeVendorFollowUpRequest)}
-        lead={lead}
-        leadId={lead.id}
-        vendorRequest={activeVendorFollowUpRequest}
-        onClose={() => setActiveVendorFollowUpRequest(null)}
-        onSaved={() => setActiveVendorFollowUpRequest(null)}
-      />
+      {activeVendorFollowUpRequest && (
+        <VendorFollowUpModal
+          open={true}
+          lead={lead}
+          leadId={lead.id}
+          vendorRequest={activeVendorFollowUpRequest}
+          onClose={() => setActiveVendorFollowUpRequest(null)}
+          onSaved={() => setActiveVendorFollowUpRequest(null)}
+        />
+      )}
     </main>
   );
 }

@@ -518,6 +518,8 @@ export default function CreateLeadModal({ engagement, onClose }) {
 
   const [assignedUid, setAssignedUid] = useState("");
   const [destinationId, setDestinationId] = useState("");
+  const [travelStartDate, setTravelStartDate] = useState("");
+  const [travelEndDate, setTravelEndDate] = useState("");
 
   const [clientReferenceSource, setClientReferenceSource] = useState("");
   const [clientReferenceHtml, setClientReferenceHtml] = useState("");
@@ -608,6 +610,8 @@ export default function CreateLeadModal({ engagement, onClose }) {
     setClientReferenceHtml(initialHtml || "");
     setReferenceFiles([]);
     setDestinationId("");
+    setTravelStartDate(engagement?.travelStartDate || engagement?.travelDate || "");
+    setTravelEndDate(engagement?.travelEndDate || engagement?.returnDate || "");
     setFormError("");
 
     setTimeout(() => {
@@ -763,6 +767,11 @@ export default function CreateLeadModal({ engagement, onClose }) {
       return;
     }
 
+    if (travelStartDate && travelEndDate && travelEndDate < travelStartDate) {
+      setFormError("Travel end date cannot be before the start date.");
+      return;
+    }
+
     setSaving(true);
 
     try {
@@ -832,7 +841,10 @@ export default function CreateLeadModal({ engagement, onClose }) {
           email: user.email || "",
           name: getDisplayName(user)
         },
-        clientReference
+        clientReference,
+        travelStartDate,
+        travelEndDate,
+        travelMonth: travelStartDate ? travelStartDate.slice(0, 7) : ""
       });
 
       onClose?.();
@@ -961,6 +973,30 @@ export default function CreateLeadModal({ engagement, onClose }) {
                     No active destinations found.
                   </p>
                 )}
+              </div>
+
+              {/* TRAVEL DATE */}
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <label className="space-y-1.5 text-xs font-medium text-gray-600">
+                  <span>Travel Start Date</span>
+                  <input
+                    type="date"
+                    value={travelStartDate}
+                    onChange={event => { setTravelStartDate(event.target.value); setFormError(""); }}
+                    className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                  />
+                </label>
+
+                <label className="space-y-1.5 text-xs font-medium text-gray-600">
+                  <span>Travel End Date <span className="font-normal text-gray-400">(optional)</span></span>
+                  <input
+                    type="date"
+                    min={travelStartDate || undefined}
+                    value={travelEndDate}
+                    onChange={event => { setTravelEndDate(event.target.value); setFormError(""); }}
+                    className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                  />
+                </label>
               </div>
 
               {/* ASSIGN TO */}

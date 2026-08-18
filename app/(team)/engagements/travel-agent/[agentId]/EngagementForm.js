@@ -30,6 +30,7 @@ import {
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { canAccessRecord } from "@/lib/rolePermissions";
 import EngagementChip from "@/components/engagement/EngagementChip";
 import AssetPickerModal from "@/components/documents/AssetPickerModal";
 
@@ -39,9 +40,9 @@ import {
   getOutcomeLabel
 } from "@/lib/engagementIntentMap";
 
-import {
-  syncAgentCadenceAfterEngagement
-} from "@/lib/engagementTaskService";
+import { syncAgentCadenceAfterEngagement } from "@/lib/engagementTaskService";
+import { outcomeToTravelAgentStatus } from "@/lib/travelAgentStatus";
+import { syncTravelAgentStatusFromEngagement } from "@/lib/syncTravelAgentStatusFromEngagement";
 
 /* =========================
    OPTIONS
@@ -337,10 +338,15 @@ export default function EngagementForm({
     isMeeting
   ]);
 
+  const travelAgentStatusFromOutcome = outcomeToTravelAgentStatus(
+    form?.outcomeCode
+  );
+
   const followUpRequired =
-    form?.outcomeCode === "followup_required" ||
-    Boolean(form?.scheduledAt) ||
-    Boolean(smartIntent?.followUpRecommended);
+    !travelAgentStatusFromOutcome &&
+    (form?.outcomeCode === "followup_required" ||
+      Boolean(form?.scheduledAt) ||
+      Boolean(smartIntent?.followUpRecommended));
 
   const hasValidEmail = Boolean(selectedSpoc?.email);
   const hasValidMobile = Boolean(selectedSpoc?.mobile);
@@ -456,6 +462,10 @@ export default function EngagementForm({
   };
 
   const submit = async () => {
+    if (!canAccessRecord(user, "engagements.create", agent, "travel_agent")) {
+      alert("You do not have permission to create an engagement for this travel agent.");
+      return;
+    }
     if (!form.message.trim()) {
       alert(`${summaryLabel} is required`);
       return;
@@ -518,9 +528,11 @@ export default function EngagementForm({
       const meetingAtDate =
         isMeeting && form.meetingAt ? new Date(form.meetingAt) : null;
 
-      const scheduledAtDate = form.scheduledAt
-        ? new Date(form.scheduledAt)
-        : null;
+      const scheduledAtDate = travelAgentStatusFromOutcome
+        ? null
+        : form.scheduledAt
+          ? new Date(form.scheduledAt)
+          : null;
 
       const subject = isMeeting
         ? `${getMeetingModeLabel(form.meetingMode)} meeting with ${agent.agencyName || agent.name || "Travel Agent"
@@ -537,7 +549,9 @@ export default function EngagementForm({
         outcomeCode: form.outcomeCode,
         hasDestination: Boolean(destinationRefId),
         hasSharedAssets: Boolean(form.sharedAssets?.length),
-        scheduledAt: form.scheduledAt,
+        scheduledAt: travelAgentStatusFromOutcome
+          ? ""
+          : form.scheduledAt,
         isMeeting
       });
 
@@ -636,9 +650,11 @@ export default function EngagementForm({
           Boolean(scheduledAtDate),
 
         followUpSource:
-          scheduledAtDate
-            ? "manual_engagement_form"
-            : "automatic_cadence",
+          travelAgentStatusFromOutcome
+            ? "none_agent_closed"
+            : scheduledAtDate
+              ? "manual_engagement_form"
+              : "automatic_cadence",
 
         status,
 
@@ -720,10 +736,27 @@ export default function EngagementForm({
       };
 
       let cadenceResult = null;
+      const travelAgentStatus = outcomeToTravelAgentStatus(form.outcomeCode);
+      let statusSyncResult = null;
+
+      if (travelAgentStatus) {
+        try {
+          statusSyncResult = await syncTravelAgentStatusFromEngagement({
+            agentId: agent.id,
+            engagementId: ref.id,
+            outcomeCode: form.outcomeCode,
+            outcomeLabel: getOutcomeLabel(form.outcomeCode),
+            user
+          });
+        } catch (statusError) {
+          console.error("Engagement saved, but agent status update failed:", statusError);
+        }
+      }
 
       try {
-        cadenceResult =
-          await syncAgentCadenceAfterEngagement({
+        if (!travelAgentStatus) {
+          cadenceResult =
+            await syncAgentCadenceAfterEngagement({
             agent,
 
             engagement: savedEngagement,
@@ -740,6 +773,7 @@ export default function EngagementForm({
 
             now: new Date()
           });
+        }
       } catch (cadenceError) {
         console.error(
           "Engagement saved, but cadence synchronization failed:",
@@ -748,9 +782,11 @@ export default function EngagementForm({
       }
 
       alert(
-        cadenceResult?.plan
-          ? "Engagement saved and next follow-up created."
-          : "Engagement saved."
+        statusSyncResult?.updated
+          ? `Engagement saved. Travel Agent status updated to ${statusSyncResult.statusLabel}. Pending follow-ups were stopped.`
+          : cadenceResult?.plan
+            ? "Engagement saved and next follow-up created."
+            : "Engagement saved."
       );
 
       onSaved?.({
@@ -1223,12 +1259,24 @@ export default function EngagementForm({
             <select
               className="mui-input"
               value={form.outcomeCode}
-              onChange={e =>
+              onChange={e => {
+                const nextOutcomeCode = e.target.value;
+                const syncsTravelAgentStatus = Boolean(
+                  outcomeToTravelAgentStatus(nextOutcomeCode)
+                );
+
+                if (syncsTravelAgentStatus) {
+                  setShowAdvancedFollowUp(false);
+                }
+
                 setForm({
                   ...form,
-                  outcomeCode: e.target.value
-                })
-              }
+                  outcomeCode: nextOutcomeCode,
+                  scheduledAt: syncsTravelAgentStatus
+                    ? ""
+                    : form.scheduledAt
+                });
+              }}
             >
               <option value="">Select Outcome</option>
 
@@ -1238,6 +1286,12 @@ export default function EngagementForm({
                 </option>
               ))}
             </select>
+
+            {travelAgentStatusFromOutcome ? (
+              <p className="mt-2 rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 text-[11px] leading-4 text-rose-700">
+                This outcome will also update the Travel Agent master status and stop pending follow-ups/cadence for this agent.
+              </p>
+            ) : null}
           </Field>
 
           {smartIntent && form.outcomeCode && (
@@ -1248,28 +1302,31 @@ export default function EngagementForm({
             />
           )}
 
-          <Field label="Schedule Follow-up">
-            <input
-              type="datetime-local"
-              className="mui-input"
-              value={form.scheduledAt}
-              onChange={e =>
-                setForm({
-                  ...form,
-                  scheduledAt: e.target.value
-                })
-              }
-            />
+          {!travelAgentStatusFromOutcome ? (
+            <Field label="Schedule Follow-up">
+              <input
+                type="datetime-local"
+                className="mui-input"
+                value={form.scheduledAt}
+                onChange={e =>
+                  setForm({
+                    ...form,
+                    scheduledAt: e.target.value
+                  })
+                }
+              />
 
-            {form.outcomeCode === "followup_required" &&
-              !form.scheduledAt && (
-                <p className="text-xs text-orange-600 mt-1">
-                  Follow-up date is required for this outcome.
-                </p>
-              )}
-          </Field>
+              {form.outcomeCode === "followup_required" &&
+                !form.scheduledAt && (
+                  <p className="text-xs text-orange-600 mt-1">
+                    Follow-up date is required for this outcome.
+                  </p>
+                )}
+            </Field>
+          ) : null}
 
-          {(followUpRequired || showAdvancedFollowUp) && (
+          {!travelAgentStatusFromOutcome &&
+            (followUpRequired || showAdvancedFollowUp) && (
             <Field label="Assign Follow-up To">
               <select
                 className="mui-input"

@@ -3,10 +3,23 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { doc, getDoc } from "firebase/firestore";
+import {
+  doc,
+  getDoc,
+  serverTimestamp,
+  updateDoc
+} from "firebase/firestore";
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { canAccessRecord } from "@/lib/rolePermissions";
+import { cancelPendingAgentTasks } from "@/lib/engagementTaskService";
+import {
+  TRAVEL_AGENT_STATUS_OPTIONS,
+  getTravelAgentStatusMeta,
+  normalizeTravelAgentStatus
+} from "@/lib/travelAgentStatus";
+import { TRAVEL_AGENT_POTENTIAL_OPTIONS, getTravelAgentPotentialMeta, normalizeTravelAgentPotential } from "@/lib/travelAgentPotential";
 
 import {
   ArrowLeft,
@@ -26,7 +39,8 @@ import {
   ShieldCheck,
   UserRound,
   Users,
-  AlertTriangle
+  AlertTriangle,
+  CalendarClock
 } from "lucide-react";
 
 import TravelChip from "@/components/ui/TravelChip";
@@ -131,6 +145,7 @@ function getLocationLabel(agent) {
   const address = agent?.address || {};
 
   return [
+    address.subArea || address.area || agent?.subArea || agent?.area,
     address.city || agent?.city,
     address.state || agent?.state,
     address.country || agent?.country
@@ -145,6 +160,7 @@ function formatAddress(address) {
   return [
     address.line1,
     address.line2,
+    address.subArea || address.area,
     [address.city, address.state].filter(Boolean).join(", "),
     [address.country, address.pincode].filter(Boolean).join(" ")
   ]
@@ -158,6 +174,7 @@ function getMapQuery(address) {
   return [
     address.line1,
     address.line2,
+    address.subArea || address.area,
     address.city,
     address.state,
     address.country,
@@ -637,6 +654,10 @@ export default function TravelAgentDetailPage() {
   const [agent, setAgent] = useState(null);
   const [loadingAgent, setLoadingAgent] = useState(true);
   const [profileCopied, setProfileCopied] = useState(false);
+  const [statusUpdating, setStatusUpdating] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
+  const [potentialUpdating, setPotentialUpdating] = useState(false);
+  const [potentialMessage, setPotentialMessage] = useState("");
 
   /* ================= LOAD ================= */
   useEffect(() => {
@@ -698,6 +719,95 @@ export default function TravelAgentDetailPage() {
 
   if (!agent) return null;
 
+  if (!canAccessRecord(user, "travel_agents.view", agent, "travel_agent")) {
+    return (
+      <main className="min-h-screen bg-gray-50 p-6">
+        <div className="mx-auto max-w-7xl rounded-xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-800">
+          This travel agent is outside your permitted data scope.
+        </div>
+      </main>
+    );
+  }
+
+  async function handleStatusChange(nextStatus) {
+    if (!agent?.id || !user?.uid || statusUpdating) return;
+    if (!canAccessRecord(user, "travel_agents.change_status", agent, "travel_agent")) {
+      setStatusMessage("You do not have permission to change this travel agent status.");
+      return;
+    }
+
+    const meta = getTravelAgentStatusMeta(nextStatus);
+
+    setStatusUpdating(true);
+    setStatusMessage("");
+
+    try {
+      await updateDoc(doc(db, "travelAgents", agent.id), {
+        status: nextStatus,
+        active: nextStatus === "active",
+        statusReason: meta.label,
+        statusUpdatedAt: serverTimestamp(),
+        statusUpdatedByUid: user.uid,
+        statusUpdatedByName:
+          user.name || user.displayName || user.email || "Team member",
+        updatedAt: serverTimestamp()
+      });
+
+      if (meta.contactable === false) {
+        await cancelPendingAgentTasks({
+          agentId: agent.id,
+          user,
+          reason: `Travel agent status changed to ${meta.label}`
+        });
+      }
+
+      setAgent(current => ({
+        ...current,
+        status: nextStatus,
+        active: nextStatus === "active"
+      }));
+
+      setStatusMessage(
+        meta.contactable === false
+          ? `${meta.label} saved. Pending follow-up tasks were cancelled.`
+          : `${meta.label} saved.`
+      );
+    } catch (error) {
+      console.error("Travel agent status update error:", error);
+      setStatusMessage("Unable to update status. Please try again.");
+    } finally {
+      setStatusUpdating(false);
+    }
+  }
+
+  async function handlePotentialChange(nextPotential) {
+    if (!agent?.id || !user?.uid || potentialUpdating) return;
+    if (!canAccessRecord(user, "travel_agents.change_potential", agent, "travel_agent")) {
+      setPotentialMessage("You do not have permission to change this travel agent potential.");
+      return;
+    }
+    const meta = getTravelAgentPotentialMeta(nextPotential);
+    setPotentialUpdating(true);
+    setPotentialMessage("");
+    try {
+      await updateDoc(doc(db, "travelAgents", agent.id), {
+        potentialLevel: nextPotential,
+        travelAgentPotential: nextPotential,
+        potentialUpdatedAt: serverTimestamp(),
+        potentialUpdatedByUid: user.uid,
+        potentialUpdatedByName: user.name || user.displayName || user.email || "Team member",
+        updatedAt: serverTimestamp()
+      });
+      setAgent(current => ({ ...current, potentialLevel: nextPotential, travelAgentPotential: nextPotential }));
+      setPotentialMessage(`${meta.label} saved.`);
+    } catch (error) {
+      console.error("Travel agent potential update error:", error);
+      setPotentialMessage("Unable to update potential. Please try again.");
+    } finally {
+      setPotentialUpdating(false);
+    }
+  }
+
   /* ================= DERIVED ================= */
   const destinations = getDestinations(agent);
   const primarySpoc = getPrimarySpoc(agent);
@@ -711,6 +821,16 @@ export default function TravelAgentDetailPage() {
   const mapQuery = getMapQuery(agent.address);
   const websiteHref = getWebsiteHref(agent.website);
   const completion = getProfileCompletion(agent);
+  const normalizedAgentStatus = normalizeTravelAgentStatus(
+    agent.status,
+    agent.active
+  );
+  const agentStatusMeta = getTravelAgentStatusMeta(
+    normalizedAgentStatus,
+    agent.active
+  );
+  const normalizedAgentPotential = normalizeTravelAgentPotential(agent);
+  const agentPotentialMeta = getTravelAgentPotentialMeta(agent);
 
   const allSpocs = Array.isArray(agent.spocs) ? agent.spocs : [];
   const profilePath = `/travel-agents/${agentId}`;
@@ -762,11 +882,17 @@ export default function TravelAgentDetailPage() {
                 </span>
               )}
 
-              {agent.status && (
-                <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white">
-                  {formatLabel(agent.status)}
-                </span>
-              )}
+              <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                agentStatusMeta.tone === "green"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : agentStatusMeta.tone === "amber"
+                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                    : agentStatusMeta.tone === "red"
+                      ? "border-rose-200 bg-rose-50 text-rose-700"
+                      : "border-slate-200 bg-slate-100 text-slate-700"
+              }`}>
+                Status: {agentStatusMeta.label}
+              </span>
 
               {agent.kycStatus && (
                 <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white">
@@ -811,7 +937,7 @@ export default function TravelAgentDetailPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 xl:w-[560px]">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:w-[720px] xl:grid-cols-4">
             <Link
               href={`/engagements/travel-agent/${agentId}`}
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-blue-700  hover:bg-blue-50"
@@ -828,6 +954,14 @@ export default function TravelAgentDetailPage() {
               Leads
             </Link>
 
+            <Link
+              href={`/meetings?agentId=${agentId}`}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/25 bg-white/10 px-4 py-2.5 text-sm font-medium text-white hover:bg-white/20"
+            >
+              <CalendarClock size={16} />
+              Schedule Meeting
+            </Link>
+
             <button
               type="button"
               onClick={copyProfileLink}
@@ -840,8 +974,55 @@ export default function TravelAgentDetailPage() {
         </div>
       </section>
 
+      {/* OPERATIONAL STATUS - PROMINENT FOR DAILY USE */}
+      <section className={`rounded-2xl border p-4 ${
+        agentStatusMeta.tone === "green"
+          ? "border-emerald-200 bg-emerald-50"
+          : agentStatusMeta.tone === "amber"
+            ? "border-amber-200 bg-amber-50"
+            : agentStatusMeta.tone === "red"
+              ? "border-rose-200 bg-rose-50"
+              : "border-slate-200 bg-slate-50"
+      }`}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <AlertTriangle size={16} className="text-gray-600" />
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Travel Agent Status
+              </p>
+            </div>
+            <p className="mt-1 text-lg font-semibold text-gray-950">
+              {agentStatusMeta.label}
+            </p>
+            <p className="mt-1 text-xs leading-5 text-gray-600">
+              Use this status for Invalid Number, Business Shut Down, Not Reachable,
+              Wrong Details and other operational outcomes. Non-contactable statuses
+              stop pending follow-up tasks.
+            </p>
+          </div>
+
+          <div className="grid w-full gap-3 lg:w-[590px] sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-gray-600">Change Status</label>
+              <select value={normalizedAgentStatus} onChange={event => handleStatusChange(event.target.value)} disabled={statusUpdating} className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-semibold text-gray-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-60">
+                {TRAVEL_AGENT_STATUS_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+              {statusMessage ? <p className="mt-1 text-[11px] font-medium text-gray-600">{statusMessage}</p> : null}
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-gray-600">Commercial Potential</label>
+              <select value={normalizedAgentPotential} onChange={event => handlePotentialChange(event.target.value)} disabled={potentialUpdating} className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-semibold text-gray-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-60">
+                {TRAVEL_AGENT_POTENTIAL_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+              {potentialMessage ? <p className="mt-1 text-[11px] font-medium text-gray-600">{potentialMessage}</p> : <p className="mt-1 text-[11px] text-gray-500">A-D potential is separate from operational status.</p>}
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* SUMMARY CARDS */}
-      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <SummaryCard
           icon={BadgeCheck}
           label="Profile Completion"
@@ -859,6 +1040,14 @@ export default function TravelAgentDetailPage() {
           label="Agency Type"
           value={formatLabel(agent.agencyType)}
           tone="blue"
+        />
+
+        <SummaryCard
+          icon={Briefcase}
+          label="Agent Potential"
+          value={agentPotentialMeta.label}
+          helper="Commercial relationship priority"
+          tone={agentPotentialMeta.tone === "emerald" ? "emerald" : agentPotentialMeta.tone === "amber" ? "amber" : "blue"}
         />
 
         <SummaryCard
@@ -902,6 +1091,11 @@ export default function TravelAgentDetailPage() {
                 <InfoRow
                   label="Relationship Stage"
                   value={formatLabel(agent.relationshipStage)}
+                />
+
+                <InfoRow
+                  label="Commercial Potential"
+                  value={agentPotentialMeta.label}
                 />
 
                 <InfoRow label="Team" value={agent.team} />
@@ -1085,9 +1279,9 @@ export default function TravelAgentDetailPage() {
                 </span>
 
                 <TravelChip
-                  label={formatLabel(agent.status || "Active")}
+                  label={agentStatusMeta.label}
                   icon="date"
-                  color={getStatusColor(agent.status || "active")}
+                  color={getStatusColor(normalizedAgentStatus)}
                 />
               </div>
 

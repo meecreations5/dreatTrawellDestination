@@ -39,8 +39,17 @@ import {
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import AdminGuard from "@/components/AdminGuard";
+import { canAccess, canAccessRecord } from "@/lib/rolePermissions";
 import { generateTravelAgentCode } from "@/lib/generateTravelAgentCode";
 import { checkDuplicateAgent, normalize } from "@/lib/checkDuplicateAgent";
+import {
+  TRAVEL_AGENT_STATUS_OPTIONS,
+  getTravelAgentStatusMeta
+} from "@/lib/travelAgentStatus";
+import {
+  TRAVEL_AGENT_POTENTIAL_OPTIONS,
+  normalizeTravelAgentPotential
+} from "@/lib/travelAgentPotential";
 
 import {
   getEngagementSegmentOptions,
@@ -75,6 +84,7 @@ const EMPTY_FORM = {
   categoryReason: "",
   partnerSegment: "New Partner",
   businessPotential: "Medium",
+  potentialLevel: "unassessed",
   priorityLevel: "Medium",
   servicePriority: "Standard",
   responseSlaHours: 24,
@@ -98,6 +108,7 @@ const EMPTY_FORM = {
   address: {
     line1: "",
     line2: "",
+    subArea: "",
     pincode: "",
     city: "",
     state: "",
@@ -325,11 +336,7 @@ const FOLLOW_UP_FREQUENCIES = [
 
 const ENGAGEMENT_SEGMENT_OPTIONS = getEngagementSegmentOptions();
 
-const STATUS_OPTIONS = [
-  { value: "active", label: "Active" },
-  { value: "inactive", label: "Inactive" },
-  { value: "blacklisted", label: "Blacklisted" }
-];
+const STATUS_OPTIONS = TRAVEL_AGENT_STATUS_OPTIONS;
 
 /* =========================
    HELPERS
@@ -500,6 +507,8 @@ function normalizeTravelAgentForm(data = {}) {
         : String(data.responseSlaHours),
 
     internalRating: data.internalRating || 3,
+
+    potentialLevel: normalizeTravelAgentPotential(data),
 
     engagementSegment:
       data.engagementSegment || inferredEngagementSegment,
@@ -672,6 +681,7 @@ function buildTravelAgentPayload(form) {
     usp: cleanString(form.usp),
     logoUrl: cleanString(form.logoUrl),
     status: cleanString(form.status),
+    active: cleanString(form.status) === "active",
 
     lifecycleStatus: cleanString(form.lifecycleStatus),
     approvalStatus: cleanString(form.approvalStatus),
@@ -680,6 +690,7 @@ function buildTravelAgentPayload(form) {
     categoryReason: cleanString(form.categoryReason),
     partnerSegment: cleanString(form.partnerSegment),
     businessPotential: cleanString(form.businessPotential),
+    potentialLevel: cleanString(form.potentialLevel || "unassessed"),
     priorityLevel: cleanString(form.priorityLevel),
     servicePriority: cleanString(form.servicePriority),
     responseSlaHours: numberOrNull(form.responseSlaHours),
@@ -703,6 +714,7 @@ function buildTravelAgentPayload(form) {
     address: {
       line1: cleanString(form.address?.line1),
       line2: cleanString(form.address?.line2),
+      subArea: cleanString(form.address?.subArea),
       pincode: cleanString(form.address?.pincode),
       city: cleanString(form.address?.city),
       state: cleanString(form.address?.state),
@@ -889,6 +901,7 @@ export default function TravelAgentForm({ mode = "add", agentId }) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [accessDenied, setAccessDenied] = useState(false);
 
   const [allDestinations, setAllDestinations] = useState([]);
   const [destinationsLoading, setDestinationsLoading] = useState(true);
@@ -932,7 +945,16 @@ export default function TravelAgentForm({ mode = "add", agentId }) {
     let active = true;
 
     async function loadAgent() {
+      if (!user) return;
+
+      setAccessDenied(false);
+
       if (!isEdit) {
+        if (!canAccess(user, "travel_agents.create")) {
+          setAccessDenied(true);
+          setLoading(false);
+          return;
+        }
         try {
           const draft = localStorage.getItem(DRAFT_KEY);
           if (draft) setDraftAvailable(true);
@@ -964,6 +986,12 @@ export default function TravelAgentForm({ mode = "add", agentId }) {
         if (!active) return;
 
         const data = snap.data();
+
+        if (!canAccessRecord(user, "travel_agents.view", { id: snap.id, ...data }, "travel_agent")) {
+          setAccessDenied(true);
+          return;
+        }
+
         const nextForm = normalizeTravelAgentForm(data);
 
         setForm(nextForm);
@@ -989,7 +1017,7 @@ export default function TravelAgentForm({ mode = "add", agentId }) {
     return () => {
       active = false;
     };
-  }, [isEdit, agentId, router]);
+  }, [isEdit, agentId, router, user?.uid]);
 
   /* =========================
      AUTO DRAFT + DIRTY CHECK
@@ -1387,6 +1415,23 @@ export default function TravelAgentForm({ mode = "add", agentId }) {
       return;
     }
 
+    if (!isEdit && !canAccess(user, "travel_agents.create")) {
+      alert("You do not have permission to create travel agents.");
+      return;
+    }
+
+    if (isEdit) {
+      const currentAgentSnap = await getDoc(doc(db, "travelAgents", agentId));
+      const currentAgent = currentAgentSnap.exists()
+        ? { id: currentAgentSnap.id, ...currentAgentSnap.data() }
+        : null;
+
+      if (!currentAgent || !canAccessRecord(user, "travel_agents.edit", currentAgent, "travel_agent")) {
+        alert("You do not have permission to edit this travel agent.");
+        return;
+      }
+    }
+
     try {
       setSubmitting(true);
 
@@ -1500,8 +1545,24 @@ export default function TravelAgentForm({ mode = "add", agentId }) {
         agentCode: savedAgentCode
       };
 
+      const savedStatusMeta = getTravelAgentStatusMeta(payload.status);
+
       try {
-        if (payload.cadenceAutoManaged) {
+        if (savedStatusMeta.contactable === false) {
+          await cancelPendingAgentTasks({
+            agentId: savedAgentId,
+            user,
+            reason: `Travel agent status changed to ${savedStatusMeta.label}`
+          });
+
+          await updateDoc(doc(db, "travelAgents", savedAgentId), {
+            nextEngagementAt: null,
+            nextEngagementTaskId: "",
+            newAgentSequenceActive: false,
+            cadenceUpdatedAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          });
+        } else if (payload.cadenceAutoManaged) {
           if (shouldRefreshCadence) {
             await initializeAgentCadence({
               agent: savedAgent,
@@ -1579,9 +1640,21 @@ export default function TravelAgentForm({ mode = "add", agentId }) {
   /* =========================
      LOADING
   ========================= */
+  if (accessDenied) {
+    return (
+      <AdminGuard permission={isEdit ? "travel_agents.view" : "travel_agents.create"}>
+        <main className="p-6">
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-800">
+            You do not have access to this travel agent record.
+          </div>
+        </main>
+      </AdminGuard>
+    );
+  }
+
   if (loading) {
     return (
-      <AdminGuard>
+      <AdminGuard permission={isEdit ? "travel_agents.view" : "travel_agents.create"}>
         <main className="min-h-screen bg-slate-50 p-6">
           <div className="mx-auto max-w-7xl space-y-4">
             <SkeletonCard />
@@ -1594,7 +1667,7 @@ export default function TravelAgentForm({ mode = "add", agentId }) {
   }
 
   return (
-    <AdminGuard>
+    <AdminGuard permission={isEdit ? "travel_agents.view" : "travel_agents.create"}>
       <main className="min-h-screen p-4 pb-32 md:p-6 md:pb-32">
         <div className="mx-auto max-w-9xl space-y-6">
           {/* HEADER */}
@@ -1861,6 +1934,24 @@ export default function TravelAgentForm({ mode = "add", agentId }) {
                       {BUSINESS_POTENTIALS.map(item => (
                         <option key={item} value={item}>
                           {item}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+
+                  <Field label="CRM Potential (A-D)">
+                    <Select
+                      value={form.potentialLevel}
+                      onChange={e =>
+                        setForm({
+                          ...form,
+                          potentialLevel: e.target.value
+                        })
+                      }
+                    >
+                      {TRAVEL_AGENT_POTENTIAL_OPTIONS.map(item => (
+                        <option key={item.value} value={item.value}>
+                          {item.label}
                         </option>
                       ))}
                     </Select>
@@ -2428,6 +2519,22 @@ export default function TravelAgentForm({ mode = "add", agentId }) {
                       />
                     </Field>
                   )}
+
+                  <Field label="Sub Area / Locality">
+                    <Input
+                      placeholder="e.g. Goregaon West"
+                      value={form.address.subArea}
+                      onChange={e =>
+                        setForm({
+                          ...form,
+                          address: {
+                            ...form.address,
+                            subArea: e.target.value
+                          }
+                        })
+                      }
+                    />
+                  </Field>
 
                   <Field label="City">
                     <Input

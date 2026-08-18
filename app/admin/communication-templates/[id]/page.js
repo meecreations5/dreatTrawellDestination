@@ -32,6 +32,7 @@ import {
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { canAccess } from "@/lib/rolePermissions";
 import { getBrandingSettings } from "@/lib/brandingSettings";
 import AssetPickerModal from "@/components/documents/AssetPickerModal";
 
@@ -1428,6 +1429,7 @@ Please let us know if we should check live availability and final costing for yo
 
 export default function CommunicationTemplateEditPage() {
   const { user } = useAuth();
+  const canEditTemplate = canAccess(user, "communications.edit");
   const params = useParams();
   const router = useRouter();
 
@@ -2027,6 +2029,10 @@ Destination: {{destination}}
   }
 
   async function saveTemplate() {
+    if (!canEditTemplate) {
+      alert("You do not have permission to edit communication templates.");
+      return;
+    }
     if (!canSave) {
       alert("Template name, template type and at least one channel are required.");
       return;

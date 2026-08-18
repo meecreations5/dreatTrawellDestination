@@ -16,18 +16,24 @@ import {
   Eye,
   Mail,
   MessageCircle,
+  Loader2,
   Package,
   Pencil,
   Percent,
   ReceiptText,
+  Repeat2,
   Send,
   Sparkles,
   TrendingUp,
+  Trash2,
   Trophy,
   X
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
+import { useAuth } from "@/hooks/useAuth";
+import { canDeleteQuotationDraft, deleteQuotationDraft, isDraftQuotation } from "@/lib/deleteQuotationDraft";
+import { canResendQuotation, resendQuotation } from "@/lib/resendQuotation";
 import Card from "@/components/ui/Card";
 import QuotationAssetSummary from "@/components/leads/QuotationAssetSummary";
 
@@ -41,6 +47,33 @@ function cleanString(value = "") {
 
 function getLeadId(lead) {
   return lead?.id || lead?.leadId || "";
+}
+
+function getLeadRecipient(lead = {}) {
+  return {
+    name: cleanString(
+      lead?.spoc?.name ||
+      lead?.customerName ||
+      lead?.travellerName ||
+      lead?.guestName ||
+      lead?.contactName ||
+      lead?.customer?.name
+    ),
+    email: cleanString(
+      lead?.spoc?.email ||
+      lead?.email ||
+      lead?.customerEmail ||
+      lead?.customer?.email
+    ),
+    mobile: cleanString(
+      lead?.spoc?.mobile ||
+      lead?.mobile ||
+      lead?.phone ||
+      lead?.contactNumber ||
+      lead?.customerMobile ||
+      lead?.customer?.mobile
+    )
+  };
 }
 
 function toDate(value) {
@@ -608,9 +641,19 @@ function MultiVendorCostingBlock({ quotation }) {
    DETAILS MODAL
 ========================= */
 
-function QuotationDetailsModal({ quotation, onClose }) {
+function QuotationDetailsModal({
+  quotation,
+  onClose,
+  onDeleteDraft,
+  onResend,
+  canDeleteDraft = false,
+  canResend = false,
+  deleting = false,
+  resending = false
+}) {
   if (!quotation) return null;
 
+  const draftState = isDraftQuotation(quotation);
   const amount = getQuotationAmount(quotation);
   const vendorCost = getVendorCost(quotation);
   const profit = getGrossProfit(quotation);
@@ -631,7 +674,7 @@ function QuotationDetailsModal({ quotation, onClose }) {
             <div className="flex flex-wrap items-center gap-2">
               <StatusBadge
                 status={quotation.status}
-                isDraft={quotation.isDraft}
+                isDraft={draftState}
                 isFinalQuotation={quotation.isFinalQuotation}
               />
 
@@ -659,14 +702,40 @@ function QuotationDetailsModal({ quotation, onClose }) {
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close quotation details"
-            className="flex h-9 w-9 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-500 hover:text-gray-900"
-          >
-            <X size={17} />
-          </button>
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            {canResend && (
+              <button
+                type="button"
+                onClick={() => onResend?.(quotation)}
+                disabled={resending}
+                className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {resending ? <Loader2 size={14} className="animate-spin" /> : <Repeat2 size={14} />}
+                Resend Quote
+              </button>
+            )}
+
+            {canDeleteDraft && draftState && (
+              <button
+                type="button"
+                onClick={() => onDeleteDraft?.(quotation)}
+                disabled={deleting}
+                className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                Delete Draft
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close quotation details"
+              className="flex h-9 w-9 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-500 hover:text-gray-900"
+            >
+              <X size={17} />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-5">
@@ -815,7 +884,13 @@ function QuotationCard({
   quotation,
   onView,
   onEditDraft,
-  onCreateRevision
+  onCreateRevision,
+  onDeleteDraft,
+  onResend,
+  canDeleteDraft = false,
+  canResend = false,
+  deleting = false,
+  resending = false
 }) {
   const amount = getQuotationAmount(quotation);
   const vendorCost = getVendorCost(quotation);
@@ -826,8 +901,7 @@ function QuotationCard({
     quotation?.selectedVendorCurrency ||
     "INR";
 
-  const isDraft =
-    quotation?.isDraft || quotation?.status === "draft";
+  const isDraft = isDraftQuotation(quotation);
 
   const selectedVendorQuotes = getSelectedVendorQuotes(quotation);
   const vendorCostingMode = getVendorCostingMode(quotation);
@@ -845,7 +919,7 @@ function QuotationCard({
 
               <StatusBadge
                 status={quotation.status}
-                isDraft={quotation.isDraft}
+                isDraft={isDraft}
                 isFinalQuotation={quotation.isFinalQuotation}
               />
 
@@ -894,23 +968,51 @@ function QuotationCard({
             </button>
 
             {isDraft ? (
-              <button
-                type="button"
-                onClick={() => onEditDraft?.(quotation)}
-                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
-              >
-                <Pencil size={14} />
-                Edit Draft
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => onEditDraft?.(quotation)}
+                  className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
+                >
+                  <Pencil size={14} />
+                  Edit Draft
+                </button>
+
+                {canDeleteDraft && (
+                  <button
+                    type="button"
+                    onClick={() => onDeleteDraft?.(quotation)}
+                    disabled={deleting}
+                    className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                    Delete Draft
+                  </button>
+                )}
+              </>
             ) : (
-              <button
-                type="button"
-                onClick={() => onCreateRevision?.(createRevisionSeed(quotation))}
-                className="inline-flex items-center gap-2 rounded-xl bg-purple-600 px-3 py-2 text-xs font-semibold text-white hover:bg-purple-700"
-              >
-                <Copy size={14} />
-                Create Revision
-              </button>
+              <>
+                {canResend && (
+                  <button
+                    type="button"
+                    onClick={() => onResend?.(quotation)}
+                    disabled={resending}
+                    className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {resending ? <Loader2 size={14} className="animate-spin" /> : <Repeat2 size={14} />}
+                    Resend Quote
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => onCreateRevision?.(createRevisionSeed(quotation))}
+                  className="inline-flex items-center gap-2 rounded-xl bg-purple-600 px-3 py-2 text-xs font-semibold text-white hover:bg-purple-700"
+                >
+                  <Copy size={14} />
+                  Create Revision
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -978,11 +1080,23 @@ export default function QuotationHistory({
   onCreateRevision
 }) {
   const leadId = getLeadId(lead);
+  const { user } = useAuth();
 
   const [quotations, setQuotations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [selectedQuotation, setSelectedQuotation] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deletingId, setDeletingId] = useState("");
+  const [deleteError, setDeleteError] = useState("");
+  const [resendTarget, setResendTarget] = useState(null);
+  const [resendingId, setResendingId] = useState("");
+  const [resendError, setResendError] = useState("");
+  const [resendSuccess, setResendSuccess] = useState("");
+  const [resendChannels, setResendChannels] = useState({
+    email: false,
+    whatsapp: false
+  });
 
   useEffect(() => {
     if (!leadId) {
@@ -1002,11 +1116,13 @@ export default function QuotationHistory({
     const unsub = onSnapshot(
       q,
       snapshot => {
-        const rows = snapshot.docs.map(docSnap => ({
-          id: docSnap.id,
-          quotationId: docSnap.id,
-          ...docSnap.data()
-        }));
+        const rows = snapshot.docs
+          .map(docSnap => ({
+            id: docSnap.id,
+            quotationId: docSnap.id,
+            ...docSnap.data()
+          }))
+          .filter(item => item.isDeleted !== true && item.deleted !== true);
 
         setQuotations(rows);
         setLoading(false);
@@ -1020,12 +1136,81 @@ export default function QuotationHistory({
     return () => unsub();
   }, [leadId]);
 
+  const handleDeleteDraft = async () => {
+    if (!deleteTarget || !leadId || !user) return;
+
+    const quotationId = deleteTarget.id || deleteTarget.quotationId;
+    setDeletingId(quotationId);
+    setDeleteError("");
+
+    try {
+      await deleteQuotationDraft({
+        leadId,
+        quotationId,
+        user
+      });
+      setDeleteTarget(null);
+      if (selectedQuotation?.id === quotationId || selectedQuotation?.quotationId === quotationId) {
+        setSelectedQuotation(null);
+      }
+    } catch (error) {
+      setDeleteError(error?.message || "Unable to delete draft quotation.");
+    } finally {
+      setDeletingId("");
+    }
+  };
+
+  const openResend = quotation => {
+    const recipient = getLeadRecipient(lead);
+    const sentVia = normalizeSentVia(quotation?.sentVia || quotation?.sendVia);
+    const emailOriginallyUsed = sentVia.includes("email");
+    const whatsappOriginallyUsed = sentVia.includes("whatsapp");
+
+    setResendChannels({
+      email: Boolean(recipient.email && (emailOriginallyUsed || !whatsappOriginallyUsed)),
+      whatsapp: Boolean(recipient.mobile && whatsappOriginallyUsed)
+    });
+    setResendError("");
+    setResendSuccess("");
+    setResendTarget(quotation);
+  };
+
+  const handleResend = async () => {
+    if (!resendTarget || !leadId || !user) return;
+
+    const quotationId = resendTarget.id || resendTarget.quotationId;
+    const channels = Object.entries(resendChannels)
+      .filter(([, enabled]) => enabled)
+      .map(([channel]) => channel);
+
+    setResendingId(quotationId);
+    setResendError("");
+    setResendSuccess("");
+
+    try {
+      const result = await resendQuotation({
+        lead,
+        leadId,
+        quotationId,
+        channels,
+        user
+      });
+
+      setResendSuccess(
+        `Quotation${result?.revision ? ` Rev ${result.revision}` : ""} resent via ${result.channels.join(" & ")}.`
+      );
+      setResendTarget(null);
+    } catch (error) {
+      setResendError(error?.message || "Unable to resend quotation.");
+    } finally {
+      setResendingId("");
+    }
+  };
+
   const stats = useMemo(() => {
     const total = quotations.length;
 
-    const draft = quotations.filter(
-      item => item?.isDraft || item?.status === "draft"
-    ).length;
+    const draft = quotations.filter(isDraftQuotation).length;
 
     const sent = quotations.filter(
       item => item?.status === "sent"
@@ -1101,6 +1286,26 @@ export default function QuotationHistory({
         </div>
       )}
 
+      {deleteError && (
+        <div className="flex items-start gap-2 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <AlertTriangle size={17} className="mt-0.5 shrink-0" />
+          <span>{deleteError}</span>
+        </div>
+      )}
+
+      {resendError && (
+        <div className="flex items-start gap-2 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <AlertTriangle size={17} className="mt-0.5 shrink-0" />
+          <span>{resendError}</span>
+        </div>
+      )}
+
+      {resendSuccess && (
+        <div className="rounded-2xl border border-green-100 bg-green-50 px-4 py-3 text-sm font-medium text-green-700">
+          {resendSuccess}
+        </div>
+      )}
+
       {loading ? (
         <div className="space-y-3">
           {[1, 2, 3].map(item => (
@@ -1121,14 +1326,145 @@ export default function QuotationHistory({
               onView={setSelectedQuotation}
               onEditDraft={onEditDraft}
               onCreateRevision={onCreateRevision}
+              onDeleteDraft={setDeleteTarget}
+              onResend={openResend}
+              canDeleteDraft={canDeleteQuotationDraft(quotation, user)}
+              canResend={canResendQuotation(quotation)}
+              deleting={deletingId === (quotation.id || quotation.quotationId)}
+              resending={resendingId === (quotation.id || quotation.quotationId)}
             />
           ))}
         </div>
       )}
 
+      {deleteTarget && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/45 p-4">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="rounded-2xl bg-red-50 p-3 text-red-600">
+                <Trash2 size={20} />
+              </div>
+              <div>
+                <h4 className="text-base font-semibold text-gray-900">Delete draft quotation?</h4>
+                <p className="mt-1 text-sm text-gray-500">
+                  Rev {deleteTarget.revision || "—"} will be removed from normal quotation history. This is a soft delete and does not delete the lead or travel agent.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => { setDeleteTarget(null); setDeleteError(""); }}
+                disabled={Boolean(deletingId)}
+                className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+              >
+                Keep Draft
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteDraft}
+                disabled={Boolean(deletingId)}
+                className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-60"
+              >
+                {deletingId ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                Delete Draft
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {resendTarget && (() => {
+        const recipient = getLeadRecipient(lead);
+        const anySelected = resendChannels.email || resendChannels.whatsapp;
+        const quotationId = resendTarget.id || resendTarget.quotationId;
+        const isResending = resendingId === quotationId;
+
+        return (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/45 p-4">
+            <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+              <div className="flex items-start gap-3">
+                <div className="rounded-2xl bg-blue-50 p-3 text-blue-600">
+                  <Repeat2 size={20} />
+                </div>
+                <div>
+                  <h4 className="text-base font-semibold text-gray-900">Resend quotation?</h4>
+                  <p className="mt-1 text-sm text-gray-500">
+                    This sends the exact saved Rev {resendTarget.revision || "—"}. It does not create a new revision or change pricing/content.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5 space-y-3">
+                <label className={`flex items-start gap-3 rounded-2xl border p-4 ${recipient.email ? "border-gray-200" : "border-gray-100 bg-gray-50 opacity-60"}`}>
+                  <input
+                    type="checkbox"
+                    checked={resendChannels.email}
+                    disabled={!recipient.email || isResending}
+                    onChange={event => setResendChannels(current => ({ ...current, email: event.target.checked }))}
+                    className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600"
+                  />
+                  <div>
+                    <p className="flex items-center gap-2 text-sm font-semibold text-gray-900"><Mail size={14} /> Email</p>
+                    <p className="mt-0.5 text-xs text-gray-500">{recipient.email || "No recipient email on lead"}</p>
+                  </div>
+                </label>
+
+                <label className={`flex items-start gap-3 rounded-2xl border p-4 ${recipient.mobile ? "border-gray-200" : "border-gray-100 bg-gray-50 opacity-60"}`}>
+                  <input
+                    type="checkbox"
+                    checked={resendChannels.whatsapp}
+                    disabled={!recipient.mobile || isResending}
+                    onChange={event => setResendChannels(current => ({ ...current, whatsapp: event.target.checked }))}
+                    className="mt-1 h-4 w-4 rounded border-gray-300 text-green-600"
+                  />
+                  <div>
+                    <p className="flex items-center gap-2 text-sm font-semibold text-gray-900"><MessageCircle size={14} /> WhatsApp</p>
+                    <p className="mt-0.5 text-xs text-gray-500">{recipient.mobile || "No recipient mobile on lead"}</p>
+                  </div>
+                </label>
+              </div>
+
+              {resendError && (
+                <div className="mt-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {resendError}
+                </div>
+              )}
+
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setResendTarget(null); setResendError(""); }}
+                  disabled={isResending}
+                  className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResend}
+                  disabled={!anySelected || isResending}
+                  className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isResending ? <Loader2 size={15} className="animate-spin" /> : <Repeat2 size={15} />}
+                  Resend Quote
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       <QuotationDetailsModal
         quotation={selectedQuotation}
         onClose={() => setSelectedQuotation(null)}
+        onDeleteDraft={setDeleteTarget}
+        onResend={openResend}
+        canDeleteDraft={canDeleteQuotationDraft(selectedQuotation || {}, user)}
+        canResend={canResendQuotation(selectedQuotation || {})}
+        deleting={Boolean(selectedQuotation && deletingId === (selectedQuotation.id || selectedQuotation.quotationId))}
+        resending={Boolean(selectedQuotation && resendingId === (selectedQuotation.id || selectedQuotation.quotationId))}
       />
     </Card>
   );

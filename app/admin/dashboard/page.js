@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { collection, onSnapshot } from "firebase/firestore";
 import {
   Activity,
@@ -9,10 +10,8 @@ import {
   ArrowRight,
   BarChart3,
   BriefcaseBusiness,
-  CalendarDays,
   CheckCircle2,
   CircleDollarSign,
-  Clock3,
   CreditCard,
   Eye,
   Handshake,
@@ -30,17 +29,49 @@ import {
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
+import { normalizeTravelAgentStatus } from "@/lib/travelAgentStatus";
 import { useAuth } from "@/hooks/useAuth";
+import { useAdminScope } from "@/components/admin/AdminScopeProvider";
+import { getAdminDateWindow } from "@/lib/adminScope";
+import { resolveDirectoryIdentity, teamMatchesScope } from "@/lib/teamDirectory";
 
 /* DASHBOARD COMPONENTS */
 import DashboardKpiCard from "@/components/admin/dashboard/DashboardKpiCard";
-import LeadsTrendChart from "@/components/admin/dashboard/LeadsTrendChart";
-import LeadsByStageChart from "@/components/admin/dashboard/LeadsByStageChart";
-import LeadsByDestinationChart from "@/components/admin/dashboard/LeadsByDestinationChart";
 
 /* ENGAGEMENT COMPONENTS */
 import EngagementKpiCard from "@/components/admin/dashboard/engagements/EngagementKpiCard";
-import EngagementByChannelChart from "@/components/admin/dashboard/engagements/EngagementByChannelChart";
+
+const chartLoading = () => (
+  <div className="flex h-64 items-center justify-center rounded-2xl bg-slate-50 text-sm text-slate-400">
+    Loading chart…
+  </div>
+);
+
+const LeadsTrendChart = dynamic(
+  () => import("@/components/admin/dashboard/LeadsTrendChart"),
+  { ssr: false, loading: chartLoading }
+);
+const LeadsByStageChart = dynamic(
+  () => import("@/components/admin/dashboard/LeadsByStageChart"),
+  { ssr: false, loading: chartLoading }
+);
+const LeadsByDestinationChart = dynamic(
+  () => import("@/components/admin/dashboard/LeadsByDestinationChart"),
+  { ssr: false, loading: chartLoading }
+);
+const EngagementByChannelChart = dynamic(
+  () => import("@/components/admin/dashboard/engagements/EngagementByChannelChart"),
+  { ssr: false, loading: chartLoading }
+);
+
+import * as dashboardHelpers from "@/lib/dashboard/managementDashboardHelpers";
+import {
+  KPI_TONES, DashboardSkeleton, ExecutiveKpiCard, DashboardGraphCard, MiniColumnGraph, SectionHeader,
+  BusinessPulseCard, FinanceFlowCard, InsightCards, ChartShell, MiniBarList,
+  AttentionRequiredPanel, ManagementOverviewTable, ManagementFinanceTable,
+  ManagementVendorTable, ManagementLeadsTable, ManagementEngagementTable,
+  ManagementTeamTable, DashboardDetailDrawer, isSameDashboardMember
+} from "@/components/admin/dashboard/management/ManagementDashboardUi";
 
 /* =========================
    FIRESTORE COLLECTIONS
@@ -48,1088 +79,59 @@ import EngagementByChannelChart from "@/components/admin/dashboard/engagements/E
 
 const LEADS_COLLECTION = "leads";
 const ENGAGEMENT_COLLECTION = "engagements";
-const USERS_COLLECTION = "users";
-const ATTENDANCE_COLLECTION = "attendance_sessions";
-
-/* =========================
-   COMMON HELPERS
-========================== */
-
-function getGroupedAttentionRows(rows = []) {
-  const map = new Map();
-
-  rows.forEach(item => {
-    const key = item.leadId || item.leadCode;
-    if (!key) return;
-
-    const existing = map.get(key);
-
-    if (!existing) {
-      map.set(key, {
-        leadId: item.leadId,
-        leadCode: item.leadCode,
-        customerName: item.customerName,
-        agentName: item.agentName,
-        destinationName: item.destinationName,
-        assignedToName: item.assignedToName,
-        amount: Number(item.amount || 0),
-        lastActivityAt: item.lastActivityAt,
-        highestSeverity: item.severity || "medium",
-        issues: [
-          {
-            type: item.type,
-            severity: item.severity,
-            reason: item.reason
-          }
-        ]
-      });
-
-      return;
-    }
-
-    existing.amount = Math.max(existing.amount, Number(item.amount || 0));
-
-    if (
-      getSeverityRank(item.severity) >
-      getSeverityRank(existing.highestSeverity)
-    ) {
-      existing.highestSeverity = item.severity;
-    }
-
-    const itemDate = toDate(item.lastActivityAt);
-    const existingDate = toDate(existing.lastActivityAt);
-
-    if (itemDate && (!existingDate || itemDate > existingDate)) {
-      existing.lastActivityAt = item.lastActivityAt;
-    }
-
-    existing.issues.push({
-      type: item.type,
-      severity: item.severity,
-      reason: item.reason
-    });
-  });
-
-  return Array.from(map.values()).sort((a, b) => {
-    const severityDiff =
-      getSeverityRank(b.highestSeverity) -
-      getSeverityRank(a.highestSeverity);
-
-    if (severityDiff !== 0) return severityDiff;
-
-    return Number(b.amount || 0) - Number(a.amount || 0);
-  });
-}
-
-
-
-function getSeverityRank(severity) {
-  const ranks = {
-    critical: 4,
-    high: 3,
-    medium: 2,
-    low: 1
-  };
-
-  return ranks[severity] || 0;
-}
-
-function getUniqueHighValueAttentionRows(rows = []) {
-  const map = new Map();
-
-  rows.forEach(item => {
-    const leadKey = item.leadId || item.leadCode;
-    const amount = Number(item.amount || 0);
-
-    if (!leadKey || amount <= 0) return;
-
-    const existing = map.get(leadKey);
-
-    if (!existing) {
-      map.set(leadKey, {
-        key: String(leadKey),
-        name: item.leadCode || leadKey,
-        count: amount,
-        displayCount: formatCurrency(amount),
-        issueCount: 1,
-        severity: item.severity || "medium",
-        subLabel: `${readableLabel(item.type)} • ${readableLabel(item.severity)}`
-      });
-
-      return;
-    }
-
-    existing.count = Math.max(existing.count, amount);
-    existing.displayCount = formatCurrency(existing.count);
-    existing.issueCount += 1;
-
-    if (getSeverityRank(item.severity) > getSeverityRank(existing.severity)) {
-      existing.severity = item.severity;
-    }
-
-    existing.subLabel = `${existing.issueCount} attention items • Highest ${readableLabel(existing.severity)}`;
-  });
-
-  return Array.from(map.values()).sort((a, b) => b.count - a.count);
-}
-
-function toDate(value) {
-  if (!value) return null;
-  if (value instanceof Date) return value;
-  if (typeof value?.toDate === "function") return value.toDate();
-  if (value?.seconds) return new Date(value.seconds * 1000);
-
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function getLocalDateKey(value = new Date()) {
-  const d = toDate(value) || new Date();
-
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
-}
-
-function normalize(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function readableLabel(value) {
-  if (!value) return "—";
-
-  return String(value)
-    .replaceAll("_", " ")
-    .replaceAll("-", " ")
-    .replace(/\b\w/g, char => char.toUpperCase());
-}
-
-function toAmount(value) {
-  const number = Number(value || 0);
-  return Number.isFinite(number) ? number : 0;
-}
-
-function pickAmount(...values) {
-  for (const value of values) {
-    if (value === null || value === undefined || value === "") continue;
-
-    const number = Number(value);
-    if (Number.isFinite(number)) return number;
-  }
-
-  return null;
-}
-
-function getRangeWindow(range) {
-  const now = new Date();
-
-  if (range === "all") {
-    return {
-      start: null,
-      end: now
-    };
-  }
-
-  const start = new Date(now);
-  const end = new Date(now);
-
-  if (range === "today") {
-    start.setHours(0, 0, 0, 0);
-    end.setHours(23, 59, 59, 999);
-  }
-
-  if (range === "yesterday") {
-    start.setDate(start.getDate() - 1);
-    start.setHours(0, 0, 0, 0);
-
-    end.setDate(end.getDate() - 1);
-    end.setHours(23, 59, 59, 999);
-  }
-
-  if (range === "week") {
-    const day = start.getDay() || 7;
-    start.setDate(start.getDate() - day + 1);
-    start.setHours(0, 0, 0, 0);
-    end.setHours(23, 59, 59, 999);
-  }
-
-  if (range === "month") {
-    start.setDate(1);
-    start.setHours(0, 0, 0, 0);
-    end.setHours(23, 59, 59, 999);
-  }
-
-  return {
-    start,
-    end
-  };
-}
-
-function isInRange(value, rangeWindow) {
-  if (!rangeWindow?.start) return true;
-
-  const d = toDate(value);
-  if (!d) return false;
-
-  return d >= rangeWindow.start && d <= rangeWindow.end;
-}
-
-function formatCurrency(value) {
-  return `₹${Number(value || 0).toLocaleString("en-IN")}`;
-}
-
-function formatDateTime(value) {
-  const d = toDate(value);
-  if (!d) return "—";
-
-  return d.toLocaleString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-}
-
-function formatNameFromEmail(email) {
-  if (!email) return "Unassigned";
-
-  return email
-    .split("@")[0]
-    .replace(/[._-]/g, " ")
-    .replace(/\b\w/g, c => c.toUpperCase());
-}
-
-function formatDuration(minutes) {
-  const value = Number(minutes || 0);
-
-  if (!value) return "—";
-
-  const h = Math.floor(value / 60);
-  const m = value % 60;
-
-  if (!h) return `${m}m`;
-  if (!m) return `${h}h`;
-
-  return `${h}h ${m}m`;
-}
-
-function looksLikeEmail(value) {
-  return String(value || "").includes("@");
-}
-
-function countBy(rows, getter) {
-  const map = new Map();
-
-  rows.forEach(row => {
-    const key = getter(row);
-
-    if (Array.isArray(key)) {
-      key.forEach(item => {
-        if (!item) return;
-        map.set(item, (map.get(item) || 0) + 1);
-      });
-    } else if (key) {
-      map.set(key, (map.get(key) || 0) + 1);
-    }
-  });
-
-  return Array.from(map.entries())
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count);
-}
-
-function sumBy(rows, keyGetter, valueGetter, formatter) {
-  const map = new Map();
-
-  rows.forEach(row => {
-    const key = keyGetter(row);
-    if (!key) return;
-
-    const value = Number(valueGetter(row) || 0);
-    if (!Number.isFinite(value)) return;
-
-    map.set(key, (map.get(key) || 0) + value);
-  });
-
-  return Array.from(map.entries())
-    .map(([name, count]) => ({
-      name,
-      count,
-      displayCount: formatter ? formatter(count) : count
-    }))
-    .sort((a, b) => b.count - a.count);
-}
-
-function getScoreLabel(score) {
-  if (score >= 120) return "Excellent";
-  if (score >= 60) return "Good";
-  if (score >= 20) return "Average";
-  return "Needs Attention";
-}
-
-function getScoreClass(score) {
-  if (score >= 120) {
-    return "bg-green-50 text-green-700 border-green-100";
-  }
-
-  if (score >= 60) {
-    return "bg-blue-50 text-blue-700 border-blue-100";
-  }
-
-  if (score >= 20) {
-    return "bg-yellow-50 text-yellow-700 border-yellow-100";
-  }
-
-  return "bg-red-50 text-red-700 border-red-100";
-}
-
-function getRangeLabel(range) {
-  return {
-    today: "Today",
-    yesterday: "Yesterday",
-    week: "This Week",
-    month: "This Month",
-    all: "All Time"
-  }[range] || "Selected Period";
-}
-
-/* =========================
-   GLOBAL LEAD VISIBILITY
-   Deleted leads are excluded everywhere
-========================== */
-
-function isDeletedLead(lead) {
-  return (
-    lead?.isDeleted === true ||
-    lead?.deleted === true ||
-    String(lead?.isDeleted).trim().toLowerCase() === "true" ||
-    String(lead?.deleted).trim().toLowerCase() === "true" ||
-    Boolean(lead?.deletedAt)
-  );
-}
-
-function getActiveLeads(leads = []) {
-  if (!Array.isArray(leads)) return [];
-  return leads.filter(lead => !isDeletedLead(lead));
-}
-
-/* =========================
-   LEAD HELPERS
-========================== */
-
-
-
-function getLeadDate(lead) {
-  return (
-    toDate(lead?.createdAt) ||
-    toDate(lead?.assignedAt) ||
-    toDate(lead?.updatedAt) ||
-    toDate(lead?.lastActivityAt)
-  );
-}
-
-function getLeadActivityDate(lead) {
-  return (
-    toDate(lead?.lastActivityAt) ||
-    toDate(lead?.updatedAt) ||
-    toDate(lead?.assignedAt) ||
-    toDate(lead?.createdAt)
-  );
-}
-
-function hasLeadAssignee(lead) {
-  return Boolean(
-    lead?.assignedToUid ||
-    lead?.assignedToName ||
-    lead?.assignedTo ||
-    lead?.assignedToEmail
-  );
-}
-
-function isWonLead(lead) {
-  const status = normalize(lead?.status);
-  const stage = normalize(lead?.stage);
-
-  return (
-    status === "won" ||
-    status === "converted" ||
-    status === "closed_won" ||
-    stage === "won" ||
-    stage === "converted" ||
-    stage === "closed_won"
-  );
-}
-
-function isLostLead(lead) {
-  const status = normalize(lead?.status);
-  const stage = normalize(lead?.stage);
-
-  return (
-    status === "lost" ||
-    status === "cancelled" ||
-    status === "closed_lost" ||
-    stage === "lost" ||
-    stage === "cancelled" ||
-    stage === "closed_lost"
-  );
-}
-
-function getLeadWonDate(lead) {
-  if (!isWonLead(lead)) return null;
-
-  const stageHistoryWonDate = Array.isArray(lead?.stageHistory)
-    ? lead.stageHistory
-      .filter(item => {
-        const stage = normalize(
-          item?.toStage ||
-          item?.stage ||
-          item?.stageLabel ||
-          item?.toStageLabel
-        );
-
-        return (
-          stage === "closed_won" ||
-          stage === "won" ||
-          stage === "converted" ||
-          stage === "business_generated"
-        );
-      })
-      .map(item => toDate(item?.changedAt))
-      .filter(Boolean)
-      .sort((a, b) => b.getTime() - a.getTime())[0]
-    : null;
-
-  return (
-    toDate(lead?.closedWonAt) ||
-    toDate(lead?.closedAt) ||
-    toDate(lead?.dealWonAt) ||
-    toDate(lead?.businessGeneratedAt) ||
-    toDate(lead?.convertedAt) ||
-    toDate(lead?.bookingConfirmedAt) ||
-    toDate(lead?.stageUpdatedAt) ||
-    stageHistoryWonDate ||
-    toDate(lead?.statusUpdatedAt) ||
-    toDate(lead?.updatedAt) ||
-    toDate(lead?.lastActivityAt) ||
-    toDate(lead?.createdAt)
-  );
-}
-
-function getLeadLostDate(lead) {
-  if (!isLostLead(lead)) return null;
-
-  return (
-    toDate(lead?.closedLostAt) ||
-    toDate(lead?.dealLostAt) ||
-    toDate(lead?.cancelledAt) ||
-    toDate(lead?.rejectedAt) ||
-    toDate(lead?.stageUpdatedAt) ||
-    toDate(lead?.statusUpdatedAt) ||
-    toDate(lead?.updatedAt) ||
-    toDate(lead?.lastActivityAt) ||
-    toDate(lead?.createdAt)
-  );
-}
-
-function getQuotationDate(lead) {
-  return (
-    toDate(lead?.finalQuotationAt) ||
-    toDate(lead?.latestQuotationSentAt) ||
-    toDate(lead?.quotationSentAt) ||
-    toDate(lead?.lastQuotationSentAt) ||
-    toDate(lead?.updatedAt) ||
-    toDate(lead?.createdAt)
-  );
-}
-
-function getPaymentDate(lead) {
-  return (
-    toDate(lead?.latestCustomerPaymentAt) ||
-    toDate(lead?.lastPaymentReceivedAt) ||
-    toDate(lead?.paymentReceivedAt) ||
-    toDate(lead?.updatedAt) ||
-    toDate(lead?.createdAt)
-  );
-}
-
-function isInSelectedRangeByDate(dateValue, rangeWindow) {
-  if (!rangeWindow?.start) return true;
-
-  const date = toDate(dateValue);
-  if (!date) return false;
-
-  return date >= rangeWindow.start && date <= rangeWindow.end;
-}
-
-function getLeadDisplayName(lead) {
-  return (
-    lead?.leadCode ||
-    lead?.customerName ||
-    lead?.agentName ||
-    lead?.agencyName ||
-    lead?.travelAgentName ||
-    lead?.id ||
-    "Lead"
-  );
-}
-
-function isClosedLead(lead) {
-  const status = normalize(lead?.status);
-  const stage = normalize(lead?.stage);
-
-  return (
-    isWonLead(lead) ||
-    isLostLead(lead) ||
-    status === "closed" ||
-    stage === "closed"
-  );
-}
-
-function isActiveLead(lead) {
-  return !isClosedLead(lead);
-}
-
-function getLeadQuotationAmount(lead) {
-  return (
-    pickAmount(
-      lead?.finalQuotationAmount,
-      lead?.latestQuotationAmount,
-      lead?.latestCustomerQuoteAmount,
-      lead?.totalReceivableAmount,
-      lead?.customerQuoteAmount,
-      lead?.quotationAmount,
-      lead?.packageAmount
-    ) || 0
-  );
-}
-
-function getLeadVendorCost(lead) {
-  return (
-    pickAmount(
-      lead?.finalVendorCost,
-      lead?.latestVendorCost,
-      lead?.latestSelectedVendorCost,
-      lead?.totalVendorPayableAmount,
-      lead?.latestVendorQuoteCost,
-      lead?.vendorCost
-    ) || 0
-  );
-}
-
-function getLeadGrossProfit(lead) {
-  const storedProfit = pickAmount(
-    lead?.finalGrossProfit,
-    lead?.actualGrossProfit,
-    lead?.latestGrossProfit,
-    lead?.expectedGrossProfit,
-    lead?.grossProfit
-  );
-
-  if (storedProfit !== null) return storedProfit;
-
-  return getLeadQuotationAmount(lead) - getLeadVendorCost(lead);
-}
-
-function getPaymentBalance(lead) {
-  const explicitBalance = pickAmount(
-    lead?.paymentBalance,
-    lead?.customerPaymentBalance,
-    lead?.receivableBalance,
-    lead?.pendingReceivable
-  );
-
-  if (explicitBalance !== null) return explicitBalance;
-
-  const receivable = toAmount(lead?.totalReceivableAmount) || getLeadQuotationAmount(lead);
-  const received = getLeadReceivedAmount(lead);
-
-  return Math.max(receivable - received, 0);
-}
-
-function getVendorPaymentBalance(lead) {
-  const explicitBalance = pickAmount(
-    lead?.vendorPaymentBalance,
-    lead?.vendorBalance,
-    lead?.pendingVendorPayable
-  );
-
-  if (explicitBalance !== null) return explicitBalance;
-
-  const vendorPayable = toAmount(lead?.totalVendorPayableAmount) || getLeadVendorCost(lead);
-  const vendorPaid = getLeadVendorPaidAmount(lead);
-
-  return Math.max(vendorPayable - vendorPaid, 0);
-}
-
-function isCustomerPaymentRealized(lead) {
-  const status = normalize(lead?.customerPaymentStatus);
-
-  return (
-    status === "fully_paid" ||
-    status === "paid" ||
-    status === "received" ||
-    getPaymentBalance(lead) <= 0
-  );
-}
-
-function isVendorPaymentSettled(lead) {
-  const status = normalize(lead?.vendorPaymentStatus);
-
-  return (
-    status === "fully_paid" ||
-    status === "paid" ||
-    status === "settled" ||
-    getVendorPaymentBalance(lead) <= 0
-  );
-}
-
-function isGrossProfitRealized(lead) {
-  return (
-    isWonLead(lead) &&
-    getLeadGrossProfit(lead) > 0 &&
-    isCustomerPaymentRealized(lead) &&
-    isVendorPaymentSettled(lead)
-  );
-}
-
-function getLeadActualRealizedGrossProfit(lead) {
-  if (!isGrossProfitRealized(lead)) return 0;
-  return getLeadGrossProfit(lead);
-}
-
-function getLeadUnrealizedGrossProfit(lead) {
-  const grossProfit = getLeadGrossProfit(lead);
-  const realizedProfit = getLeadActualRealizedGrossProfit(lead);
-
-  return Math.max(grossProfit - realizedProfit, 0);
-}
-
-function getLeadReceivedAmount(lead) {
-  return (
-    pickAmount(
-      lead?.totalPaymentReceived,
-      lead?.travelAgentReceivedAmount,
-      lead?.customerReceivedAmount,
-      lead?.actualReceivedAmount,
-      lead?.receivedAmount,
-      lead?.amountReceived,
-      lead?.paymentReceivedAmount,
-      lead?.latestCustomerPaymentAmount,
-      lead?.latestTravelAgentPaymentAmount
-    ) || 0
-  );
-}
-
-function getLeadReceivableAmount(lead) {
-  return (
-    pickAmount(
-      lead?.totalReceivableAmount,
-      lead?.finalQuotationAmount,
-      lead?.latestQuotationAmount,
-      lead?.latestCustomerQuoteAmount,
-      lead?.customerQuoteAmount
-    ) || 0
-  );
-}
-
-function getLeadPaymentBalance(lead) {
-  const explicitBalance = pickAmount(
-    lead?.paymentBalance,
-    lead?.customerPaymentBalance,
-    lead?.receivableBalance,
-    lead?.pendingReceivable
-  );
-
-  if (explicitBalance !== null && explicitBalance > 0) {
-    return explicitBalance;
-  }
-
-  const receivable = getLeadReceivableAmount(lead);
-  const received = getLeadReceivedAmount(lead);
-
-  return Math.max(receivable - received, 0);
-}
-
-function getLeadVendorPayableAmount(lead) {
-  return (
-    pickAmount(
-      lead?.totalVendorPayableAmount,
-      lead?.finalVendorCost,
-      lead?.latestVendorCost,
-      lead?.latestSelectedVendorCost,
-      lead?.latestVendorQuoteCost
-    ) || 0
-  );
-}
-
-function getLeadVendorPaymentBalance(lead) {
-  const explicitBalance = pickAmount(
-    lead?.vendorPaymentBalance,
-    lead?.vendorBalance,
-    lead?.pendingVendorPayable
-  );
-
-  if (explicitBalance !== null && explicitBalance > 0) {
-    return explicitBalance;
-  }
-
-  const payable = getLeadVendorPayableAmount(lead);
-  const paid = getLeadVendorPaidAmount(lead);
-
-  return Math.max(payable - paid, 0);
-}
-
-function getLeadVendorPaidAmount(lead) {
-  return (
-    pickAmount(
-      lead?.totalVendorPaid,
-      lead?.latestVendorPaymentAmount,
-      lead?.latestVendorPaymentEntryAmount
-    ) || 0
-  );
-}
-
-function hasQuotationSent(lead) {
-  const status = normalize(lead?.latestQuotationStatus);
-
-  return (
-    status === "sent" ||
-    status === "final" ||
-    status === "finalized" ||
-    status === "approved" ||
-    status === "converted" ||
-    status === "closed won" ||
-    Boolean(lead?.finalQuotationId) ||
-    Boolean(lead?.finalQuotationAt) ||
-    Boolean(lead?.latestQuotationSentAt) ||
-    Boolean(lead?.latestQuotationId)
-  );
-}
-
-function hasVendorRequest(lead) {
-  return (
-    Number(lead?.vendorRequestCount || 0) > 0 ||
-    Boolean(lead?.latestVendorRequestId) ||
-    Boolean(lead?.lastVendorCommunicationAt)
-  );
-}
-
-function hasVendorQuoteReceived(lead) {
-  const quoteStatus = normalize(lead?.latestVendorQuoteStatus);
-  const requestStatus = normalize(lead?.latestVendorRequestStatus);
-
-  return (
-    Number(lead?.vendorQuoteCount || 0) > 0 ||
-    quoteStatus === "received" ||
-    requestStatus === "quote_received" ||
-    Boolean(lead?.latestVendorQuoteId)
-  );
-}
-
-function isVendorQuotePending(lead) {
-  if (!hasVendorRequest(lead)) return false;
-  return !hasVendorQuoteReceived(lead);
-}
-
-function isVendorSelected(lead) {
-  return Boolean(
-    lead?.latestSelectedVendorName ||
-    lead?.latestSelectedVendorQuoteId ||
-    lead?.latestSelectedVendorRequestId
-  );
-}
-
-function getLeadOwner(lead, userMap) {
-  const uid =
-    lead?.assignedToUid ||
-    lead?.assignedTo ||
-    lead?.createdByUid ||
-    lead?.assignedByUid ||
-    "";
-
-  const userData = uid ? userMap.get(uid) : null;
-
-  const email =
-    lead?.assignedToEmail ||
-    lead?.assignedBy ||
-    lead?.createdByEmail ||
-    (looksLikeEmail(lead?.assignedTo) ? lead.assignedTo : "") ||
-    userData?.email ||
-    "";
-
-  const name =
-    lead?.assignedToName ||
-    userData?.displayName ||
-    userData?.name ||
-    lead?.createdByName ||
-    formatNameFromEmail(email);
-
-  return {
-    uid,
-    email,
-    name,
-    department: userData?.department || "",
-    role: userData?.role || userData?.designation || ""
-  };
-}
-
-
-function getLeadCreator(lead, userMap) {
-  const uid =
-    lead?.createdByUid ||
-    lead?.createdByUserId ||
-    lead?.creatorUid ||
-    "";
-
-  const userData = uid ? userMap.get(uid) : null;
-
-  const email =
-    lead?.createdByEmail ||
-    lead?.createdBy ||
-    lead?.creatorEmail ||
-    userData?.email ||
-    "";
-
-  const name =
-    lead?.createdByName ||
-    lead?.creatorName ||
-    userData?.displayName ||
-    userData?.name ||
-    formatNameFromEmail(email);
-
-  return {
-    uid,
-    email,
-    name,
-    department: userData?.department || "",
-    role: userData?.role || userData?.designation || ""
-  };
-}
-
-/* =========================
-   ENGAGEMENT HELPERS
-========================== */
-
-function getEngagementDate(item) {
-  return toDate(item?.createdAt) || toDate(item?.updatedAt);
-}
-
-function getEngagementOwner(item, userMap) {
-  const uid = item?.createdByUid || "";
-  const userData = uid ? userMap.get(uid) : null;
-  const email = userData?.email || item?.createdByEmail || "";
-
-  const name =
-    item?.createdByName ||
-    userData?.displayName ||
-    userData?.name ||
-    formatNameFromEmail(email);
-
-  return {
-    uid,
-    email,
-    name,
-    department: userData?.department || "",
-    role: userData?.role || userData?.designation || ""
-  };
-}
-
-function getEngagementDestinationList(item) {
-  if (Array.isArray(item?.destinationNames) && item.destinationNames.length) {
-    return item.destinationNames.filter(Boolean);
-  }
-
-  if (item?.destinationName) {
-    return [item.destinationName];
-  }
-
-  return [];
-}
-
-/* =========================
-   ATTENDANCE HELPERS
-========================== */
-
-function getAttendanceSessions(record) {
-  if (Array.isArray(record?.sessions)) {
-    return record.sessions;
-  }
-
-  if (record?.checkInAt || record?.checkOutAt) {
-    return [
-      {
-        checkInAt: record.checkInAt,
-        checkOutAt: record.checkOutAt,
-        minutes: record.minutes,
-        status: record.status
-      }
-    ];
-  }
-
-  return [];
-}
-
-function getFirstCheckIn(record) {
-  const sessions = getAttendanceSessions(record);
-
-  const dates = sessions
-    .map(session => toDate(session?.checkInAt))
-    .filter(Boolean)
-    .sort((a, b) => a.getTime() - b.getTime());
-
-  return dates[0] || null;
-}
-
-function getLastCheckOut(record) {
-  const sessions = getAttendanceSessions(record);
-
-  const dates = sessions
-    .map(session => toDate(session?.checkOutAt))
-    .filter(Boolean)
-    .sort((a, b) => b.getTime() - a.getTime());
-
-  return dates[0] || null;
-}
-
-function getAttendanceRecordDate(record) {
-  if (record?.date) return record.date;
-
-  const d =
-    toDate(record?.createdAt) ||
-    toDate(record?.updatedAt) ||
-    toDate(getFirstCheckIn(record));
-
-  if (!d) return "";
-
-  return getLocalDateKey(d);
-}
-
-function getAttendanceStatus(record) {
-  if (record?.status) return normalize(record.status);
-
-  const sessions = getAttendanceSessions(record);
-  const presentSession = sessions.find(
-    session => normalize(session?.status) === "present"
-  );
-
-  if (presentSession) return "present";
-  if (sessions.some(session => session?.checkInAt)) return "present";
-
-  return "unknown";
-}
-
-function getAttendanceMinutes(record) {
-  if (typeof record?.totalMinutes === "number") {
-    return record.totalMinutes;
-  }
-
-  const sessions = getAttendanceSessions(record);
-
-  return sessions.reduce((total, session) => {
-    if (typeof session?.totalMinutes === "number") {
-      return total + session.totalMinutes;
-    }
-
-    if (typeof session?.minutes === "number") {
-      return total + session.minutes;
-    }
-
-    const checkIn = toDate(session?.checkInAt);
-    const checkOut = toDate(session?.checkOutAt);
-
-    if (!checkIn || !checkOut) return total;
-
-    const diff = checkOut.getTime() - checkIn.getTime();
-    if (diff <= 0) return total;
-
-    return total + Math.round(diff / 60000);
-  }, 0);
-}
-
-function isAttendanceInRange(record, rangeWindow) {
-  if (!rangeWindow?.start) return true;
-
-  const attendanceDate = getAttendanceRecordDate(record);
-
-  if (attendanceDate) {
-    const date = new Date(`${attendanceDate}T00:00:00`);
-    return date >= rangeWindow.start && date <= rangeWindow.end;
-  }
-
-  return (
-    isInRange(record?.createdAt, rangeWindow) ||
-    isInRange(record?.updatedAt, rangeWindow) ||
-    isInRange(getFirstCheckIn(record), rangeWindow)
-  );
-}
-
-function isAttendancePresent(record) {
-  const status = getAttendanceStatus(record);
-
-  return (
-    status === "present" ||
-    status === "checked_in" ||
-    status === "checked_out" ||
-    getAttendanceSessions(record).some(session => session?.checkInAt)
-  );
-}
-
-function isAttendanceActive(record) {
-  return getAttendanceSessions(record).some(session => {
-    return session?.checkInAt && !session?.checkOutAt;
-  });
-}
-
-function isAttendanceLate(record) {
-  const status = getAttendanceStatus(record);
-
-  return (
-    record?.isLate === true ||
-    status === "late" ||
-    status === "checked_in_late"
-  );
-}
-
-function isAttendanceLeave(record) {
-  const status = getAttendanceStatus(record);
-  return status === "leave" || status === "on_leave" || status === "paid_leave";
-}
-
-function getAttendanceUser(record, userMap) {
-  const uid =
-    record?.uid ||
-    record?.userUid ||
-    record?.employeeUid ||
-    record?.createdByUid ||
-    "";
-
-  const userData = uid ? userMap.get(uid) : null;
-
-  const email =
-    userData?.email ||
-    record?.email ||
-    record?.userEmail ||
-    record?.employeeEmail ||
-    "";
-
-  const name =
-    userData?.displayName ||
-    userData?.name ||
-    record?.displayName ||
-    record?.userName ||
-    record?.employeeName ||
-    formatNameFromEmail(email);
-
-  return {
-    uid,
-    email,
-    name,
-    department: userData?.department || "",
-    role: userData?.role || userData?.designation || ""
-  };
-}
+const TRAVEL_AGENTS_COLLECTION = "travelAgents";
+
+
+const {
+  getUniqueHighValueAttentionRows,
+  toDate,
+  normalize,
+  toAmount,
+  isInRange,
+  formatCurrency,
+  formatDateTime,
+  formatNameFromEmail,
+  countBy,
+  sumBy,
+  getRangeLabel,
+  isDeletedLead,
+  getActiveLeads,
+  getLeadDate,
+  getLeadActivityDate,
+  hasLeadAssignee,
+  isWonLead,
+  isLostLead,
+  isCancelledInvalidLead,
+  getLeadWonDate,
+  getLeadLostDate,
+  getLeadCancelledInvalidDate,
+  getQuotationDate,
+  getPaymentDate,
+  isInSelectedRangeByDate,
+  isActiveLead,
+  getLeadQuotationAmount,
+  getLeadVendorCost,
+  getLeadGrossProfit,
+  getLeadActualRealizedGrossProfit,
+  getLeadUnrealizedGrossProfit,
+  getLeadReceivedAmount,
+  getLeadVendorPaymentBalance,
+  getLeadVendorPaidAmount,
+  hasQuotationSent,
+  hasVendorRequest,
+  hasVendorQuoteReceived,
+  isVendorQuotePending,
+  isVendorSelected,
+  getLeadOwner,
+  getLeadAssignee,
+  getLeadCreator,
+  getEngagementDate,
+  getEngagementOwner,
+  getEngagementDestinationList,
+  getTravelAgentDate,
+  getTravelAgentCreator,
+  getEngagementTravelAgentId
+} = dashboardHelpers;
 
 /* =========================
    MAIN MANAGEMENT DASHBOARD
@@ -1138,19 +140,25 @@ function getAttendanceUser(record, userMap) {
 export default function AdminDashboardGraph() {
   const router = useRouter();
   const { user, loading, error } = useAuth("admin");
+  const {
+    scope,
+    userLookup: globalUserLookup,
+    teamDirectory,
+    allUserDirectory,
+    usersLoading
+  } = useAdminScope();
 
   const mountTimeRef = useRef(
     typeof performance !== "undefined" ? performance.now() : Date.now()
   );
   const authLoggedRef = useRef(false);
 
-  const [range, setRange] = useState("today");
+  const range = scope.dateRange || "30d";
   const [activeTab, setActiveTab] = useState("overview");
 
   const [leads, setLeads] = useState([]);
   const [engagements, setEngagements] = useState([]);
-  const [users, setUsers] = useState([]);
-  const [attendanceRecords, setAttendanceRecords] = useState([]);
+  const [travelAgents, setTravelAgents] = useState([]);
 
   const [dataLoading, setDataLoading] = useState(true);
   const [dashboardError, setDashboardError] = useState("");
@@ -1191,7 +199,7 @@ export default function AdminDashboardGraph() {
     }
 
     if (!loading && error === "USER_NOT_REGISTERED") {
-      router.replace("/admin/login");
+      router.replace("/login");
     }
   }, [loading, error, router]);
 
@@ -1208,8 +216,7 @@ export default function AdminDashboardGraph() {
     const loaded = {
       leads: false,
       engagements: false,
-      users: false,
-      attendance: false
+      travelAgents: false
     };
 
     const markLoaded = key => {
@@ -1218,8 +225,7 @@ export default function AdminDashboardGraph() {
       if (
         loaded.leads &&
         loaded.engagements &&
-        loaded.users &&
-        loaded.attendance
+        loaded.travelAgents
       ) {
         setDataLoading(false);
 
@@ -1290,51 +296,25 @@ export default function AdminDashboardGraph() {
       err => handleError("Engagements", err)
     );
 
-    const unsubUsers = onSnapshot(
-      collection(db, USERS_COLLECTION),
+    const unsubTravelAgents = onSnapshot(
+      collection(db, TRAVEL_AGENTS_COLLECTION),
       snap => {
-        const rows = snap.docs
-          .map(docSnap => ({
-            id: docSnap.id,
-            ...docSnap.data()
-          }))
-          .sort((a, b) => {
-            const an = a.displayName || a.name || a.email || "";
-            const bn = b.displayName || b.name || b.email || "";
-            return an.localeCompare(bn);
-          });
+        const rows = snap.docs.map(docSnap => ({
+          id: docSnap.id,
+          ...docSnap.data()
+        }));
 
-        setUsers(rows);
-        markLoaded("users");
+        setTravelAgents(rows);
+        markLoaded("travelAgents");
       },
-      err => handleError("Users", err)
+      err => handleError("Travel Agents", err)
     );
 
-    const unsubAttendance = onSnapshot(
-      collection(db, ATTENDANCE_COLLECTION),
-      snap => {
-        const rows = snap.docs
-          .map(docSnap => ({
-            id: docSnap.id,
-            ...docSnap.data()
-          }))
-          .sort((a, b) => {
-            const ad = getAttendanceRecordDate(a);
-            const bd = getAttendanceRecordDate(b);
-            return bd.localeCompare(ad);
-          });
-
-        setAttendanceRecords(rows);
-        markLoaded("attendance");
-      },
-      err => handleError("Attendance", err)
-    );
 
     return () => {
       unsubLeads();
       unsubEngagements();
-      unsubUsers();
-      unsubAttendance();
+      unsubTravelAgents();
     };
   }, [user]);
 
@@ -1343,66 +323,136 @@ export default function AdminDashboardGraph() {
   ========================== */
 
   const rangeWindow = useMemo(() => {
-    return getRangeWindow(range);
-  }, [range]);
+    return getAdminDateWindow(range, new Date(), scope.dateFrom, scope.dateTo);
+  }, [range, scope.dateFrom, scope.dateTo]);
 
   const activeUsers = useMemo(() => {
-    return users.filter(item => item.active !== false);
-  }, [users]);
+    return teamDirectory.map(member => ({
+      id: member.docId || member.key,
+      uid: member.uid || member.key,
+      email: member.email || "",
+      name: member.name || "",
+      displayName: member.name || "",
+      department: member.team || "",
+      teamName: member.team || "",
+      role: member.role || "",
+      active: true
+    }));
+  }, [teamDirectory]);
 
   const userMap = useMemo(() => {
     const map = new Map();
 
-    users.forEach(item => {
-      const uid = item.uid || item.id;
-      if (!uid) return;
+    allUserDirectory.forEach(member => {
+      const normalizedUser = {
+        id: member.docId || member.key,
+        uid: member.uid || member.key,
+        email: member.email || "",
+        name: member.name || "",
+        displayName: member.name || "",
+        department: member.team || "",
+        teamName: member.team || "",
+        role: member.role || "",
+        active: member.active !== false
+      };
 
-      map.set(uid, item);
+      [member.key, member.uid, member.docId, member.email, ...(member.aliases || []), ...(member.docIds || [])]
+        .filter(Boolean)
+        .forEach(value => {
+          map.set(value, normalizedUser);
+          map.set(normalize(value), normalizedUser);
+        });
     });
 
     return map;
-  }, [users]);
+  }, [allUserDirectory]);
+
+  const identityIsInSelectedTeam = identity => {
+    if (!scope.team || scope.team === "all") return true;
+    const resolved = resolveDirectoryIdentity(identity || {}, globalUserLookup);
+    return !resolved.isUnmapped && teamMatchesScope(resolved.team, scope.team);
+  };
 
   const activeDashboardLeads = useMemo(() => {
     return getActiveLeads(leads);
   }, [leads]);
 
+  const teamScopedLeads = useMemo(() => {
+    if (!scope.team || scope.team === "all") return activeDashboardLeads;
+    return activeDashboardLeads.filter(lead => {
+      const owner = getLeadOwner(lead);
+      const assignee = getLeadAssignee(lead);
+      return identityIsInSelectedTeam(owner) || identityIsInSelectedTeam(assignee);
+    });
+  }, [activeDashboardLeads, scope.team, globalUserLookup]);
+
   const periodLeads = useMemo(() => {
-    return getActiveLeads(activeDashboardLeads).filter(lead =>
+    return getActiveLeads(teamScopedLeads).filter(lead =>
       isInRange(getLeadDate(lead), rangeWindow)
     );
-  }, [activeDashboardLeads, rangeWindow]);
+  }, [teamScopedLeads, rangeWindow]);
 
   const periodEngagements = useMemo(() => {
-    return engagements.filter(item =>
-      isInRange(item.createdAt || item.updatedAt, rangeWindow)
-    );
-  }, [engagements, rangeWindow]);
+    return engagements.filter(item => {
+      if (!isInRange(item.createdAt || item.updatedAt, rangeWindow)) return false;
+      return identityIsInSelectedTeam(getEngagementOwner(item, userMap));
+    });
+  }, [engagements, rangeWindow, scope.team, globalUserLookup, userMap]);
 
-  const periodAttendance = useMemo(() => {
-    return attendanceRecords.filter(record =>
-      isAttendanceInRange(record, rangeWindow)
-    );
-  }, [attendanceRecords, rangeWindow]);
+  const periodTravelAgents = useMemo(() => {
+    return travelAgents.filter(agent => {
+      if (!isInRange(getTravelAgentDate(agent), rangeWindow)) return false;
+      return identityIsInSelectedTeam(getTravelAgentCreator(agent));
+    });
+  }, [travelAgents, rangeWindow, scope.team, globalUserLookup]);
+
+  const firstCallByNewAgent = useMemo(() => {
+    const newAgentIds = new Set(periodTravelAgents.map(agent => agent.id).filter(Boolean));
+    const firstCallMap = new Map();
+
+    [...periodEngagements]
+      .filter(item => {
+        const agentId = getEngagementTravelAgentId(item);
+        return normalize(item.channel) === "call" && newAgentIds.has(agentId);
+      })
+      .sort((a, b) => {
+        const ad = getEngagementDate(a)?.getTime() || 0;
+        const bd = getEngagementDate(b)?.getTime() || 0;
+        return ad - bd;
+      })
+      .forEach(item => {
+        const agentId = getEngagementTravelAgentId(item);
+        if (agentId && !firstCallMap.has(agentId)) firstCallMap.set(agentId, item);
+      });
+
+    return firstCallMap;
+  }, [periodEngagements, periodTravelAgents]);
+
 
   const convertedPeriodLeads = useMemo(() => {
-    return getActiveLeads(activeDashboardLeads).filter(lead => {
+    return getActiveLeads(teamScopedLeads).filter(lead => {
       return isWonLead(lead) && isInSelectedRangeByDate(getLeadWonDate(lead), rangeWindow);
     });
-  }, [activeDashboardLeads, rangeWindow]);
+  }, [teamScopedLeads, rangeWindow]);
 
   const lostPeriodLeads = useMemo(() => {
-    return getActiveLeads(activeDashboardLeads).filter(lead => {
+    return getActiveLeads(teamScopedLeads).filter(lead => {
       return isLostLead(lead) && isInSelectedRangeByDate(getLeadLostDate(lead), rangeWindow);
     });
-  }, [activeDashboardLeads, rangeWindow]);
+  }, [teamScopedLeads, rangeWindow]);
 
+
+  const cancelledInvalidPeriodLeads = useMemo(() => {
+    return getActiveLeads(teamScopedLeads).filter(lead => {
+      return isCancelledInvalidLead(lead) && isInSelectedRangeByDate(getLeadCancelledInvalidDate(lead), rangeWindow);
+    });
+  }, [teamScopedLeads, rangeWindow]);
 
   const paymentReceivedPeriodLeads = useMemo(() => {
-    return getActiveLeads(activeDashboardLeads).filter(lead => {
+    return getActiveLeads(teamScopedLeads).filter(lead => {
       return getLeadReceivedAmount(lead) > 0 && isInSelectedRangeByDate(getPaymentDate(lead), rangeWindow);
     });
-  }, [activeDashboardLeads, rangeWindow]);
+  }, [teamScopedLeads, rangeWindow]);
 
   const quoteValuePeriodLeads = useMemo(() => {
     return getActiveLeads(periodLeads).filter(lead => {
@@ -1422,6 +472,7 @@ export default function AdminDashboardGraph() {
 
     const wonLeads = convertedPeriodLeads.length;
     const lostLeads = lostPeriodLeads.length;
+    const cancelledInvalidLeads = cancelledInvalidPeriodLeads.length;
     const quoteSentLeads = quoteValuePeriodLeads.length;
 
     const uniqueAgents = new Set(
@@ -1441,6 +492,7 @@ export default function AdminDashboardGraph() {
       unassignedLeads: Math.max(leadRows.length - assignedLeads, 0),
       wonLeads,
       lostLeads,
+      cancelledInvalidLeads,
       quoteSentLeads,
       uniqueAgents,
       uniqueDestinations,
@@ -1450,9 +502,13 @@ export default function AdminDashboardGraph() {
         leadRows,
         item => item.destinationName || "Unknown Destination"
       ),
-      byAssignee: countBy(leadRows, item => {
+      byOwner: countBy(leadRows, item => {
         const owner = getLeadOwner(item, userMap);
-        return owner.name || "Unassigned";
+        return owner.name || "Legacy creator";
+      }),
+      byAssignee: countBy(leadRows, item => {
+        const assignee = getLeadAssignee(item, userMap);
+        return assignee.name || "Unassigned";
       }),
       bySource: countBy(leadRows, item => item.source || "Unknown Source"),
       byAgent: countBy(
@@ -1469,6 +525,7 @@ export default function AdminDashboardGraph() {
     userMap,
     convertedPeriodLeads,
     lostPeriodLeads,
+    cancelledInvalidPeriodLeads,
     quoteValuePeriodLeads
   ]);
 
@@ -1623,11 +680,20 @@ export default function AdminDashboardGraph() {
         getLeadQuotationAmount,
         formatCurrency
       ),
-      byAssigneeRevenue: sumBy(
+      byOwnerRevenue: sumBy(
         financeLeads,
         lead => {
           const owner = getLeadOwner(lead, userMap);
-          return owner.name || "Unassigned";
+          return owner.name || "Legacy creator";
+        },
+        getLeadQuotationAmount,
+        formatCurrency
+      ),
+      byAssigneeRevenue: sumBy(
+        financeLeads,
+        lead => {
+          const assignee = getLeadAssignee(lead, userMap);
+          return assignee.name || "Unassigned";
         },
         getLeadQuotationAmount,
         formatCurrency
@@ -1825,21 +891,37 @@ export default function AdminDashboardGraph() {
       item => normalize(item.status) === "completed"
     ).length;
 
-    const calls = periodEngagements.filter(
-      item => normalize(item.channel) === "call"
-    ).length;
+    const byChannelRows = channel =>
+      periodEngagements.filter(item => normalize(item.channel) === channel);
 
-    const whatsapp = periodEngagements.filter(
-      item => normalize(item.channel) === "whatsapp"
-    ).length;
+    const callRows = byChannelRows("call");
+    const whatsappRows = byChannelRows("whatsapp");
+    const emailRows = byChannelRows("email");
+    const meetingRows = byChannelRows("meeting");
+    const uniqueCalledAgentIds = new Set(
+      callRows.map(getEngagementTravelAgentId).filter(Boolean)
+    );
+    const uniqueEngagedAgentIds = new Set(
+      periodEngagements.map(getEngagementTravelAgentId).filter(Boolean)
+    );
 
-    const emails = periodEngagements.filter(
-      item => normalize(item.channel) === "email"
-    ).length;
+    const firstCallsCompleted = firstCallByNewAgent.size;
+    const pendingFirstCalls = Math.max(periodTravelAgents.length - firstCallsCompleted, 0);
 
-    const meetings = periodEngagements.filter(
-      item => normalize(item.channel) === "meeting"
-    ).length;
+    const outcomeCount = code => {
+      const ids = new Set();
+      periodEngagements.forEach(item => {
+        const outcome = normalize(item.outcomeCode || item.outcomeLabel || item.outcome);
+        const agentId = getEngagementTravelAgentId(item);
+        if (outcome === code && agentId) ids.add(agentId);
+      });
+      return ids.size;
+    };
+
+    const currentStatusCount = status =>
+      periodTravelAgents.filter(agent =>
+        normalizeTravelAgentStatus(agent.status || agent.agentStatus, agent.active) === status
+      ).length;
 
     const lastActivity = periodEngagements.reduce((latest, item) => {
       const d = getEngagementDate(item);
@@ -1851,81 +933,36 @@ export default function AdminDashboardGraph() {
     return {
       total: periodEngagements.length,
       completed,
-      calls,
-      whatsapp,
-      emails,
-      meetings,
+      calls: callRows.length,
+      whatsapp: whatsappRows.length,
+      emails: emailRows.length,
+      meetings: meetingRows.length,
+      newAgentsAdded: periodTravelAgents.length,
+      firstCallsCompleted,
+      // Backward-compatible alias used by a few overview components.
+      newAgentCalls: firstCallsCompleted,
+      pendingFirstCalls,
+      newAgentContactRate: periodTravelAgents.length
+        ? Math.round((firstCallsCompleted / periodTravelAgents.length) * 100)
+        : 0,
+      uniqueAgentsCalled: uniqueCalledAgentIds.size,
+      uniqueAgentsContacted: uniqueEngagedAgentIds.size,
+      invalidNumber: currentStatusCount("invalid_number") || outcomeCount("invalid_number"),
+      businessShutDown: currentStatusCount("business_shut_down") || outcomeCount("business_shut_down"),
+      wrongDetails: currentStatusCount("wrong_details") || outcomeCount("wrong_details"),
+      doNotContact: currentStatusCount("do_not_contact") || outcomeCount("do_not_contact"),
       completionRate: periodEngagements.length
         ? Math.round((completed / periodEngagements.length) * 100)
         : 0,
       lastActivity,
-      byChannel: countBy(
-        periodEngagements,
-        item => item.channel || "Unknown Channel"
-      ),
+      byChannel: countBy(periodEngagements, item => item.channel || "Unknown Channel"),
       byCreator: countBy(periodEngagements, item => {
         const owner = getEngagementOwner(item, userMap);
-        return owner.name || "Unknown User";
+        return owner.name || "Legacy / Unmapped";
       }),
       byDestination: countBy(periodEngagements, getEngagementDestinationList)
     };
-  }, [periodEngagements, userMap]);
-
-  /* =========================
-     ATTENDANCE TOTALS
-  ========================== */
-
-  const attendanceTotals = useMemo(() => {
-    const todayIso = getLocalDateKey();
-
-    const todayAttendanceRows = attendanceRecords.filter(
-      record => getAttendanceRecordDate(record) === todayIso
-    );
-
-    const presentTodayUids = new Set(
-      todayAttendanceRows
-        .filter(isAttendancePresent)
-        .map(record => record.uid || record.userUid || record.employeeUid)
-        .filter(Boolean)
-    );
-
-    const checkIns = periodAttendance.reduce((total, record) => {
-      const sessions = getAttendanceSessions(record);
-      const count = sessions.filter(session => session?.checkInAt).length;
-
-      return total + (count || (getFirstCheckIn(record) ? 1 : 0));
-    }, 0);
-
-    const checkedOut = periodAttendance.reduce((total, record) => {
-      const sessions = getAttendanceSessions(record);
-      const count = sessions.filter(session => session?.checkOutAt).length;
-
-      return total + (count || (getLastCheckOut(record) ? 1 : 0));
-    }, 0);
-
-    const totalMinutes = periodAttendance.reduce((total, record) => {
-      return total + getAttendanceMinutes(record);
-    }, 0);
-
-    const activeNow = todayAttendanceRows.filter(isAttendanceActive).length;
-    const late = periodAttendance.filter(isAttendanceLate).length;
-    const leave = periodAttendance.filter(isAttendanceLeave).length;
-
-    return {
-      checkIns,
-      checkedOut,
-      activeNow,
-      late,
-      leave,
-      presentToday: presentTodayUids.size,
-      absentToday: Math.max(activeUsers.length - presentTodayUids.size, 0),
-      totalMinutes,
-      averageMinutes: periodAttendance.length
-        ? Math.round(totalMinutes / periodAttendance.length)
-        : 0,
-      byStatus: countBy(periodAttendance, getAttendanceStatus)
-    };
-  }, [attendanceRecords, periodAttendance, activeUsers]);
+  }, [periodEngagements, periodTravelAgents, firstCallByNewAgent, userMap]);
 
   /* =========================
      USER TOTALS
@@ -1969,48 +1006,78 @@ export default function AdminDashboardGraph() {
     const map = new Map();
 
     const ensureMember = member => {
-      const key =
-        member.uid ||
-        member.email ||
-        member.name ||
-        `unknown-${map.size + 1}`;
+      const resolved = resolveDirectoryIdentity(
+        {
+          uid: member?.uid || "",
+          email: member?.email || "",
+          name: member?.name || ""
+        },
+        globalUserLookup
+      );
+      const canonical = resolved.isUnmapped
+        ? member
+        : {
+            ...member,
+            uid: resolved.uid || member?.uid || "",
+            email: resolved.email || member?.email || "",
+            name: resolved.name || member?.name || "",
+            department: resolved.team || member?.department || "",
+            role: resolved.role || member?.role || ""
+          };
+      const isLegacyUnmapped = canonical?.name === "Legacy / Unmapped";
+      const key = isLegacyUnmapped
+        ? "legacy-unmapped"
+        : resolved.isUnmapped
+          ? canonical?.uid || canonical?.email || canonical?.name || `unknown-${map.size + 1}`
+          : resolved.key;
 
       if (!map.has(key)) {
         map.set(key, {
-          uid: member.uid || "",
-          email: member.email || "",
-          name: member.name || formatNameFromEmail(member.email),
-          department: member.department || "",
-          role: member.role || "",
+          uid: canonical?.uid || "",
+          email: canonical?.email || "",
+          name: canonical?.name || formatNameFromEmail(canonical?.email),
+          department: canonical?.department || "",
+          role: canonical?.role || "",
 
+          // Lead ownership = permanent creator credit.
           newLeads: 0,
+          ownedLeads: 0,
           activeLeads: 0,
           wonLeads: 0,
           lostLeads: 0,
-          assignedLeads: 0,
           quoteSentLeads: 0,
-
           quotationValue: 0,
           receivedAmount: 0,
           vendorPaid: 0,
           grossProfit: 0,
 
+          // Assignment = current working responsibility.
+          assignedLeads: 0,
+          assignedActiveLeads: 0,
+
+          // Travel-agent acquisition and engagement.
+          newAgentsAdded: 0,
+          newAgentsCalled: 0,
+          pendingFirstCalls: 0,
+          acquisitionInvalidNumber: 0,
+          acquisitionBusinessShutDown: 0,
           engagements: 0,
           completedEngagements: 0,
           calls: 0,
+          firstCalls: 0,
+          newAgentCalls: 0,
           whatsapp: 0,
           emails: 0,
           meetings: 0,
           otherEngagements: 0,
-
-          attendanceDays: 0,
-          checkIns: 0,
-          activeSessions: 0,
-          late: 0,
-          leave: 0,
-          totalMinutes: 0,
-          firstCheckIn: null,
-          lastCheckOut: null,
+          invalidNumber: 0,
+          businessShutDown: 0,
+          wrongDetails: 0,
+          doNotContact: 0,
+          contactedAgentIds: new Set(),
+          calledAgentIds: new Set(),
+          invalidAgentIds: new Set(),
+          businessShutAgentIds: new Set(),
 
           lastActivityAt: null,
           score: 0
@@ -2018,40 +1085,17 @@ export default function AdminDashboardGraph() {
       }
 
       const row = map.get(key);
-
-      if (!row.email && member.email) row.email = member.email;
-      if (!row.department && member.department) row.department = member.department;
-      if (!row.role && member.role) row.role = member.role;
-
+      if (!row.email && canonical?.email) row.email = canonical.email;
+      if (!row.department && canonical?.department) row.department = canonical.department;
+      if (!row.role && canonical?.role) row.role = canonical.role;
       return row;
     };
 
     const updateLastActivity = (row, value) => {
       const d = toDate(value);
-      if (!d) return;
-
-      if (!row.lastActivityAt || d > row.lastActivityAt) {
-        row.lastActivityAt = d;
-      }
+      if (d && (!row.lastActivityAt || d > row.lastActivityAt)) row.lastActivityAt = d;
     };
 
-    const updateFirstCheckIn = (row, value) => {
-      const d = toDate(value);
-      if (!d) return;
-
-      if (!row.firstCheckIn || d < row.firstCheckIn) {
-        row.firstCheckIn = d;
-      }
-    };
-
-    const updateLastCheckOut = (row, value) => {
-      const d = toDate(value);
-      if (!d) return;
-
-      if (!row.lastCheckOut || d > row.lastCheckOut) {
-        row.lastCheckOut = d;
-      }
-    };
 
     activeUsers.forEach(item => {
       ensureMember({
@@ -2063,127 +1107,135 @@ export default function AdminDashboardGraph() {
       });
     });
 
+    // Owner receives lead creation/conversion/value credit.
     teamLeads.forEach(lead => {
-      const creator = getLeadCreator(lead, userMap);
-      const creatorRow = ensureMember(creator);
-
-      creatorRow.newLeads += 1;
-
-      updateLastActivity(
-        creatorRow,
-        lead.createdAt || lead.updatedAt || lead.assignedAt || lead.lastActivityAt
-      );
-
       const owner = getLeadOwner(lead, userMap);
-      const row = ensureMember(owner);
+      const ownerRow = ensureMember(owner);
+      ownerRow.newLeads += 1;
+      ownerRow.ownedLeads += 1;
+      if (isActiveLead(lead)) ownerRow.activeLeads += 1;
+      if (isWonLead(lead)) ownerRow.wonLeads += 1;
+      if (isLostLead(lead)) ownerRow.lostLeads += 1;
+      if (hasQuotationSent(lead)) ownerRow.quoteSentLeads += 1;
+      ownerRow.quotationValue += getLeadQuotationAmount(lead);
+      ownerRow.receivedAmount += getLeadReceivedAmount(lead);
+      ownerRow.vendorPaid += getLeadVendorPaidAmount(lead);
+      ownerRow.grossProfit += getLeadGrossProfit(lead);
+      updateLastActivity(ownerRow, lead.lastActivityAt || lead.updatedAt || lead.createdAt);
 
-      if (hasLeadAssignee(lead)) row.assignedLeads += 1;
-      if (isActiveLead(lead)) row.activeLeads += 1;
-      if (isWonLead(lead)) row.wonLeads += 1;
-      if (isLostLead(lead)) row.lostLeads += 1;
-      if (hasQuotationSent(lead)) row.quoteSentLeads += 1;
+      // Assignee receives workload only; reassignment never changes owner credit.
+      if (hasLeadAssignee(lead)) {
+        const assignee = getLeadAssignee(lead, userMap);
+        const assigneeRow = ensureMember(assignee);
+        assigneeRow.assignedLeads += 1;
+        if (isActiveLead(lead)) assigneeRow.assignedActiveLeads += 1;
+        updateLastActivity(assigneeRow, lead.lastActivityAt || lead.updatedAt || lead.assignedAt);
+      }
+    });
 
-      row.quotationValue += getLeadQuotationAmount(lead);
-      row.receivedAmount += getLeadReceivedAmount(lead);
-      row.vendorPaid += getLeadVendorPaidAmount(lead);
-      row.grossProfit += getLeadGrossProfit(lead);
+    // New travel-agent acquisition credit belongs to the creator of the master record.
+    // Whether the record was contacted is tracked separately from who made the call.
+    periodTravelAgents.forEach(agent => {
+      const creator = getTravelAgentCreator(agent, userMap);
+      const row = ensureMember(creator);
+      const status = normalizeTravelAgentStatus(agent.status || agent.agentStatus, agent.active);
 
-      updateLastActivity(
-        row,
-        lead.lastActivityAt || lead.updatedAt || lead.assignedAt || lead.createdAt
-      );
+      row.newAgentsAdded += 1;
+      if (firstCallByNewAgent.has(agent.id)) row.newAgentsCalled += 1;
+      else row.pendingFirstCalls += 1;
+      if (status === "invalid_number") row.acquisitionInvalidNumber += 1;
+      if (status === "business_shut_down") row.acquisitionBusinessShutDown += 1;
+      updateLastActivity(row, agent.updatedAt || agent.createdAt);
     });
 
     periodEngagements.forEach(item => {
       const owner = getEngagementOwner(item, userMap);
       const row = ensureMember(owner);
+      const agentId = getEngagementTravelAgentId(item);
+      const channel = normalize(item.channel);
+      const outcome = normalize(item.outcomeCode || item.outcomeLabel || item.outcome);
 
       row.engagements += 1;
+      if (normalize(item.status) === "completed") row.completedEngagements += 1;
+      if (agentId) row.contactedAgentIds.add(agentId);
 
-      if (normalize(item.status) === "completed") {
-        row.completedEngagements += 1;
-      }
+      if (channel === "call") {
+        row.calls += 1;
+        if (agentId) row.calledAgentIds.add(agentId);
 
-      const channel = normalize(item.channel);
-
-      if (channel === "call") row.calls += 1;
-      else if (channel === "whatsapp") row.whatsapp += 1;
+        const firstCall = agentId ? firstCallByNewAgent.get(agentId) : null;
+        if (firstCall && firstCall.id === item.id) {
+          row.firstCalls += 1;
+          row.newAgentCalls += 1;
+        }
+      } else if (channel === "whatsapp") row.whatsapp += 1;
       else if (channel === "email") row.emails += 1;
       else if (channel === "meeting") row.meetings += 1;
       else row.otherEngagements += 1;
 
+      if (outcome === "invalid_number" && agentId) row.invalidAgentIds.add(agentId);
+      else if (outcome === "business_shut_down" && agentId) row.businessShutAgentIds.add(agentId);
+      else if (outcome === "wrong_details") row.wrongDetails += 1;
+      else if (outcome === "do_not_contact") row.doNotContact += 1;
+
       updateLastActivity(row, item.updatedAt || item.createdAt);
     });
 
-    periodAttendance.forEach(record => {
-      const owner = getAttendanceUser(record, userMap);
-      const row = ensureMember(owner);
-
-      const sessions = getAttendanceSessions(record);
-      const checkInCount = sessions.filter(session => session?.checkInAt).length;
-
-      row.attendanceDays += 1;
-      row.checkIns += checkInCount || (getFirstCheckIn(record) ? 1 : 0);
-      row.totalMinutes += getAttendanceMinutes(record);
-
-      if (isAttendanceActive(record)) row.activeSessions += 1;
-      if (isAttendanceLate(record)) row.late += 1;
-      if (isAttendanceLeave(record)) row.leave += 1;
-
-      updateFirstCheckIn(row, getFirstCheckIn(record));
-      updateLastCheckOut(row, getLastCheckOut(record));
-    });
 
     return Array.from(map.values())
       .map(row => {
         const profitScore = Math.max(Math.floor(row.grossProfit / 1000), 0);
-
         const score =
           row.wonLeads * 15 +
           row.quoteSentLeads * 5 +
           row.completedEngagements * 3 +
           row.calls * 2 +
-          row.whatsapp * 2 +
-          row.emails * 2 +
           row.meetings * 3 +
+          row.newAgentsAdded * 2 +
+          row.firstCalls * 2 +
           row.activeLeads +
-          row.attendanceDays +
           profitScore -
           row.lostLeads * 5;
 
         return {
           ...row,
+          uniqueAgentsContacted: row.contactedAgentIds.size,
+          uniqueAgentsCalled: row.calledAgentIds.size,
+          followUpCalls: Math.max(row.calls - row.firstCalls, 0),
+          invalidNumber: row.invalidAgentIds.size,
+          businessShutDown: row.businessShutAgentIds.size,
+          acquisitionContactRate: row.newAgentsAdded
+            ? Math.round((row.newAgentsCalled / row.newAgentsAdded) * 100)
+            : 0,
+          contactedAgentIds: undefined,
+          calledAgentIds: undefined,
+          invalidAgentIds: undefined,
+          businessShutAgentIds: undefined,
           score
         };
       })
       .sort((a, b) => {
         if (activeTab === "engagement") {
-          return b.engagements - a.engagements || b.score - a.score;
+          return b.firstCalls - a.firstCalls || b.calls - a.calls || b.engagements - a.engagements;
         }
-
         if (activeTab === "leads") {
-          return b.newLeads - a.newLeads || b.activeLeads - a.activeLeads;
+          return b.ownedLeads - a.ownedLeads || b.assignedActiveLeads - a.assignedActiveLeads;
         }
-
-        if (activeTab === "attendance") {
-          return b.totalMinutes - a.totalMinutes || b.checkIns - a.checkIns;
-        }
-
         if (activeTab === "finance") {
           return b.grossProfit - a.grossProfit || b.quotationValue - a.quotationValue;
         }
-
         return b.score - a.score;
       });
   }, [
     activeUsers,
     periodLeads,
     periodEngagements,
-    periodAttendance,
+    periodTravelAgents,
+    firstCallByNewAgent,
     userMap,
+    globalUserLookup,
     activeTab
   ]);
-
 
 
   const insightPanels = useMemo(() => {
@@ -2419,7 +1471,6 @@ export default function AdminDashboardGraph() {
   const openTeamMetricDetail = (teamRow, metricKey) => {
     const leadRows = getActiveLeads(periodLeads);
     const engagementRows = periodEngagements;
-    const attendanceRows = periodAttendance;
 
     const createdLeadRows = leadRows.filter(lead => {
       return isSameDashboardMember(teamRow, getLeadCreator(lead, userMap));
@@ -2429,13 +1480,14 @@ export default function AdminDashboardGraph() {
       return isSameDashboardMember(teamRow, getLeadOwner(lead, userMap));
     });
 
+    const assignedLeadRows = leadRows.filter(lead => {
+      return isSameDashboardMember(teamRow, getLeadAssignee(lead, userMap));
+    });
+
     const ownedEngagementRows = engagementRows.filter(item => {
       return isSameDashboardMember(teamRow, getEngagementOwner(item, userMap));
     });
 
-    const ownedAttendanceRows = attendanceRows.filter(record => {
-      return isSameDashboardMember(teamRow, getAttendanceUser(record, userMap));
-    });
 
     const metricMap = {
       newLeads: {
@@ -2448,9 +1500,18 @@ export default function AdminDashboardGraph() {
       },
 
       assignedLeads: {
-        title: `${teamRow.name} - Assigned Leads`,
-        description: "Leads assigned to this team member.",
-        rows: ownedLeadRows.filter(hasLeadAssignee),
+        title: `${teamRow.name} - Assigned Workload`,
+        description: "Leads currently assigned to this team member. Ownership remains with the creator.",
+        rows: assignedLeadRows,
+        type: "lead",
+        amountLabel: "Quotation",
+        amountGetter: getLeadQuotationAmount
+      },
+
+      assignedActiveLeads: {
+        title: `${teamRow.name} - Active Assigned Workload`,
+        description: "Open leads currently assigned to this team member.",
+        rows: assignedLeadRows.filter(isActiveLead),
         type: "lead",
         amountLabel: "Quotation",
         amountGetter: getLeadQuotationAmount
@@ -2538,6 +1599,31 @@ export default function AdminDashboardGraph() {
         type: "engagement"
       },
 
+      newAgentCalls: {
+        title: `${teamRow.name} - First Calls`,
+        description: "First call to each new travel agent. Each new agent can contribute only one first-call credit.",
+        rows: ownedEngagementRows.filter(item => {
+          const agentId = getEngagementTravelAgentId(item);
+          const firstCall = agentId ? firstCallByNewAgent.get(agentId) : null;
+          return firstCall?.id === item.id;
+        }),
+        type: "engagement"
+      },
+
+      invalidNumber: {
+        title: `${teamRow.name} - Invalid Number Outcomes`,
+        description: "Engagements marked with an invalid phone number.",
+        rows: ownedEngagementRows.filter(item => normalize(item.outcomeCode || item.outcomeLabel || item.outcome) === "invalid_number"),
+        type: "engagement"
+      },
+
+      businessShutDown: {
+        title: `${teamRow.name} - Business Shut Down Outcomes`,
+        description: "Engagements where the travel-agent business was marked shut down.",
+        rows: ownedEngagementRows.filter(item => normalize(item.outcomeCode || item.outcomeLabel || item.outcome) === "business_shut_down"),
+        type: "engagement"
+      },
+
       calls: {
         title: `${teamRow.name} - Calls`,
         description: "Call engagements.",
@@ -2571,27 +1657,6 @@ export default function AdminDashboardGraph() {
         description: "Completed engagement activities.",
         rows: ownedEngagementRows.filter(item => normalize(item.status) === "completed"),
         type: "engagement"
-      },
-
-      attendanceDays: {
-        title: `${teamRow.name} - Attendance Days`,
-        description: "Attendance records for this team member.",
-        rows: ownedAttendanceRows,
-        type: "attendance"
-      },
-
-      checkIns: {
-        title: `${teamRow.name} - Check-ins`,
-        description: "Attendance records with check-in.",
-        rows: ownedAttendanceRows.filter(record => getFirstCheckIn(record)),
-        type: "attendance"
-      },
-
-      totalMinutes: {
-        title: `${teamRow.name} - Working Hours`,
-        description: "Attendance records with working duration.",
-        rows: ownedAttendanceRows.filter(record => getAttendanceMinutes(record) > 0),
-        type: "attendance"
       }
     };
 
@@ -2625,7 +1690,6 @@ export default function AdminDashboardGraph() {
     { key: "vendor", label: "Vendors", icon: Handshake },
     { key: "attention", label: "Attention", icon: AlertTriangle },
     { key: "engagement", label: "Engagement", icon: Activity },
-    { key: "attendance", label: "Attendance", icon: CalendarDays },
     { key: "team", label: "Team", icon: Users }
   ];
 
@@ -2704,48 +1768,35 @@ export default function AdminDashboardGraph() {
     );
   }
 
+  if (dataLoading || usersLoading) {
+    return (
+      <main className="mx-auto w-full max-w-[1600px] p-4 md:p-6">
+        <DashboardSkeleton />
+      </main>
+    );
+  }
+
   return (
-    <main className="p-4 md:p-6 space-y-6 w-full">
+    <main className="mx-auto w-full max-w-[1600px] space-y-6 p-4 md:p-6">
       <section className="space-y-4">
-        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+        <div className="flex flex-col gap-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.03)] md:flex-row md:items-end md:justify-between">
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
               <BarChart3 className="h-3.5 w-3.5" />
               Management Command Center
             </div>
 
-            <h1 className="mt-3 text-xl font-semibold text-gray-900">
+            <h1 className="mt-3 text-2xl font-semibold tracking-tight text-gray-950">
               Management Dashboard
             </h1>
 
-            <p className="text-sm text-gray-500">
-              Executive overview of active leads, finance, vendor operations, team workload and attendance.
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-gray-500">
+              Executive overview of active leads, finance, vendor operations, team workload and travel-agent engagement.
             </p>
           </div>
 
-          <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl p-1  w-full md:w-auto">
-            {[
-              { key: "today", label: "Today" },
-              { key: "yesterday", label: "Yesterday" },
-              { key: "week", label: "This Week" },
-              { key: "month", label: "This Month" },
-              { key: "all", label: "All" }
-            ].map(item => (
-              <button
-                key={item.key}
-                type="button"
-                onClick={() => setRange(item.key)}
-                className={`
-                  flex-1 md:flex-none px-3 py-1.5 rounded-lg text-xs font-medium transition
-                  ${range === item.key
-                    ? "bg-blue-600 text-white"
-                    : "text-gray-600 hover:bg-gray-50"
-                  }
-                `}
-              >
-                {item.label}
-              </button>
-            ))}
+          <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700">
+            Global Date + Team scope applies to this dashboard
           </div>
         </div>
 
@@ -2755,7 +1806,6 @@ export default function AdminDashboardGraph() {
           </div>
         ) : null}
 
-        {dataLoading ? <DashboardSkeleton /> : null}
 
         <BusinessPulseCard
           range={range}
@@ -2779,7 +1829,7 @@ export default function AdminDashboardGraph() {
           <ExecutiveKpiCard
             title="Converted Leads"
             value={leadTotals.wonLeads}
-            helper={`${leadTotals.lostLeads} lost leads`}
+            helper={`${leadTotals.lostLeads} lost • ${leadTotals.cancelledInvalidLeads} cancelled / invalid`}
             icon={CheckCircle2}
             tone="green"
             onClick={() => openInsight("convertedLeads")}
@@ -2989,7 +2039,7 @@ export default function AdminDashboardGraph() {
             <DashboardKpiCard label="Total Leads" value={leadTotals.total} />
             <DashboardKpiCard label="Quote Sent" value={leadTotals.quoteSentLeads} color="blue" />
             <DashboardKpiCard label="Margin" value={`${financeTotals.marginPercent}%`} color="purple" />
-            <DashboardKpiCard label="Present Today" value={attendanceTotals.presentToday} color="green" />
+            <DashboardKpiCard label="First Calls" value={engagementTotals.firstCallsCompleted} color="green" />
           </div>
 
           <InsightCards
@@ -3004,7 +2054,7 @@ export default function AdminDashboardGraph() {
               title="Lead Trend"
               description="Lead inflow trend for selected period."
             >
-              <LeadsTrendChart leads={activeDashboardLeads} days={14} />
+              <LeadsTrendChart leads={teamScopedLeads} days={14} />
             </ChartShell>
 
             <ChartShell
@@ -3118,8 +2168,8 @@ export default function AdminDashboardGraph() {
             <MiniBarList
               icon={Users}
               tone="purple"
-              title="Revenue by Team Member"
-              rows={financeTotals.byAssigneeRevenue}
+              title="Revenue by Lead Owner"
+              rows={financeTotals.byOwnerRevenue}
             />
             <MiniBarList
               icon={Wallet}
@@ -3155,10 +2205,11 @@ export default function AdminDashboardGraph() {
             <DashboardKpiCard label="Converted" value={leadTotals.wonLeads} color="green" />
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <DashboardKpiCard label="Assigned" value={leadTotals.assignedLeads} color="blue" />
             <DashboardKpiCard label="Unassigned" value={leadTotals.unassignedLeads} color={leadTotals.unassignedLeads ? "red" : "gray"} />
             <DashboardKpiCard label="Lost" value={leadTotals.lostLeads} color={leadTotals.lostLeads ? "red" : "gray"} />
+            <DashboardKpiCard label="Cancelled / Invalid" value={leadTotals.cancelledInvalidLeads} color={leadTotals.cancelledInvalidLeads ? "gray" : "gray"} />
             <DashboardKpiCard label="Destinations" value={leadTotals.uniqueDestinations} color="purple" />
           </div>
 
@@ -3186,6 +2237,11 @@ export default function AdminDashboardGraph() {
             <MiniBarList icon={PieChart} tone="purple" title="Leads by Stage" rows={leadTotals.byStage} />
             <MiniBarList icon={BarChart3} tone="blue" title="Leads by Status" rows={leadTotals.byStatus} />
             <MiniBarList icon={Activity} tone="green" title="Leads by Source" rows={leadTotals.bySource} />
+          </section>
+
+          <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <MiniBarList icon={UserCheck} tone="blue" title="Leads by Owner (Creator Credit)" rows={leadTotals.byOwner} />
+            <MiniBarList icon={Users} tone="purple" title="Leads by Current Assignee (Workload)" rows={leadTotals.byAssignee} />
           </section>
 
           <ManagementLeadsTable rows={teamRows} onOpenMetric={openTeamMetricDetail} />
@@ -3264,16 +2320,21 @@ export default function AdminDashboardGraph() {
         <section className="space-y-6">
           <SectionHeader
             icon={Activity}
-            title="Engagement Activity"
-            description="Calls, WhatsApp, emails, meetings and team engagement movement."
+            title="Agent Acquisition & Engagement"
+            description="Separate who added the agent from who performed the calling and follow-up work."
           />
 
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <EngagementKpiCard label="Calls" value={engagementTotals.calls} />
-            <EngagementKpiCard label="WhatsApp" value={engagementTotals.whatsapp} />
-            <EngagementKpiCard label="Emails" value={engagementTotals.emails} />
-            <EngagementKpiCard label="Meetings" value={engagementTotals.meetings} />
-            <EngagementKpiCard label="Last Activity" value={formatDateTime(engagementTotals.lastActivity)} />
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+            <EngagementKpiCard label="New Agents Added" value={engagementTotals.newAgentsAdded} />
+            <EngagementKpiCard label="First Calls Done" value={engagementTotals.firstCallsCompleted} />
+            <EngagementKpiCard label="Pending First Call" value={engagementTotals.pendingFirstCalls} />
+            <EngagementKpiCard label="Contact Rate" value={`${engagementTotals.newAgentContactRate}%`} />
+            <EngagementKpiCard label="All Calls" value={engagementTotals.calls} />
+            <EngagementKpiCard label="Unique Agents Called" value={engagementTotals.uniqueAgentsCalled} />
+          </div>
+
+          <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-800">
+            <strong>First Call</strong> is counted once per new travel agent and credited to the team member who made that first call. Repeat calls are counted only under All Calls / Follow-up Calls, so the first-call number can never be inflated by repeated dialing.
           </div>
 
           <ChartShell
@@ -3307,57 +2368,31 @@ export default function AdminDashboardGraph() {
           </ChartShell>
 
           <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <MiniBarList icon={Users} tone="purple" title="Engagement by Employee" rows={engagementTotals.byCreator} />
-            <MiniBarList icon={Target} tone="blue" title="Engagement by Destination" rows={engagementTotals.byDestination} />
+            <MiniBarList icon={Users} tone="purple" title="Engagement by Team Member" rows={engagementTotals.byCreator} />
+            <MiniBarList
+              icon={AlertTriangle}
+              tone="red"
+              title="Agent Record Outcomes"
+              rows={[
+                { name: "Invalid Number", count: engagementTotals.invalidNumber },
+                { name: "Business Shut Down", count: engagementTotals.businessShutDown },
+                { name: "Wrong Details", count: engagementTotals.wrongDetails },
+                { name: "Do Not Contact", count: engagementTotals.doNotContact }
+              ].filter(item => item.count > 0)}
+            />
           </section>
 
           <ManagementEngagementTable rows={teamRows} onOpenMetric={openTeamMetricDetail} />
         </section>
       )}
 
-      {activeTab === "attendance" && (
-        <section className="space-y-6">
-          <SectionHeader
-            icon={CalendarDays}
-            title="Attendance Overview"
-            description="Today’s presence, active sessions, late marks and total working hours."
-          />
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <DashboardKpiCard label="Present Today" value={attendanceTotals.presentToday} color="green" />
-            <DashboardKpiCard label="Active Now" value={attendanceTotals.activeNow} color="green" />
-            <DashboardKpiCard label="Late" value={attendanceTotals.late} color={attendanceTotals.late ? "amber" : "gray"} />
-            <DashboardKpiCard label="Total Hours" value={formatDuration(attendanceTotals.totalMinutes)} color="purple" />
-          </div>
-
-          <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <MiniBarList icon={Clock3} tone="blue" title="Attendance by Status" rows={attendanceTotals.byStatus} />
-
-            <MiniBarList
-              icon={Clock3}
-              tone="purple"
-              title="Working Hours by Employee"
-              rows={teamRows
-                .filter(row => row.totalMinutes > 0)
-                .map(row => ({
-                  name: row.name,
-                  count: row.totalMinutes,
-                  displayCount: formatDuration(row.totalMinutes)
-                }))
-                .sort((a, b) => b.count - a.count)}
-            />
-          </section>
-
-          <ManagementAttendanceTable rows={teamRows} onOpenMetric={openTeamMetricDetail} />
-        </section>
-      )}
 
       {activeTab === "team" && (
         <section className="space-y-6">
           <SectionHeader
             icon={Users}
             title="Team Performance"
-            description="Team workload, revenue contribution, engagement activity and attendance score."
+            description="Commercial performance with permanent lead ownership, current assignment workload and engagement activity kept distinct."
           />
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -3388,1849 +2423,3 @@ export default function AdminDashboardGraph() {
   );
 }
 
-/* =========================
-   UX COMPONENTS
-========================== */
-
-const KPI_TONES = {
-  blue: {
-    card: "border-blue-100 bg-blue-50/70",
-    icon: "bg-blue-600 text-white",
-    title: "text-blue-700",
-    value: "text-blue-950",
-    helper: "text-blue-600"
-  },
-  green: {
-    card: "border-green-100 bg-green-50/70",
-    icon: "bg-green-600 text-white",
-    title: "text-green-700",
-    value: "text-green-950",
-    helper: "text-green-600"
-  },
-  emerald: {
-    card: "border-emerald-100 bg-emerald-50/70",
-    icon: "bg-emerald-600 text-white",
-    title: "text-emerald-700",
-    value: "text-emerald-950",
-    helper: "text-emerald-600"
-  },
-  purple: {
-    card: "border-purple-100 bg-purple-50/70",
-    icon: "bg-purple-600 text-white",
-    title: "text-purple-700",
-    value: "text-purple-950",
-    helper: "text-purple-600"
-  },
-  amber: {
-    card: "border-amber-100 bg-amber-50/80",
-    icon: "bg-amber-500 text-white",
-    title: "text-amber-700",
-    value: "text-amber-950",
-    helper: "text-amber-700"
-  },
-  orange: {
-    card: "border-orange-100 bg-orange-50/80",
-    icon: "bg-orange-500 text-white",
-    title: "text-orange-700",
-    value: "text-orange-950",
-    helper: "text-orange-700"
-  },
-  red: {
-    card: "border-red-100 bg-red-50/80",
-    icon: "bg-red-600 text-white",
-    title: "text-red-700",
-    value: "text-red-950",
-    helper: "text-red-700"
-  },
-  slate: {
-    card: "border-slate-200 bg-slate-50",
-    icon: "bg-slate-700 text-white",
-    title: "text-slate-600",
-    value: "text-slate-950",
-    helper: "text-slate-500"
-  }
-};
-
-function DashboardSkeleton() {
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {[1, 2, 3, 4].map(item => (
-          <div
-            key={item}
-            className="h-28 rounded-2xl bg-gray-100 animate-pulse"
-          />
-        ))}
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <div className="h-72 rounded-2xl bg-gray-100 animate-pulse" />
-        <div className="h-72 rounded-2xl bg-gray-100 animate-pulse" />
-      </div>
-    </div>
-  );
-}
-
-function ExecutiveKpiCard({
-  title,
-  value,
-  helper,
-  icon: Icon,
-  tone = "slate",
-  onClick
-}) {
-  const theme = KPI_TONES[tone] || KPI_TONES.slate;
-
-  const content = (
-    <>
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className={`text-xs font-semibold uppercase tracking-wide ${theme.title}`}>
-            {title}
-          </p>
-
-          <p className={`mt-2 text-xl font-bold ${theme.value}`}>
-            {value}
-          </p>
-
-          {helper ? (
-            <p className={`mt-1 text-xs ${theme.helper}`}>
-              {helper}
-            </p>
-          ) : null}
-
-          {onClick ? (
-            <p className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-gray-500">
-              View details
-              <ArrowRight className="h-3.5 w-3.5" />
-            </p>
-          ) : null}
-        </div>
-
-        <div className={`rounded-2xl p-2.5 ${theme.icon}`}>
-          <Icon className="h-5 w-5" />
-        </div>
-      </div>
-
-      <div className="pointer-events-none absolute -right-6 -bottom-6 h-20 w-20 rounded-full bg-white/40" />
-    </>
-  );
-
-  const className = `
-    relative overflow-hidden rounded-2xl border p-4 transition hover:-translate-y-0.5 hover:shadow-md
-    ${theme.card}
-    ${onClick ? "cursor-pointer text-left focus:outline-none focus:ring-2 focus:ring-blue-500/20" : ""}
-  `;
-
-  if (onClick) {
-    return (
-      <button type="button" onClick={onClick} className={className}>
-        {content}
-      </button>
-    );
-  }
-
-  return <div className={className}>{content}</div>;
-}
-
-function DashboardGraphCard({
-  title,
-  description,
-  icon: Icon,
-  tone = "slate",
-  children
-}) {
-  const theme = KPI_TONES[tone] || KPI_TONES.slate;
-
-  return (
-    <div className="rounded-2xl border border-gray-200 bg-white p-4 ">
-      <div className="flex items-start gap-3">
-        <div className={`rounded-2xl p-2.5 ${theme.icon}`}>
-          <Icon className="h-5 w-5" />
-        </div>
-
-        <div>
-          <h2 className="text-sm font-semibold text-gray-900">
-            {title}
-          </h2>
-          <p className="mt-0.5 text-xs text-gray-500">
-            {description}
-          </p>
-        </div>
-      </div>
-
-      <div className="mt-5">
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function MiniColumnGraph({ rows = [] }) {
-  const max = Math.max(...rows.map(row => Number(row.value || 0)), 1);
-
-  return (
-    <div className="flex items-end gap-3 h-44">
-      {rows.map(row => {
-        const theme = KPI_TONES[row.tone] || KPI_TONES.slate;
-        const height = `${Math.max((Number(row.value || 0) / max) * 100, 8)}%`;
-
-        return (
-          <div key={row.label} className="flex-1 h-full flex flex-col justify-end">
-            <div className="flex-1 flex items-end">
-              <div
-                className={`
-                  w-full rounded-t-2xl transition-all
-                  ${theme.icon}
-                `}
-                style={{ height }}
-              />
-            </div>
-
-            <div className="mt-2 text-center">
-              <p className="text-[11px] font-medium text-gray-500 truncate">
-                {row.label}
-              </p>
-              <p className="text-xs font-semibold text-gray-900 truncate">
-                {row.display}
-              </p>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function SectionHeader({ icon: Icon, title, description }) {
-  return (
-    <div className="flex items-start gap-3">
-      <div className="rounded-2xl border border-gray-200 bg-white p-2.5 text-gray-700 ">
-        <Icon className="h-5 w-5" />
-      </div>
-
-      <div>
-        <h2 className="text-base font-semibold text-gray-900">
-          {title}
-        </h2>
-        <p className="mt-0.5 text-sm text-gray-500">
-          {description}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function BusinessPulseCard({
-  range,
-  financeTotals,
-  leadTotals,
-  vendorTotals,
-  attentionSummary,
-  onOpenDetail
-}) {
-  return (
-    <section className="rounded-3xl border border-gray-200 bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 p-5 text-white ">
-      <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-5">
-        <div>
-          <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-gray-200">
-            <Activity className="h-3.5 w-3.5" />
-            {getRangeLabel(range)} Snapshot
-          </div>
-
-          <h2 className="mt-3 text-2xl font-semibold">
-            Business Pulse
-          </h2>
-
-          <p className="mt-1 max-w-2xl text-sm text-gray-300">
-            Quick view of revenue, collection, vendor exposure, team pipeline and management attention.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <PulseMetric
-            icon={LineChart}
-            label="Active Leads"
-            value={leadTotals.activeLeads}
-            onClick={() => onOpenDetail?.("activeLeads")}
-          />
-
-          <PulseMetric
-            icon={CircleDollarSign}
-            label="Quotation"
-            value={formatCurrency(financeTotals.quotationValue)}
-            onClick={() => onOpenDetail?.("quotationValue")}
-          />
-
-          <PulseMetric
-            icon={Wallet}
-            label="Cash Position"
-            value={formatCurrency(financeTotals.cashInHand)}
-            danger={financeTotals.cashInHand < 0}
-            onClick={() => onOpenDetail?.("customerReceived")}
-          />
-
-          <PulseMetric
-            icon={AlertTriangle}
-            label="Attention"
-            value={attentionSummary.total}
-            danger={attentionSummary.total > 0}
-            onClick={() => onOpenDetail?.("attentionItems")}
-          />
-        </div>
-      </div>
-
-      <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
-        <PulseInfo
-          icon={TrendingUp}
-          label="Actual Realized GP"
-          value={formatCurrency(financeTotals.realizedGrossProfit)}
-          helper={`${formatCurrency(financeTotals.unrealizedGrossProfit)} not realized`}
-          onClick={() => onOpenDetail?.("grossProfit")}
-        />
-
-        <PulseInfo
-          icon={Handshake}
-          label="Vendor Exposure"
-          value={formatCurrency(financeTotals.vendorBalance)}
-          helper={`${vendorTotals.pendingQuoteLeads} pending vendor quotes`}
-          warning={financeTotals.vendorBalance > 0 || vendorTotals.pendingQuoteLeads > 0}
-          onClick={() => onOpenDetail?.("vendorBalance")}
-        />
-
-        <PulseInfo
-          icon={CheckCircle2}
-          label="Converted Leads"
-          value={leadTotals.wonLeads}
-          helper={`${financeTotals.customerFullyPaid} customer fully paid`}
-          onClick={() => onOpenDetail?.("convertedLeads")}
-        />
-      </div>
-    </section>
-  );
-}
-
-function PulseMetric({ icon: Icon, label, value, danger = false, onClick }) {
-  const content = (
-    <>
-      <div className="flex items-center gap-2 text-gray-300">
-        <Icon className="h-4 w-4" />
-        <p className="text-xs">{label}</p>
-      </div>
-
-      <p className={`mt-2 text-lg font-semibold ${danger ? "text-red-300" : "text-white"}`}>
-        {value}
-      </p>
-    </>
-  );
-
-  const className = `
-    rounded-2xl bg-white/10 px-4 py-3 backdrop-blur transition
-    ${onClick ? "cursor-pointer text-left hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-white/20" : ""}
-  `;
-
-  if (onClick) {
-    return (
-      <button type="button" onClick={onClick} className={className}>
-        {content}
-      </button>
-    );
-  }
-
-  return <div className={className}>{content}</div>;
-}
-
-function PulseInfo({ icon: Icon, label, value, helper, warning = false, onClick }) {
-  const content = (
-    <>
-      <div className="flex items-center gap-2 text-gray-300">
-        <Icon className="h-4 w-4" />
-        <span className="text-xs">{label}</span>
-      </div>
-
-      <p className="mt-2 text-lg font-semibold text-white">
-        {value}
-      </p>
-
-      <p className={`mt-1 text-xs ${warning ? "text-amber-300" : "text-gray-300"}`}>
-        {helper}
-      </p>
-    </>
-  );
-
-  const className = `
-    rounded-2xl border border-white/10 bg-white/5 p-4 transition
-    ${onClick ? "cursor-pointer text-left hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/20" : ""}
-  `;
-
-  if (onClick) {
-    return (
-      <button type="button" onClick={onClick} className={className}>
-        {content}
-      </button>
-    );
-  }
-
-  return <div className={className}>{content}</div>;
-}
-
-function FinanceFlowCard({ financeTotals }) {
-  const items = [
-    {
-      label: "Quotation",
-      value: formatCurrency(financeTotals.quotationValue),
-      icon: LineChart
-    },
-    {
-      label: "Received",
-      value: formatCurrency(financeTotals.receivedAmount),
-      icon: Wallet
-    },
-    {
-      label: "Vendor Paid",
-      value: formatCurrency(financeTotals.vendorPaid),
-      icon: Handshake
-    },
-    {
-      label: "Cash Position",
-      value: formatCurrency(financeTotals.cashInHand),
-      icon: CircleDollarSign
-    },
-    {
-      label: "Gross Profit",
-      value: formatCurrency(financeTotals.grossProfit),
-      icon: TrendingUp
-    }
-  ];
-
-  return (
-    <div className="rounded-2xl border border-gray-200 bg-white p-4 ">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-        <div className="flex items-start gap-3">
-          <div className="rounded-2xl bg-purple-50 p-2.5 text-purple-700">
-            <CircleDollarSign className="h-5 w-5" />
-          </div>
-
-          <div>
-            <h2 className="text-sm font-semibold text-gray-900">
-              Finance Flow
-            </h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Quote to collection to vendor payout and final profit.
-            </p>
-          </div>
-        </div>
-
-        <span className="w-fit rounded-full bg-purple-50 px-3 py-1 text-xs font-medium text-purple-700">
-          Margin {financeTotals.marginPercent}%
-        </span>
-      </div>
-
-      <div className="mt-5 grid grid-cols-1 md:grid-cols-5 gap-3">
-        {items.map((item, index) => {
-          const ItemIcon = item.icon;
-
-          return (
-            <div key={item.label} className="relative rounded-xl bg-gray-50 p-4">
-              <div className="flex items-center gap-2 text-gray-500">
-                <ItemIcon className="h-4 w-4" />
-                <p className="text-xs">{item.label}</p>
-              </div>
-
-              <p className="mt-2 text-base font-semibold text-gray-900">
-                {item.value}
-              </p>
-
-              {index < items.length - 1 && (
-                <span className="hidden md:flex absolute -right-2 top-1/2 -translate-y-1/2 h-6 w-6 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-400">
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </span>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function InsightCards({ financeTotals, attentionSummary }) {
-  const bestDestination = financeTotals.byDestinationRevenue?.[0];
-  const bestAgent = financeTotals.byAgentRevenue?.[0];
-  const biggestRisk = attentionSummary.byType?.[0];
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <InsightCard
-        icon={Target}
-        label="Best Destination"
-        title={bestDestination?.name || "No destination yet"}
-        value={bestDestination?.displayCount || "—"}
-      />
-
-      <InsightCard
-        icon={BriefcaseBusiness}
-        label="Best Travel Agent"
-        title={bestAgent?.name || "No agent yet"}
-        value={bestAgent?.displayCount || "—"}
-      />
-
-      <InsightCard
-        icon={AlertTriangle}
-        label="Biggest Risk"
-        title={biggestRisk ? readableLabel(biggestRisk.name) : "No risk found"}
-        value={biggestRisk ? `${biggestRisk.count} items` : "Clear"}
-        danger={Boolean(biggestRisk)}
-      />
-    </div>
-  );
-}
-
-function InsightCard({ icon: Icon, label, title, value, danger = false }) {
-  return (
-    <div className="rounded-2xl border border-gray-200 bg-white p-4 ">
-      <div className="flex items-center gap-2 text-gray-400">
-        <Icon className="h-4 w-4" />
-        <p className="text-xs font-medium uppercase tracking-wide">
-          {label}
-        </p>
-      </div>
-
-      <p className="mt-3 text-sm font-semibold text-gray-900">
-        {readableLabel(title)}
-      </p>
-
-      <p className={`mt-1 text-lg font-semibold ${danger ? "text-red-600" : "text-gray-900"}`}>
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function ChartShell({
-  title,
-  description,
-  icon: Icon,
-  tone = "slate",
-  children,
-  rightContent = null,
-  noPadding = false,
-  className = ""
-}) {
-  const theme = KPI_TONES[tone] || KPI_TONES.slate;
-
-  return (
-    <section
-      className={`
-        group overflow-hidden rounded-2xl border border-gray-200 bg-white
-        shadow-sm transition-all duration-200
-        hover:border-gray-300 hover:shadow-md
-        ${className}
-      `}
-    >
-      <div className="border-b border-gray-100 bg-gradient-to-r from-gray-50 via-white to-gray-50 px-4 py-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="flex min-w-0 items-start gap-3">
-            {Icon ? (
-              <div
-                className={`
-                  flex h-10 w-10 shrink-0 items-center justify-center
-                  rounded-2xl shadow-sm ring-1 ring-black/5
-                  transition-transform duration-200 group-hover:scale-105
-                  ${theme.icon}
-                `}
-              >
-                <Icon className="h-4.5 w-4.5" />
-              </div>
-            ) : null}
-
-            <div className="min-w-0">
-              <h2 className="truncate text-sm font-semibold text-gray-950">
-                {title}
-              </h2>
-
-              {description ? (
-                <p className="mt-1 max-w-2xl text-xs leading-5 text-gray-500">
-                  {description}
-                </p>
-              ) : null}
-            </div>
-          </div>
-
-          {rightContent ? (
-            <div className="flex shrink-0 items-center justify-end">
-              {rightContent}
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      <div
-        className={`
-          bg-white
-          ${noPadding ? "" : "p-4 sm:p-5"}
-        `}
-      >
-        {children}
-      </div>
-    </section>
-  );
-}
-
-/* =========================
-   MINI BAR LIST
-========================== */
-
-function MiniBarList({
-  title,
-  rows,
-  icon: Icon = BarChart3,
-  tone = "slate",
-  preserveLabel = false
-}) {
-  const max = rows?.length ? Math.max(...rows.map(row => row.count)) : 0;
-  const theme = KPI_TONES[tone] || KPI_TONES.slate;
-
-  return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4">
-      <div className="flex items-center gap-2">
-        <div className={`rounded-xl p-2 ${theme.icon}`}>
-          <Icon className="h-4 w-4" />
-        </div>
-
-        <h2 className="text-sm font-semibold text-gray-900">
-          {title}
-        </h2>
-      </div>
-
-      {!rows?.length ? (
-        <p className="text-sm text-gray-500 mt-4">
-          No data found.
-        </p>
-      ) : (
-        <div className="mt-4 space-y-4">
-          {rows.slice(0, 8).map(row => {
-            const width = max
-              ? `${Math.max((row.count / max) * 100, 8)}%`
-              : "0%";
-
-            return (
-              <div key={row.name}>
-                <div className="flex items-start justify-between gap-3 mb-1">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-700 truncate">
-                      {preserveLabel ? row.name : readableLabel(row.name)}
-                    </p>
-
-                    {row.subLabel ? (
-                      <p className="mt-0.5 text-[11px] text-gray-400 truncate">
-                        {row.subLabel}
-                      </p>
-                    ) : null}
-                  </div>
-
-                  <p className="text-sm font-semibold text-gray-900 shrink-0">
-                    {row.displayCount || row.count}
-                  </p>
-                </div>
-
-                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full ${theme.icon}`}
-                    style={{ width }}
-                  />
-                </div>
-              </div>
-            );
-          })}
-
-          {rows.length > 8 && (
-            <p className="text-xs text-gray-400">
-              Showing top 8 of {rows.length}
-            </p>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* =========================
-   ATTENTION PANEL
-========================== */
-
-function getSeverityClass(severity) {
-  if (severity === "critical") {
-    return "bg-red-50 text-red-700 border-red-100";
-  }
-
-  if (severity === "high") {
-    return "bg-orange-50 text-orange-700 border-orange-100";
-  }
-
-  if (severity === "medium") {
-    return "bg-yellow-50 text-yellow-700 border-yellow-100";
-  }
-
-  return "bg-gray-50 text-gray-700 border-gray-100";
-}
-
-function AttentionRequiredPanel({ rows, compact = false, onViewLead }) {
-  const groupedRows = getGroupedAttentionRows(rows);
-  const visibleRows = groupedRows.slice(0, compact ? 8 : 50);
-
-  return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-100 flex items-start gap-3">
-        <div className="rounded-xl bg-red-50 p-2 text-red-600">
-          <AlertTriangle className="h-4 w-4" />
-        </div>
-
-        <div>
-          <h2 className="text-sm font-semibold text-gray-900">
-            Attention Required
-          </h2>
-          <p className="text-xs text-gray-500 mt-0.5">
-            Unique leads that need management or operations action.
-          </p>
-        </div>
-      </div>
-
-      {!visibleRows.length ? (
-        <div className="px-4 py-8 text-center text-sm text-gray-500">
-          No attention items found.
-        </div>
-      ) : (
-        <div className="divide-y divide-gray-100">
-          {visibleRows.map(item => (
-            <div
-              key={item.leadId || item.leadCode}
-              className="px-4 py-4 flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="font-semibold text-sm text-gray-900">
-                    {item.leadCode}
-                  </p>
-
-                  <span
-                    className={`
-                      inline-flex items-center px-2 py-0.5 rounded-full text-xs border
-                      ${getSeverityClass(item.highestSeverity)}
-                    `}
-                  >
-                    Highest {readableLabel(item.highestSeverity)}
-                  </span>
-
-                  <span className="text-xs text-gray-500">
-                    {item.issues.length} attention item
-                    {item.issues.length > 1 ? "s" : ""}
-                  </span>
-                </div>
-
-                <p className="text-xs text-gray-500 mt-1">
-                  {item.customerName} • {item.destinationName} • Assigned:{" "}
-                  {item.assignedToName}
-                </p>
-
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {item.issues.map((issue, index) => (
-                    <div
-                      key={`${item.leadCode}-${issue.type}-${index}`}
-                      className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`
-                            inline-flex items-center px-2 py-0.5 rounded-full text-[11px] border
-                            ${getSeverityClass(issue.severity)}
-                          `}
-                        >
-                          {readableLabel(issue.severity)}
-                        </span>
-
-                        <span className="text-xs font-medium text-gray-700">
-                          {readableLabel(issue.type)}
-                        </span>
-                      </div>
-
-                      <p className="mt-1 text-xs text-gray-500">
-                        {issue.reason}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="text-left xl:text-right shrink-0 space-y-2">
-                <div>
-                  <p className="text-sm font-semibold text-gray-900">
-                    {formatCurrency(item.amount)}
-                  </p>
-                  <p className="text-xs text-gray-500">
-                    Last: {formatDateTime(item.lastActivityAt)}
-                  </p>
-                </div>
-
-                {onViewLead && (
-                  <button
-                    type="button"
-                    onClick={() => onViewLead(item.leadId)}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                  >
-                    <Eye className="h-3.5 w-3.5" />
-                    View Lead
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
-
-          {groupedRows.length > visibleRows.length && (
-            <div className="px-4 py-3 text-xs text-gray-400">
-              Showing {visibleRows.length} of {groupedRows.length} attention leads
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* =========================
-   TABLES
-========================== */
-
-function ManagementOverviewTable({ rows, onOpenMetric }) {
-  return (
-    <DashboardTable
-      icon={Users}
-      title="Team Member Management Overview"
-      description="Combined lead, revenue, engagement and attendance performance."
-      headers={[
-        "Team Member",
-        "Leads",
-        "Won",
-        "Quotation",
-        "GP",
-        "Engagements",
-        "Hours",
-        "Last Activity",
-        "Status"
-      ]}
-      emptyText="No management data found."
-      colSpan={9}
-    >
-      {rows.map(row => (
-        <tr key={row.uid || row.email || row.name} className="hover:bg-gray-50">
-          <td className="px-4 py-3 text-left">
-            <div className="font-medium text-gray-900">{row.name}</div>
-            <div className="text-xs text-gray-500">
-              {row.department || row.email || "—"}
-            </div>
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.newLeads}
-              onClick={() => onOpenMetric?.(row, "newLeads")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.wonLeads}
-              tone="green"
-              onClick={() => onOpenMetric?.(row, "wonLeads")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.quotationValue}
-              display={formatCurrency(row.quotationValue)}
-              tone="purple"
-              onClick={() => onOpenMetric?.(row, "quotationValue")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.grossProfit}
-              display={formatCurrency(row.grossProfit)}
-              tone="emerald"
-              onClick={() => onOpenMetric?.(row, "grossProfit")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.engagements}
-              tone="blue"
-              onClick={() => onOpenMetric?.(row, "engagements")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.totalMinutes}
-              display={formatDuration(row.totalMinutes)}
-              tone="purple"
-              onClick={() => onOpenMetric?.(row, "totalMinutes")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right text-gray-600">
-            {formatDateTime(row.lastActivityAt)}
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs border ${getScoreClass(row.score)}`}>
-              {getScoreLabel(row.score)}
-            </span>
-          </td>
-        </tr>
-      ))}
-    </DashboardTable>
-  );
-}
-
-function ManagementFinanceTable({ rows, onOpenMetric }) {
-  return (
-    <DashboardTable
-      icon={CircleDollarSign}
-      title="Team Finance Overview"
-      description="Revenue, collection, vendor payout and gross profit by team member."
-      headers={[
-        "Team Member",
-        "Quotation Value",
-        "Customer Received",
-        "Vendor Paid",
-        "Gross Profit",
-        "Won Leads",
-        "Score"
-      ]}
-      emptyText="No finance data found."
-      colSpan={7}
-    >
-      {rows.map(row => (
-        <tr key={row.uid || row.email || row.name} className="hover:bg-gray-50">
-          <td className="px-4 py-3 text-left">
-            <div className="font-medium text-gray-900">{row.name}</div>
-            <div className="text-xs text-gray-500">{row.email || "—"}</div>
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.quotationValue}
-              display={formatCurrency(row.quotationValue)}
-              tone="purple"
-              onClick={() => onOpenMetric?.(row, "quotationValue")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.receivedAmount}
-              display={formatCurrency(row.receivedAmount)}
-              tone="green"
-              onClick={() => onOpenMetric?.(row, "receivedAmount")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.vendorPaid}
-              display={formatCurrency(row.vendorPaid)}
-              tone="blue"
-              onClick={() => onOpenMetric?.(row, "vendorPaid")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.grossProfit}
-              display={formatCurrency(row.grossProfit)}
-              tone="emerald"
-              onClick={() => onOpenMetric?.(row, "grossProfit")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.wonLeads}
-              tone="green"
-              onClick={() => onOpenMetric?.(row, "wonLeads")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right font-semibold">
-            {row.score}
-          </td>
-        </tr>
-      ))}
-    </DashboardTable>
-  );
-}
-
-function ManagementVendorTable({ rows, onOpenLeadMetric }) {
-  const activeRows = getActiveLeads(rows);
-
-  return (
-    <DashboardTable
-      icon={Handshake}
-      title="Vendor Operations Overview"
-      description="Vendor request, quote and payment status by active lead."
-      headers={[
-        "Lead",
-        "Destination",
-        "Vendor",
-        "Requests",
-        "Quotes",
-        "Vendor Cost",
-        "Vendor Paid",
-        "Balance",
-        "Status"
-      ]}
-      emptyText="No vendor data found."
-      colSpan={9}
-    >
-      {activeRows.map(row => (
-        <tr key={row.id} className="hover:bg-gray-50">
-          <td className="px-4 py-3 text-left">
-            <div className="font-medium text-gray-900">
-              {row.leadCode || row.id}
-            </div>
-            <div className="text-xs text-gray-500">
-              {row.agentName || row.agencyName || "—"}
-            </div>
-          </td>
-
-          <td className="px-4 py-3 text-right text-gray-600">
-            {row.destinationName || "—"}
-          </td>
-
-          <td className="px-4 py-3 text-right text-gray-600">
-            {row.latestVendorName || row.latestSelectedVendorName || "—"}
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={Number(row.vendorRequestCount || 0)}
-              tone="blue"
-              onClick={() => onOpenLeadMetric?.(row, "vendorRequests")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={Number(row.vendorQuoteCount || 0)}
-              tone="green"
-              onClick={() => onOpenLeadMetric?.(row, "vendorQuotes")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={getLeadVendorCost(row)}
-              display={formatCurrency(getLeadVendorCost(row))}
-              tone="purple"
-              onClick={() => onOpenLeadMetric?.(row, "vendorCost")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={getLeadVendorPaidAmount(row)}
-              display={formatCurrency(getLeadVendorPaidAmount(row))}
-              tone="green"
-              onClick={() => onOpenLeadMetric?.(row, "vendorPaid")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={getLeadVendorPaymentBalance(row)}
-              display={formatCurrency(getLeadVendorPaymentBalance(row))}
-              tone="amber"
-              onClick={() => onOpenLeadMetric?.(row, "vendorBalance")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right text-gray-600">
-            {readableLabel(
-              row.latestVendorQuoteStatus ||
-              row.latestVendorRequestStatus ||
-              "Pending"
-            )}
-          </td>
-        </tr>
-      ))}
-    </DashboardTable>
-  );
-}
-
-function ManagementLeadsTable({ rows, onOpenMetric }) {
-  return (
-    <DashboardTable
-      icon={LineChart}
-      title="Team Member Lead Overview"
-      description="Lead assignment, quotation and pipeline movement for the selected period."
-      headers={[
-        "Team Member",
-        "New",
-        "Assigned",
-        "Active",
-        "Quote Sent",
-        "Won",
-        "Lost"
-      ]}
-      emptyText="No lead data found."
-      colSpan={7}
-    >
-      {rows.map(row => (
-        <tr key={row.uid || row.email || row.name} className="hover:bg-gray-50">
-          <td className="px-4 py-3 text-left">
-            <div className="font-medium text-gray-900">{row.name}</div>
-            <div className="text-xs text-gray-500">{row.email || "—"}</div>
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.newLeads}
-              onClick={() => onOpenMetric?.(row, "newLeads")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.assignedLeads}
-              onClick={() => onOpenMetric?.(row, "assignedLeads")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.activeLeads}
-              onClick={() => onOpenMetric?.(row, "activeLeads")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.quoteSentLeads}
-              tone="purple"
-              onClick={() => onOpenMetric?.(row, "quoteSentLeads")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.wonLeads}
-              tone="green"
-              onClick={() => onOpenMetric?.(row, "wonLeads")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.lostLeads}
-              tone="red"
-              onClick={() => onOpenMetric?.(row, "lostLeads")}
-            />
-          </td>
-        </tr>
-      ))}
-    </DashboardTable>
-  );
-}
-
-function ManagementEngagementTable({ rows, onOpenMetric }) {
-  return (
-    <DashboardTable
-      icon={Activity}
-      title="Team Member Engagement Overview"
-      description="WhatsApp, call, email and meeting activity for the selected period."
-      headers={[
-        "Team Member",
-        "Total",
-        "Calls",
-        "WhatsApp",
-        "Emails",
-        "Meetings",
-        "Completed",
-        "Last Activity"
-      ]}
-      emptyText="No engagement data found."
-      colSpan={8}
-    >
-      {rows.map(row => (
-        <tr key={row.uid || row.email || row.name} className="hover:bg-gray-50">
-          <td className="px-4 py-3 text-left">
-            <div className="font-medium text-gray-900">{row.name}</div>
-            <div className="text-xs text-gray-500">{row.email || "—"}</div>
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.engagements}
-              tone="blue"
-              onClick={() => onOpenMetric?.(row, "engagements")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.calls}
-              tone="green"
-              onClick={() => onOpenMetric?.(row, "calls")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.whatsapp}
-              tone="emerald"
-              onClick={() => onOpenMetric?.(row, "whatsapp")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.emails}
-              tone="purple"
-              onClick={() => onOpenMetric?.(row, "emails")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.meetings}
-              tone="amber"
-              onClick={() => onOpenMetric?.(row, "meetings")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.completedEngagements}
-              tone="green"
-              onClick={() => onOpenMetric?.(row, "completedEngagements")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right text-gray-600">
-            {formatDateTime(row.lastActivityAt)}
-          </td>
-        </tr>
-      ))}
-    </DashboardTable>
-  );
-}
-
-function ManagementAttendanceTable({ rows }) {
-  return (
-    <DashboardTable
-      icon={CalendarDays}
-      title="Team Member Attendance Overview"
-      description="Attendance days, active sessions, late marks and working hours."
-      headers={[
-        "Team Member",
-        "Days",
-        "Check-ins",
-        "Active",
-        "Late",
-        "Leave",
-        "First Check-in",
-        "Last Check-out",
-        "Hours"
-      ]}
-      emptyText="No attendance data found."
-      colSpan={9}
-    >
-      {rows.map(row => (
-        <tr key={row.uid || row.email || row.name} className="hover:bg-gray-50">
-          <td className="px-4 py-3 text-left">
-            <div className="font-medium text-gray-900">{row.name}</div>
-            <div className="text-xs text-gray-500">{row.department || row.email || "—"}</div>
-          </td>
-          <td className="px-4 py-3 text-right">{row.attendanceDays}</td>
-          <td className="px-4 py-3 text-right">{row.checkIns}</td>
-          <td className={`px-4 py-3 text-right font-medium ${row.activeSessions ? "text-green-700" : "text-gray-700"}`}>
-            {row.activeSessions}
-          </td>
-          <td className={`px-4 py-3 text-right font-medium ${row.late ? "text-amber-600" : "text-gray-700"}`}>
-            {row.late}
-          </td>
-          <td className="px-4 py-3 text-right">{row.leave}</td>
-          <td className="px-4 py-3 text-right text-gray-600">{formatDateTime(row.firstCheckIn)}</td>
-          <td className="px-4 py-3 text-right text-gray-600">{formatDateTime(row.lastCheckOut)}</td>
-          <td className="px-4 py-3 text-right font-medium">{formatDuration(row.totalMinutes)}</td>
-        </tr>
-      ))}
-    </DashboardTable>
-  );
-}
-
-function ManagementTeamTable({ rows }) {
-  return (
-    <DashboardTable
-      icon={Users}
-      title="Team Workload Overview"
-      description="Combined score based on leads, conversion, quotations, gross profit, engagements and attendance."
-      headers={[
-        "Team Member",
-        "Department",
-        "Role",
-        "Leads",
-        "Won",
-        "GP",
-        "Engagements",
-        "Hours",
-        "Score",
-        "Rating"
-      ]}
-      emptyText="No team data found."
-      colSpan={10}
-    >
-      {rows.map(row => (
-        <tr key={row.uid || row.email || row.name} className="hover:bg-gray-50">
-          <td className="px-4 py-3 text-left">
-            <div className="font-medium text-gray-900">{row.name}</div>
-            <div className="text-xs text-gray-500">{row.email || "—"}</div>
-          </td>
-          <td className="px-4 py-3 text-right text-gray-600">{row.department || "—"}</td>
-          <td className="px-4 py-3 text-right text-gray-600">{readableLabel(row.role)}</td>
-          <td className="px-4 py-3 text-right">{row.newLeads}</td>
-          <td className="px-4 py-3 text-right text-green-700 font-medium">{row.wonLeads}</td>
-          <td className="px-4 py-3 text-right font-medium">{formatCurrency(row.grossProfit)}</td>
-          <td className="px-4 py-3 text-right">{row.engagements}</td>
-          <td className="px-4 py-3 text-right font-medium">{formatDuration(row.totalMinutes)}</td>
-          <td className="px-4 py-3 text-right font-semibold">{row.score}</td>
-          <td className="px-4 py-3 text-right">
-            <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs border ${getScoreClass(row.score)}`}>
-              {getScoreLabel(row.score)}
-            </span>
-          </td>
-        </tr>
-      ))}
-    </DashboardTable>
-  );
-}
-
-function DashboardTable({
-  icon: Icon = BarChart3,
-  title,
-  description,
-  headers,
-  children,
-  emptyText,
-  colSpan
-}) {
-  const hasRows = Array.isArray(children)
-    ? children.length > 0
-    : Boolean(children);
-
-  return (
-    <div className="bg-white border border-gray-200 rounded-xl  overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-100 flex items-start gap-3">
-        <div className="rounded-xl bg-gray-50 p-2 text-gray-600">
-          <Icon className="h-4 w-4" />
-        </div>
-
-        <div>
-          <h2 className="text-sm font-semibold text-gray-900">
-            {title}
-          </h2>
-          <p className="text-xs text-gray-500 mt-0.5">
-            {description}
-          </p>
-        </div>
-      </div>
-
-      <div className="max-h-[560px] overflow-auto">
-        <table className="w-full text-sm">
-          <thead className="sticky top-0 z-10 bg-gray-50 text-xs text-gray-500">
-            <tr>
-              {headers.map((header, index) => (
-                <th
-                  key={header}
-                  className={`
-                    px-4 py-3 font-medium
-                    ${index === 0 ? "text-left" : "text-right"}
-                  `}
-                >
-                  {header}
-                </th>
-              ))}
-            </tr>
-          </thead>
-
-          <tbody className="divide-y divide-gray-100">
-            {hasRows ? (
-              children
-            ) : (
-              <tr>
-                <td
-                  colSpan={colSpan}
-                  className="px-4 py-8 text-center text-sm text-gray-500"
-                >
-                  {emptyText}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function DrawerSummaryCard({ label, value, tone = "slate" }) {
-  const toneMap = {
-    emerald: "bg-emerald-50 text-emerald-800",
-    green: "bg-green-50 text-green-800",
-    amber: "bg-amber-50 text-amber-800",
-    red: "bg-red-50 text-red-800",
-    slate: "bg-gray-50 text-gray-900"
-  };
-
-  return (
-    <div className={`rounded-2xl p-3 ${toneMap[tone] || toneMap.slate}`}>
-      <p className="text-xs font-medium opacity-80">
-        {label}
-      </p>
-      <p className="mt-1 text-xl font-semibold">
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function isSameDashboardMember(member = {}, person = {}) {
-  const memberUid = normalize(member.uid);
-  const personUid = normalize(person.uid);
-
-  if (memberUid && personUid && memberUid === personUid) return true;
-
-  const memberEmail = normalize(member.email);
-  const personEmail = normalize(person.email);
-
-  if (memberEmail && personEmail && memberEmail === personEmail) return true;
-
-  const memberName = normalize(member.name);
-  const personName = normalize(person.name);
-
-  if (memberName && personName && memberName === personName) return true;
-
-  return false;
-}
-
-function ClickableTableMetric({
-  value,
-  display,
-  onClick,
-  tone = "blue",
-  disabled = false
-}) {
-  const text = display ?? value ?? 0;
-  const isDisabled = disabled || Number(value || 0) === 0;
-
-  if (isDisabled) {
-    return (
-      <span className="font-medium text-gray-400">
-        {text}
-      </span>
-    );
-  }
-
-  const toneMap = {
-    blue: "text-blue-700 hover:bg-blue-50",
-    green: "text-green-700 hover:bg-green-50",
-    red: "text-red-700 hover:bg-red-50",
-    amber: "text-amber-700 hover:bg-amber-50",
-    purple: "text-purple-700 hover:bg-purple-50",
-    emerald: "text-emerald-700 hover:bg-emerald-50",
-    slate: "text-gray-700 hover:bg-gray-50"
-  };
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`
-        inline-flex min-w-8 justify-end rounded-lg px-2 py-1 text-sm font-semibold transition
-        ${toneMap[tone] || toneMap.blue}
-      `}
-    >
-      {text}
-    </button>
-  );
-}
-
-function DashboardDetailDrawer({ panel, onClose, onViewLead }) {
-  if (!panel) return null;
-
-  const rows = Array.isArray(panel.rows) ? panel.rows : [];
-
-  const totalAmount =
-    panel.type === "lead" && panel.amountGetter
-      ? rows.reduce((sum, lead) => {
-        return sum + Number(panel.amountGetter(lead) || 0);
-      }, 0)
-      : 0;
-
-  return (
-    <div className="fixed inset-0 z-50">
-      <button
-        type="button"
-        aria-label="Close drawer backdrop"
-        onClick={onClose}
-        className="absolute inset-0 bg-slate-950/30 backdrop-blur-[1px]"
-      />
-
-      <aside className="absolute right-0 top-0 h-full w-full max-w-xl overflow-hidden bg-white shadow-2xl">
-        <div className="flex h-full flex-col">
-          <div className="border-b border-gray-100 px-5 py-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h2 className="text-base font-semibold text-gray-900">
-                  {panel.title}
-                </h2>
-
-                <p className="mt-1 text-sm text-gray-500">
-                  {panel.description}
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={onClose}
-                className="rounded-xl border border-gray-200 p-2 text-gray-500 hover:bg-gray-50"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <DrawerSummaryCard
-                label="Total Records"
-                value={rows.length}
-              />
-
-              {panel.summaryCards?.length ? (
-                panel.summaryCards.map(card => (
-                  <DrawerSummaryCard
-                    key={card.label}
-                    label={card.label}
-                    value={card.value}
-                    tone={card.tone}
-                  />
-                ))
-              ) : panel.type === "lead" && panel.amountGetter ? (
-                <DrawerSummaryCard
-                  label={`Total ${panel.amountLabel || "Value"}`}
-                  value={formatCurrency(totalAmount)}
-                  tone="emerald"
-                />
-              ) : (
-                <DrawerSummaryCard
-                  label="Attention View"
-                  value={rows.length}
-                  tone="red"
-                />
-              )}
-            </div>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-5">
-            {!rows.length ? (
-              <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-8 text-center">
-                <p className="text-sm font-semibold text-gray-800">
-                  No records found
-                </p>
-                <p className="mt-1 text-xs text-gray-500">
-                  No matching data is available for the selected range.
-                </p>
-              </div>
-            ) : panel.type === "attention" ? (
-              <div className="space-y-3">
-                {rows.map((item, index) => (
-                  <div
-                    key={item.id || `${item.leadId}-${item.type}-${index}`}
-                    className="rounded-2xl border border-gray-200 bg-white p-4"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-gray-900">
-                          {item.leadCode}
-                        </p>
-
-                        <p className="mt-1 text-xs text-gray-500">
-                          {item.customerName} • {item.destinationName}
-                        </p>
-                      </div>
-
-                      <span
-                        className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${getSeverityClass(item.severity)}`}
-                      >
-                        {readableLabel(item.severity)}
-                      </span>
-                    </div>
-
-                    <p className="mt-3 text-sm font-medium text-gray-800">
-                      {readableLabel(item.type)}
-                    </p>
-
-                    <p className="mt-1 text-xs leading-5 text-gray-500">
-                      {item.reason}
-                    </p>
-
-                    <div className="mt-4 flex items-center justify-between gap-3">
-                      <p className="text-sm font-semibold text-gray-900">
-                        {formatCurrency(item.amount)}
-                      </p>
-
-                      {item.leadId ? (
-                        <button
-                          type="button"
-                          onClick={() => onViewLead?.(item.leadId)}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                        >
-                          <Eye className="h-3.5 w-3.5" />
-                          View Lead
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : panel.type === "engagement" ? (
-              <div className="space-y-3">
-                {rows.map((item, index) => {
-                  const destinations = getEngagementDestinationList(item);
-
-                  return (
-                    <div
-                      key={item.id || `engagement-${index}`}
-                      className="rounded-2xl border border-gray-200 bg-white p-4"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-gray-900">
-                            {readableLabel(item.channel || "Engagement")}
-                          </p>
-
-                          <p className="mt-1 text-xs text-gray-500">
-                            {item.agentName ||
-                              item.agencyName ||
-                              item.customerName ||
-                              "Unknown Agent"}{" "}
-                            • {destinations.length ? destinations.join(", ") : "No Destination"}
-                          </p>
-                        </div>
-
-                        <span className="rounded-full bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-600">
-                          {readableLabel(item.status || "Open")}
-                        </span>
-                      </div>
-
-                      <div className="mt-4 grid grid-cols-2 gap-3">
-                        <div className="rounded-xl bg-gray-50 p-3">
-                          <p className="text-[11px] font-medium text-gray-500">
-                            Channel
-                          </p>
-                          <p className="mt-1 truncate text-xs font-semibold text-gray-800">
-                            {readableLabel(item.channel || "Unknown")}
-                          </p>
-                        </div>
-
-                        <div className="rounded-xl bg-gray-50 p-3">
-                          <p className="text-[11px] font-medium text-gray-500">
-                            Date
-                          </p>
-                          <p className="mt-1 text-xs font-semibold text-gray-800">
-                            {formatDateTime(getEngagementDate(item))}
-                          </p>
-                        </div>
-                      </div>
-
-                      {item.subject || item.notes || item.remark || item.description ? (
-                        <p className="mt-3 text-xs leading-5 text-gray-500">
-                          {item.subject || item.notes || item.remark || item.description}
-                        </p>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : panel.type === "attendance" ? (
-              <div className="space-y-3">
-                {rows.map((record, index) => (
-                  <div
-                    key={record.id || `attendance-${index}`}
-                    className="rounded-2xl border border-gray-200 bg-white p-4"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-gray-900">
-                          {getAttendanceRecordDate(record) || "Attendance Record"}
-                        </p>
-
-                        <p className="mt-1 text-xs text-gray-500">
-                          Status: {readableLabel(getAttendanceStatus(record))}
-                        </p>
-                      </div>
-
-                      <span className="rounded-full bg-purple-50 px-2.5 py-1 text-xs font-medium text-purple-700">
-                        {formatDuration(getAttendanceMinutes(record))}
-                      </span>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-2 gap-3">
-                      <div className="rounded-xl bg-gray-50 p-3">
-                        <p className="text-[11px] font-medium text-gray-500">
-                          First Check-in
-                        </p>
-                        <p className="mt-1 text-xs font-semibold text-gray-800">
-                          {formatDateTime(getFirstCheckIn(record))}
-                        </p>
-                      </div>
-
-                      <div className="rounded-xl bg-gray-50 p-3">
-                        <p className="text-[11px] font-medium text-gray-500">
-                          Last Check-out
-                        </p>
-                        <p className="mt-1 text-xs font-semibold text-gray-800">
-                          {formatDateTime(getLastCheckOut(record))}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {rows.map(lead => {
-                  const amount = panel.amountGetter
-                    ? Number(panel.amountGetter(lead) || 0)
-                    : 0;
-
-                  const formattedAmount = panel.amountFormatter
-                    ? panel.amountFormatter(amount, lead)
-                    : formatCurrency(amount);
-
-                  const dateValue = panel.dateGetter
-                    ? panel.dateGetter(lead)
-                    : getLeadDate(lead);
-
-                  return (
-                    <div
-                      key={lead.id || lead.leadCode}
-                      className="rounded-2xl border border-gray-200 bg-white p-4"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-gray-900">
-                            {getLeadDisplayName(lead)}
-                          </p>
-
-                          <p className="mt-1 text-xs text-gray-500">
-                            {lead.customerName ||
-                              lead.agentName ||
-                              lead.agencyName ||
-                              "Unknown Client"}{" "}
-                            • {lead.destinationName || "Unknown Destination"}
-                          </p>
-                        </div>
-
-                        <span className="rounded-full bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-600">
-                          {readableLabel(lead.stage || lead.status || "Open")}
-                        </span>
-                      </div>
-
-                      <div className="mt-4 grid grid-cols-2 gap-3">
-                        <div className="rounded-xl bg-gray-50 p-3">
-                          <p className="text-[11px] font-medium text-gray-500">
-                            Assigned To
-                          </p>
-                          <p className="mt-1 truncate text-xs font-semibold text-gray-800">
-                            {lead.assignedToName ||
-                              lead.assignedToEmail ||
-                              "Unassigned"}
-                          </p>
-                        </div>
-
-                        <div className="rounded-xl bg-gray-50 p-3">
-                          <p className="text-[11px] font-medium text-gray-500">
-                            Date
-                          </p>
-                          <p className="mt-1 text-xs font-semibold text-gray-800">
-                            {formatDateTime(dateValue)}
-                          </p>
-                        </div>
-                      </div>
-
-                      {panel.showGrossProfitBreakdown ? (
-                        <div className="mt-4 grid grid-cols-3 gap-2">
-                          <div className="rounded-xl bg-emerald-50 p-3">
-                            <p className="text-[11px] font-medium text-emerald-700">
-                              Total GP
-                            </p>
-                            <p className="mt-1 text-xs font-semibold text-emerald-900">
-                              {formatCurrency(getLeadGrossProfit(lead))}
-                            </p>
-                          </div>
-
-                          <div className="rounded-xl bg-green-50 p-3">
-                            <p className="text-[11px] font-medium text-green-700">
-                              Realized
-                            </p>
-                            <p className="mt-1 text-xs font-semibold text-green-900">
-                              {formatCurrency(getLeadActualRealizedGrossProfit(lead))}
-                            </p>
-                          </div>
-
-                          <div className="rounded-xl bg-amber-50 p-3">
-                            <p className="text-[11px] font-medium text-amber-700">
-                              Not Realized
-                            </p>
-                            <p className="mt-1 text-xs font-semibold text-amber-900">
-                              {formatCurrency(getLeadUnrealizedGrossProfit(lead))}
-                            </p>
-                          </div>
-                        </div>
-                      ) : null}
-
-                      <div className="mt-4 flex items-center justify-between gap-3">
-                        <div>
-                          <p className="text-[11px] font-medium text-gray-500">
-                            {panel.amountLabel || "Value"}
-                          </p>
-                          <p className="text-sm font-semibold text-gray-900">
-                            {/* {formatCurrency(amount)} */} {formattedAmount}
-                          </p>
-                        </div>
-
-                        {lead.id ? (
-                          <button
-                            type="button"
-                            onClick={() => onViewLead?.(lead.id)}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                            View Lead
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      </aside>
-    </div>
-  );
-} 

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   collection,
   query,
@@ -22,6 +23,17 @@ import {
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import {
+  getLeadOwner,
+  isLeadAssignedToUser,
+  isLeadOwnedByUser
+} from "@/lib/leadOwnership";
+import { formatLeadAge, getLeadAging } from "@/lib/leadAging";
+import { LeadPotentialBadge } from "@/components/leads/LeadPotentialControl";
+import { normalizeLeadClosingPotential } from "@/lib/leadPotential";
+import { normalizeLeadStage } from "@/lib/leadStages";
+import { buildLocationOptions, getLeadAgentLocationParts, matchesLocation } from "@/lib/locationFilters";
+import { formatLeadTravelRange, getLeadTravelCountdown, getLeadTravelStartDate } from "@/lib/leadTravelDates";
 
 import EmptyState from "@/components/ui/EmptyState";
 import CardSkeleton from "@/components/ui/CardSkeleton";
@@ -32,8 +44,13 @@ import LeadFilterBar from "@/components/leads/LeadFilterBar";
 ========================= */
 const DEFAULT_FILTERS = {
   search: "",
+  workScope: "all",
+  potential: "",
   stage: "",
-  health: "",
+  followUp: "",
+  state: "",
+  city: "",
+  subArea: "",
   dateFrom: "",
   dateTo: "",
   sortBy: "newest"
@@ -83,6 +100,8 @@ const normalize = value =>
 
 const normalizeKey = value =>
   normalize(value).replaceAll(" ", "_").replaceAll("-", "_");
+
+const isSameDay = (a, b) => Boolean(a && b && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate());
 
 const formatStage = value => {
   if (!value) return "Not Set";
@@ -143,18 +162,13 @@ function isWonLead(lead) {
 }
 
 function isLostLead(lead) {
-  const stage = normalizeKey(lead?.stage);
-  const status = normalizeKey(lead?.status);
+  const normalizedStage = normalizeLeadStage(lead?.stage || lead?.status || "");
+  return normalizedStage === "lost";
+}
 
-  return [stage, status].some(value =>
-    [
-      "lost",
-      "deal_lost",
-      "closed_lost",
-      "cancelled",
-      "rejected"
-    ].includes(value)
-  );
+function isCancelledInvalidLead(lead) {
+  const normalizedStage = normalizeLeadStage(lead?.stage || lead?.status || "");
+  return normalizedStage === "cancelled_invalid";
 }
 
 const HEALTH_META = {
@@ -176,12 +190,12 @@ const HEALTH_META = {
 };
 
 function getOwnershipMeta(lead, user) {
-  const assignedToMe = lead?.assignedToUid === user?.uid;
-  const createdByMe = lead?.createdByUid === user?.uid;
+  const assignedToMe = isLeadAssignedToUser(lead, user);
+  const createdByMe = isLeadOwnedByUser(lead, user);
 
   if (assignedToMe && createdByMe) {
     return {
-      label: "Assigned + Created",
+      label: "Owner + Assignee",
       icon: UserRound,
       className: "bg-blue-50 text-blue-700 border-blue-100"
     };
@@ -189,7 +203,7 @@ function getOwnershipMeta(lead, user) {
 
   if (assignedToMe) {
     return {
-      label: "Assigned to Me",
+      label: "Assigned Workload",
       icon: UserRound,
       className: "bg-indigo-50 text-indigo-700 border-indigo-100"
     };
@@ -197,7 +211,7 @@ function getOwnershipMeta(lead, user) {
 
   if (createdByMe) {
     return {
-      label: "Created by Me",
+      label: "Owned by Me",
       icon: Eye,
       className: "bg-amber-50 text-amber-700 border-amber-100"
     };
@@ -287,8 +301,11 @@ function MetricCard({ label, value, helper, icon: Icon, tone = "blue" }) {
 
 function LeadCard({ lead, user }) {
   const health = getLeadHealth(lead);
+  const aging = getLeadAging(lead);
   const ownership = getOwnershipMeta(lead, user);
   const OwnershipIcon = ownership.icon;
+  const travelStart = getLeadTravelStartDate(lead);
+  const travelCountdown = getLeadTravelCountdown(lead);
 
   return (
     <Link href={`/leads/${lead.id}`} className="block group">
@@ -315,7 +332,8 @@ function LeadCard({ lead, user }) {
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <LeadPotentialBadge lead={lead} />
             <LeadHealthBadge health={health} />
 
             <div className="flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 bg-gray-50 text-gray-400 transition group-hover:border-blue-100 group-hover:bg-blue-50 group-hover:text-blue-700">
@@ -340,8 +358,20 @@ function LeadCard({ lead, user }) {
 
           <LeadInfoPill
             icon={UserRound}
-            label="Owner"
-            value={lead.assignedToName}
+            label="Assignee"
+            value={lead.assignedToName || lead.assignedUserName || "Unassigned"}
+          />
+
+          <LeadInfoPill
+            icon={Clock3}
+            label="Lead Age"
+            value={`${formatLeadAge(aging.ageDays)} · Stage ${formatLeadAge(aging.stageAgeDays)}`}
+          />
+
+          <LeadInfoPill
+            icon={CalendarDays}
+            label="Travel"
+            value={travelStart ? `${formatLeadTravelRange(lead, { short: true })} · ${travelCountdown.label}` : "Travel date missing"}
           />
 
           {lead.nextActionType && (
@@ -361,9 +391,9 @@ function LeadCard({ lead, user }) {
               : "No next action due date"}
           </p>
 
-          {lead.createdByName && (
+          {getLeadOwner(lead).name && (
             <p className="text-xs text-gray-400">
-              Created by {lead.createdByName}
+              Lead owner: {getLeadOwner(lead).name}
             </p>
           )}
         </div>
@@ -373,6 +403,7 @@ function LeadCard({ lead, user }) {
 }
 
 export default function TeamLeadsPage() {
+  const searchParams = useSearchParams();
   const { user, loading: authLoading } = useAuth();
 
   const [leads, setLeads] = useState([]);
@@ -380,6 +411,17 @@ export default function TeamLeadsPage() {
   const [error, setError] = useState("");
 
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
+
+  useEffect(() => {
+    const followUp = searchParams.get("followUp") || "";
+    const priorityAttention = searchParams.get("priorityAttention") === "1";
+    if (!followUp && !priorityAttention) return;
+    setFilters(current => ({
+      ...current,
+      followUp: ["today", "overdue", "upcoming", "none"].includes(followUp) ? followUp : current.followUp,
+      potential: priorityAttention ? "priority_attention" : current.potential
+    }));
+  }, [searchParams]);
 
   /* =========================
      LOAD LEADS
@@ -402,9 +444,11 @@ export default function TeamLeadsPage() {
 
     let assignedRows = new Map();
     let createdRows = new Map();
+    let legacyOwnerRows = new Map();
 
     let assignedLoaded = false;
     let createdLoaded = false;
+    let legacyOwnerLoaded = false;
 
     const mergeRows = () => {
       const merged = new Map();
@@ -414,6 +458,10 @@ export default function TeamLeadsPage() {
       });
 
       assignedRows.forEach((value, key) => {
+        merged.set(key, value);
+      });
+
+      legacyOwnerRows.forEach((value, key) => {
         merged.set(key, value);
       });
 
@@ -427,7 +475,7 @@ export default function TeamLeadsPage() {
 
       setLeads(rows);
 
-      if (assignedLoaded && createdLoaded) {
+      if (assignedLoaded && createdLoaded && legacyOwnerLoaded) {
         setLoading(false);
       }
     };
@@ -440,6 +488,14 @@ export default function TeamLeadsPage() {
     const createdQuery = query(
       collection(db, "leads"),
       where("createdByUid", "==", user.uid)
+    );
+
+    // Compatibility query: some legacy records used ownerUid as the assignee.
+    // V2 records also use ownerUid, but the merged result is interpreted by
+    // the schema-aware ownership helpers so creator credit stays correct.
+    const legacyOwnerQuery = query(
+      collection(db, "leads"),
+      where("ownerUid", "==", user.uid)
     );
 
     const unsubAssigned = onSnapshot(
@@ -502,9 +558,34 @@ export default function TeamLeadsPage() {
       }
     );
 
+    const unsubLegacyOwner = onSnapshot(
+      legacyOwnerQuery,
+      snap => {
+        legacyOwnerLoaded = true;
+
+        legacyOwnerRows = new Map(
+          snap.docs.map(d => [
+            d.id,
+            {
+              id: d.id,
+              ...d.data()
+            }
+          ])
+        );
+
+        mergeRows();
+      },
+      err => {
+        legacyOwnerLoaded = true;
+        console.error("Failed to load legacy owner leads:", err);
+        mergeRows();
+      }
+    );
+
     return () => {
       unsubAssigned();
       unsubCreated();
+      unsubLegacyOwner();
     };
   }, [user?.uid, authLoading]);
 
@@ -522,6 +603,16 @@ export default function TeamLeadsPage() {
     ).sort();
   }, [leads]);
 
+  const locationOptions = useMemo(
+    () => buildLocationOptions(
+      leads.filter(lead => !isDeletedLead(lead)),
+      getLeadAgentLocationParts,
+      filters.state,
+      filters.city
+    ),
+    [leads, filters.state, filters.city]
+  );
+
   /* =========================
      SUMMARY
   ========================== */
@@ -529,11 +620,11 @@ export default function TeamLeadsPage() {
     const activeLeads = leads.filter(lead => !isDeletedLead(lead));
 
     const assignedToMe = activeLeads.filter(
-      lead => lead.assignedToUid === user?.uid
+      lead => isLeadAssignedToUser(lead, user)
     ).length;
 
     const createdByMe = activeLeads.filter(
-      lead => lead.createdByUid === user?.uid
+      lead => isLeadOwnedByUser(lead, user)
     ).length;
 
     const overdue = activeLeads.filter(
@@ -546,6 +637,7 @@ export default function TeamLeadsPage() {
 
     const won = activeLeads.filter(isWonLead).length;
     const lost = activeLeads.filter(isLostLead).length;
+    const cancelledInvalid = activeLeads.filter(isCancelledInvalidLead).length;
 
     return {
       total: activeLeads.length,
@@ -554,16 +646,18 @@ export default function TeamLeadsPage() {
       overdue,
       attention,
       won,
-      lost
+      lost,
+      cancelledInvalid
     };
-  }, [leads, user?.uid]);
+  }, [leads, user]);
 
   /* =========================
      ACTIVE FILTER COUNT
   ========================== */
   const activeFilterCount = useMemo(() => {
     return Object.entries(filters).filter(([key, value]) => {
-      if (key === "sortBy") return value && value !== "newest";
+      if (key === "sortBy") return Boolean(value && value !== "newest");
+      if (key === "workScope") return Boolean(value && value !== "all");
       return Boolean(String(value || "").trim());
     }).length;
   }, [filters]);
@@ -597,12 +691,14 @@ export default function TeamLeadsPage() {
     const rows = leads.filter(lead => {
       if (isDeletedLead(lead)) return false;
 
-      const health = getLeadHealth(lead);
+      const aging = getLeadAging(lead);
       const createdDate = getValidDate(lead.createdAt);
 
       if ((fromDate || toDate) && !createdDate) return false;
       if (fromDate && createdDate < fromDate) return false;
       if (toDate && createdDate > toDate) return false;
+
+      if (!matchesLocation(getLeadAgentLocationParts(lead), filters)) return false;
 
       const matchesSearch =
         !searchText ||
@@ -623,12 +719,29 @@ export default function TeamLeadsPage() {
           .some(value => normalize(value).includes(searchText));
 
       const matchesStage =
-        !filters.stage || lead.stage === filters.stage;
+        !filters.stage || normalizeLeadStage(lead.stage) === normalizeLeadStage(filters.stage);
 
-      const matchesHealth =
-        !filters.health || health === filters.health;
+      const leadPotential = normalizeLeadClosingPotential(lead);
+      const matchesPotential =
+        !filters.potential ||
+        (filters.potential === "priority_attention"
+          ? ["hot", "at_risk"].includes(leadPotential)
+          : leadPotential === filters.potential);
 
-      return matchesSearch && matchesStage && matchesHealth;
+      const matchesWorkScope =
+        filters.workScope === "owned"
+          ? isLeadOwnedByUser(lead, user)
+          : filters.workScope === "assigned"
+            ? isLeadAssignedToUser(lead, user)
+            : true;
+
+      let matchesFollowUp = true;
+      if (filters.followUp === "overdue") matchesFollowUp = aging.overdue;
+      if (filters.followUp === "none") matchesFollowUp = aging.noNextAction;
+      if (filters.followUp === "today") matchesFollowUp = Boolean(aging.nextActionAt && isSameDay(aging.nextActionAt, new Date()));
+      if (filters.followUp === "upcoming") matchesFollowUp = Boolean(aging.nextActionAt && aging.nextActionAt > new Date() && !isSameDay(aging.nextActionAt, new Date()));
+
+      return matchesSearch && matchesStage && matchesPotential && matchesWorkScope && matchesFollowUp;
     });
 
     return rows.sort((a, b) => {
@@ -704,7 +817,7 @@ export default function TeamLeadsPage() {
                 </h1>
 
                 <p className="mt-1 max-w-2xl text-sm leading-6 text-blue-100">
-                  View, manage and follow up on leads assigned to you or created by you.
+                  View leads you own as the creator and leads currently assigned to you for follow-up.
                 </p>
               </div>
             </div>
@@ -722,17 +835,17 @@ export default function TeamLeadsPage() {
           />
 
           <MetricCard
-            label="Assigned to Me"
+            label="Assigned Workload"
             value={summary.assignedToMe}
-            helper="Owner responsibility"
+            helper="Current follow-up responsibility"
             icon={UserRound}
             tone="emerald"
           />
 
           <MetricCard
-            label="Created by Me"
+            label="Owned by Me"
             value={summary.createdByMe}
-            helper="Generated records"
+            helper="Permanent creator credit"
             icon={Eye}
             tone="gray"
           />
@@ -754,9 +867,9 @@ export default function TeamLeadsPage() {
           />
 
           <MetricCard
-            label="Won / Lost"
-            value={`${summary.won} / ${summary.lost}`}
-            helper="Closed outcomes"
+            label="Won / Lost / Cancelled"
+            value={`${summary.won} / ${summary.lost} / ${summary.cancelledInvalid}`}
+            helper="Clear terminal outcomes"
             icon={CheckCircle2}
             tone="blue"
           />
@@ -834,6 +947,7 @@ export default function TeamLeadsPage() {
                 filters={filters}
                 setFilters={setFilters}
                 stageOptions={stageOptions}
+                locationOptions={locationOptions}
                 activeFilterCount={activeFilterCount}
                 resultCount={filtered.length}
                 onClearFilters={() =>

@@ -1,9 +1,10 @@
 import {
   LayoutDashboard,
-  CalendarDays,
   MessageSquare,
   Target,
-  User
+  User,
+  CalendarClock,
+  ListTodo
 } from "lucide-react";
 
 export const APP_NAV = [
@@ -16,43 +17,21 @@ export const APP_NAV = [
     icon: LayoutDashboard,
     base: "/dashboard",
     routes: ["/dashboard"],
-    showInNav: true
+    showInNav: true,
+    permission: "dashboard.view"
   },
 
-  /* =========================
-     ATTENDANCE
-  ========================== */
+
   {
-    id: "attendance",
-    label: "Attendance",
-    icon: CalendarDays,
-    base: "/attendance",
-    routes: [
-      "/attendance",
-      "/attendance/history",
-      "/attendance/monthly",
-      "/attendance/regularisation"
-    ],
+    id: "action-center",
+    label: "Action Center",
+    icon: ListTodo,
+    base: "/action-center",
+    routes: ["/action-center"],
     showInNav: true,
-    children: [
-      {
-        label: "Today",
-        href: "/attendance"
-      },
-      {
-        label: "History",
-        href: "/attendance/history"
-      },
-      {
-        label: "Leave",
-        href: "/attendance/leave"
-      },
-      {
-        label: "Regularisation",
-        href: "/attendance/regularisation"
-      }
-    ]
+    permission: "dashboard.view"
   },
+
 
   /* =========================
      ENGAGEMENTS
@@ -69,6 +48,7 @@ export const APP_NAV = [
       "/engagements/travel-agent/[agentId]"
     ],
     showInNav: true,
+    permission: "engagements.view",
     fab: {
       label: "Log Engagement",
       action: "engagement"
@@ -86,6 +66,19 @@ export const APP_NAV = [
   },
 
   /* =========================
+     MEETINGS
+  ========================== */
+  {
+    id: "meetings",
+    label: "Meetings",
+    icon: CalendarClock,
+    base: "/meetings",
+    routes: ["/meetings"],
+    showInNav: true,
+    permission: "meetings.view"
+  },
+
+  /* =========================
      LEADS
   ========================== */
   {
@@ -100,6 +93,7 @@ export const APP_NAV = [
       "/leads/reports"
     ],
     showInNav: true,
+    permission: "leads.view",
     fab: {
       label: "Add Lead",
       action: "lead"

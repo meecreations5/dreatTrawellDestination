@@ -11,6 +11,9 @@ import {
 
 import { db } from "@/lib/firebase";
 import AdminGuard from "@/components/AdminGuard";
+import { useAdminScope } from "@/components/admin/AdminScopeProvider";
+import { getMembersForTeam, resolveDirectoryIdentity, teamMatchesScope } from "@/lib/teamDirectory";
+import { matchesAdminDateScope } from "@/lib/adminScope";
 import AssignTravelAgentModal from "@/components/travel-agents/AssignTravelAgentModal";
 
 import {
@@ -41,6 +44,18 @@ function getAssignedName(agent) {
     agent?.accountManagerUid ||
     ""
   );
+}
+
+function getAssignmentIdentity(agent, userLookup) {
+  return resolveDirectoryIdentity({
+    uid: agent?.assignedToUid || agent?.accountManagerUid || "",
+    email: agent?.assignedToEmail || "",
+    name: agent?.assignedToName || agent?.assignedTo || ""
+  }, userLookup);
+}
+
+function getAssignmentDate(agent) {
+  return agent?.assignedAt || agent?.reassignedAt || agent?.assignmentUpdatedAt || agent?.updatedAt || agent?.createdAt;
 }
 
 function getAssignmentStatus(agent) {
@@ -77,6 +92,7 @@ function formatDate(value) {
    MAIN PAGE
 ========================= */
 export default function AssignedTravelAgentsPage() {
+  const { scope, teamDirectory, userLookup } = useAdminScope();
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [assignAgent, setAssignAgent] = useState(null);
@@ -86,7 +102,7 @@ export default function AssignedTravelAgentsPage() {
     assignmentStatus: "all",
     assignmentPriority: "all",
     category: "all",
-    team: "all"
+    assignedTo: "all"
   });
 
   /* =========================
@@ -117,17 +133,16 @@ export default function AssignedTravelAgentsPage() {
   }, []);
 
   /* =========================
-     FILTER OPTIONS
+     FILTER OPTIONS - USERS TABLE ONLY
   ========================= */
-  const teamOptions = useMemo(() => {
-    return Array.from(
-      new Set(
-        agents
-          .map(agent => agent.assignedTeam || agent.team)
-          .filter(Boolean)
-      )
-    ).sort();
-  }, [agents]);
+  const memberOptions = useMemo(
+    () => getMembersForTeam(teamDirectory, scope.team || "all"),
+    [teamDirectory, scope.team]
+  );
+
+  useEffect(() => {
+    setFilters(prev => ({ ...prev, assignedTo: "all" }));
+  }, [scope.team]);
 
   /* =========================
      FILTERED AGENTS
@@ -140,13 +155,15 @@ export default function AssignedTravelAgentsPage() {
       const status = getAssignmentStatus(agent);
       const priority = getAssignmentPriority(agent);
       const category = agent.agentCategory || "B";
-      const team = agent.assignedTeam || agent.team || "";
+      const assignee = getAssignmentIdentity(agent, userLookup);
+      const team = assignee.isUnmapped ? "" : assignee.team || "";
 
       const matchesSearch =
         !search ||
         normalizeText(getAgentName(agent)).includes(search) ||
         normalizeText(assignedName).includes(search) ||
         normalizeText(agent.assignedToEmail).includes(search) ||
+        normalizeText(assignee.name).includes(search) ||
         normalizeText(team).includes(search);
 
       const matchesStatus =
@@ -160,52 +177,63 @@ export default function AssignedTravelAgentsPage() {
       const matchesCategory =
         filters.category === "all" || category === filters.category;
 
-      const matchesTeam =
-        filters.team === "all" || team === filters.team;
+      const matchesTeam = teamMatchesScope(team, scope.team || "all");
+
+      const matchesAssignee =
+        filters.assignedTo === "all" || assignee.key === filters.assignedTo;
+
+      const matchesDate = matchesAdminDateScope(
+        getAssignmentDate(agent),
+        scope.dateRange,
+        scope.dateFrom,
+        scope.dateTo
+      );
 
       return (
         matchesSearch &&
         matchesStatus &&
         matchesPriority &&
         matchesCategory &&
-        matchesTeam
+        matchesTeam &&
+        matchesAssignee &&
+        matchesDate
       );
     });
-  }, [agents, filters]);
+  }, [agents, filters, userLookup, scope.team, scope.dateRange, scope.dateFrom, scope.dateTo]);
 
   /* =========================
      SUMMARY
   ========================= */
   const summary = useMemo(() => {
-    const assigned = agents.filter(
+    const assigned = filteredAgents.filter(
       agent => getAssignmentStatus(agent) !== "Unassigned"
     ).length;
 
-    const unassigned = agents.filter(
+    const unassigned = filteredAgents.filter(
       agent => getAssignmentStatus(agent) === "Unassigned"
     ).length;
 
-    const highPriority = agents.filter(agent =>
+    const highPriority = filteredAgents.filter(agent =>
       ["High", "Critical"].includes(getAssignmentPriority(agent))
     ).length;
 
-    const reassigned = agents.filter(
+    const reassigned = filteredAgents.filter(
       agent => getAssignmentStatus(agent) === "Reassigned"
     ).length;
 
-    const onHold = agents.filter(
+    const onHold = filteredAgents.filter(
       agent => getAssignmentStatus(agent) === "On Hold"
     ).length;
 
     return {
-      total: agents.length,
+      total: filteredAgents.length,
       assigned,
       unassigned,
       highPriority,
       reassigned,
       onHold
     };
-  }, [agents]);
+  }, [filteredAgents]);
 
   if (loading) {
     return (
@@ -309,7 +337,7 @@ export default function AssignedTravelAgentsPage() {
               Assignment Filters
             </div>
 
-            <div className="grid gap-3 md:grid-cols-[1.5fr_1fr_1fr_1fr_1fr]">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[1.5fr_1fr_1fr_1fr_1fr]">
               <div className="relative">
                 <Search
                   size={16}
@@ -377,22 +405,16 @@ export default function AssignedTravelAgentsPage() {
               </Select>
 
               <Select
-                value={filters.team}
-                onChange={value =>
-                  setFilters(prev => ({
-                    ...prev,
-                    team: value
-                  }))
-                }
+                value={filters.assignedTo}
+                onChange={value => setFilters(prev => ({ ...prev, assignedTo: value }))}
               >
-                <option value="all">All Teams</option>
-                {teamOptions.map(team => (
-                  <option key={team} value={team}>
-                    {team}
-                  </option>
+                <option value="all">All Assignees</option>
+                {memberOptions.map(member => (
+                  <option key={member.key} value={member.key}>{member.label}</option>
                 ))}
               </Select>
             </div>
+            <p className="mt-2 text-xs text-slate-400">Global Date + Team apply above. Date means Assignment Date; Assigned To comes only from the Users table.</p>
           </div>
 
           {/* TABLE */}

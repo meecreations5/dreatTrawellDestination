@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Search, Sliders } from "lucide-react";
+import { Search } from "lucide-react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 
 export default function EngagementFilters({
@@ -16,7 +16,8 @@ export default function EngagementFilters({
     return (
       <div className="flex gap-2 mb-4">
         <input
-          placeholder="Search…"
+          value={filters.search || ""}
+          placeholder="Search message, agent, SPOC…"
           className="border rounded-lg px-3 py-2 w-64"
           onChange={e =>
             setFilters(f => ({
@@ -27,6 +28,7 @@ export default function EngagementFilters({
         />
 
         <select
+          value={filters.channel || "all"}
           className="border rounded-lg px-3 py-2"
           onChange={e =>
             setFilters(f => ({
@@ -36,8 +38,10 @@ export default function EngagementFilters({
           }
         >
           <option value="all">All Channels</option>
-          <option value="email">Email</option>
+          <option value="call">Call</option>
           <option value="whatsapp">WhatsApp</option>
+          <option value="email">Email</option>
+          <option value="meeting">Meeting</option>
         </select>
       </div>
     );
@@ -75,7 +79,8 @@ export default function EngagementFilters({
           {/* Content */}
           <div className="p-4 space-y-4 flex-1 overflow-y-auto">
             <input
-              placeholder="Search message, SPOC"
+              value={filters.search || ""}
+              placeholder="Search message, agent, SPOC"
               className="w-full border rounded-lg px-3 py-2"
               onChange={e =>
                 setFilters(f => ({
@@ -86,6 +91,7 @@ export default function EngagementFilters({
             />
 
             <select
+              value={filters.channel || "all"}
               className="w-full border rounded-lg px-3 py-2"
               onChange={e =>
                 setFilters(f => ({
@@ -95,15 +101,11 @@ export default function EngagementFilters({
                 }))
               }
             >
-              <option value="all">
-                All Channels
-              </option>
-              <option value="email">
-                Email
-              </option>
-              <option value="whatsapp">
-                WhatsApp
-              </option>
+              <option value="all">All Channels</option>
+              <option value="call">Call</option>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="email">Email</option>
+              <option value="meeting">Meeting</option>
             </select>
           </div>
 

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { collection, onSnapshot } from "firebase/firestore";
 import {
   Activity,
@@ -10,6 +11,7 @@ import {
   ArrowLeft,
   BarChart3,
   BriefcaseBusiness,
+  CalendarClock,
   CalendarDays,
   CheckCircle2,
   CircleDollarSign,
@@ -22,23 +24,47 @@ import {
   ListChecks,
   MessageCircle,
   PhoneCall,
-  RefreshCcw,
+  RotateCcw,
   Search,
   Share2,
   Timer,
   UserCheck,
   UserPlus,
   Users,
-  Workflow
+  Workflow,
+  X
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { useAdminScope } from "@/components/admin/AdminScopeProvider";
+import { filterRecordsByAccess } from "@/lib/rolePermissions";
+import {
+  getMembersForTeam,
+  getTeamOptionLabel,
+  resolveDirectoryIdentity,
+  teamMatchesScope
+} from "@/lib/teamDirectory";
+import { normalizeTravelAgentStatus } from "@/lib/travelAgentStatus";
+import { ENGAGEMENT_OUTCOME_OPTIONS } from "@/lib/engagementIntentMap";
 
 /* ENGAGEMENT COMPONENTS */
-import EngagementByChannelChart from "@/components/admin/dashboard/engagements/EngagementByChannelChart";
-import EngagementByDestinationChart from "@/components/admin/dashboard/engagements/EngagementByDestinationChart";
 import AgentEngagementOverviewTable from "@/components/admin/dashboard/engagements/AgentEngagementOverviewTable";
+
+const engagementChartLoading = () => (
+  <div className="flex h-64 items-center justify-center rounded-2xl bg-slate-50 text-sm text-slate-400">
+    Loading chart…
+  </div>
+);
+
+const EngagementByChannelChart = dynamic(
+  () => import("@/components/admin/dashboard/engagements/EngagementByChannelChart"),
+  { ssr: false, loading: engagementChartLoading }
+);
+const EngagementByDestinationChart = dynamic(
+  () => import("@/components/admin/dashboard/engagements/EngagementByDestinationChart"),
+  { ssr: false, loading: engagementChartLoading }
+);
 
 /* =========================
    DATE HELPERS
@@ -297,6 +323,29 @@ function isDateInRange(
   }
 
   return true;
+}
+
+function isDateBeforeRange(
+  value,
+  period,
+  fromDate,
+  toDateValue
+) {
+  if (period === "all") return false;
+
+  const dateKey = getLocalDateKey(value);
+  if (!dateKey) return false;
+
+  const range = getDateRange(
+    period,
+    fromDate,
+    toDateValue
+  );
+
+  return Boolean(
+    range.from &&
+    dateKey < range.from
+  );
 }
 
 /* =========================
@@ -575,9 +624,23 @@ function getAgentCreatedDate(agent = {}) {
   return (
     agent?.createdAt ||
     agent?.addedAt ||
+    agent?.createdOn ||
+    agent?.created_at ||
     agent?.registeredAt ||
     null
   );
+}
+
+function getAgentIdentityKeys(agent = {}) {
+  return [
+    agent?.id,
+    agent?.agentId,
+    agent?.travelAgentId,
+    agent?.agencyId,
+    getAgentName(agent)
+  ]
+    .map(value => String(value || "").trim())
+    .filter(Boolean);
 }
 
 function getLeadActivityDate(lead = {}) {
@@ -610,14 +673,32 @@ function isSuccessfulConnection(item = {}) {
 
   const negativeSignals = [
     "no response",
+    "no_response",
+    "no answer",
+    "no_answer",
     "not connected",
+    "not_connected",
     "call not connected",
+    "call_not_connected",
     "busy",
     "wrong number",
+    "wrong_number",
     "invalid contact",
+    "invalid_contact",
+    "invalid number",
+    "invalid_number",
+    "business shut down",
+    "business_shut_down",
+    "wrong details",
+    "wrong_details",
+    "do not contact",
+    "do_not_contact",
+    "blacklisted",
     "not reachable",
+    "not_reachable",
     "unreachable",
     "switched off",
+    "switched_off",
     "declined"
   ];
 
@@ -713,13 +794,84 @@ function hasAgentEmail(agent = {}) {
   );
 }
 
-function matchesAssignedFilter(
-  item = {},
-  assignedTo = "all"
-) {
-  return (
-    assignedTo === "all" ||
-    getAssignedKey(item) === assignedTo
+function getOperationalIdentity(item = {}, userLookup) {
+  return resolveDirectoryIdentity(
+    {
+      uid:
+        item?.performedByUid ||
+        item?.loggedByUid ||
+        item?.createdByUid ||
+        item?.createdByUserId ||
+        item?.userUid ||
+        item?.employeeUid ||
+        item?.assignedToUid ||
+        "",
+      email:
+        item?.performedByEmail ||
+        item?.loggedByEmail ||
+        item?.createdByEmail ||
+        item?.userEmail ||
+        item?.employeeEmail ||
+        item?.assignedToEmail ||
+        "",
+      name:
+        item?.performedByName ||
+        item?.loggedByName ||
+        item?.createdByName ||
+        item?.userName ||
+        item?.employeeName ||
+        item?.assignedToName ||
+        ""
+    },
+    userLookup
+  );
+}
+
+function getCreatorIdentity(item = {}, userLookup) {
+  return resolveDirectoryIdentity(
+    {
+      uid: item?.createdByUid || item?.creatorUid || item?.createdByUserId || item?.ownerUid || "",
+      email: item?.createdByEmail || item?.creatorEmail || item?.ownerEmail || "",
+      name: item?.createdByName || item?.creatorName || item?.createdByUserName || item?.ownerName || ""
+    },
+    userLookup
+  );
+}
+
+function matchesAssignedFilter(item = {}, assignedTo = "all", userLookup) {
+  if (assignedTo === "all") return true;
+  return getOperationalIdentity(item, userLookup).key === assignedTo;
+}
+
+function matchesTeamFilter(item = {}, team = "all", userLookup, identityGetter = getOperationalIdentity) {
+  if (!team || team === "all") return true;
+  const identity = identityGetter(item, userLookup);
+  return !identity?.isUnmapped && teamMatchesScope(identity?.team, team);
+}
+
+function getAssignedIdentity(item = {}, userLookup) {
+  return resolveDirectoryIdentity(
+    {
+      uid:
+        item?.assignedToUid ||
+        item?.assignedUserUid ||
+        item?.assigneeUid ||
+        item?.ownerUid ||
+        "",
+      email:
+        item?.assignedToEmail ||
+        item?.assignedUserEmail ||
+        item?.assigneeEmail ||
+        item?.ownerEmail ||
+        "",
+      name:
+        item?.assignedToName ||
+        item?.assignedUserName ||
+        item?.assigneeName ||
+        item?.ownerName ||
+        ""
+    },
+    userLookup
   );
 }
 
@@ -1289,21 +1441,15 @@ function CommandMetric({
   );
 }
 
-function QuickDateButton({
-  active,
-  label,
-  onClick
-}) {
+function FilterChip({ label, onClear }) {
   return (
     <button
       type="button"
-      onClick={onClick}
-      className={`rounded-xl border px-4 py-2 text-sm font-medium transition ${active
-          ? "border-blue-200 bg-blue-50 text-blue-700"
-          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-        }`}
+      onClick={onClear}
+      className="inline-flex items-center gap-1 rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700"
     >
       {label}
+      <X size={12} />
     </button>
   );
 }
@@ -1716,13 +1862,25 @@ function FollowUpItemCard({
           </p>
         </div>
 
-        <Link
-          href={item.href}
-          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
-        >
-          View
-          <ExternalLink className="h-3.5 w-3.5" />
-        </Link>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          {item.sourceType === "engagement" && item.agentId ? (
+            <Link
+              href={`/admin/meetings?agentId=${encodeURIComponent(item.agentId)}&engagementId=${encodeURIComponent(item.id)}`}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-700 transition hover:bg-violet-100"
+            >
+              <CalendarClock className="h-3.5 w-3.5" />
+              Meeting
+            </Link>
+          ) : null}
+
+          <Link
+            href={item.href}
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+          >
+            View
+            <ExternalLink className="h-3.5 w-3.5" />
+          </Link>
+        </div>
       </div>
     </div>
   );
@@ -2092,8 +2250,8 @@ function EngagementTaskQueue({
         />
 
         <TaskBucketButton
-          label="Completed Today"
-          count={counts.completedToday}
+          label="Completed in Period"
+          count={counts.completedInPeriod}
           active={bucket === "completed"}
           tone="emerald"
           onClick={() =>
@@ -2268,7 +2426,7 @@ function ConnectedTeamTable({
 }) {
   return (
     <div className="overflow-x-auto rounded-2xl border border-slate-200">
-      <table className="w-full min-w-[700px] text-left text-sm">
+      <table className="w-full min-w-[1240px] text-left text-sm">
         <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
           <tr>
             <th className="px-4 py-3">
@@ -2276,15 +2434,35 @@ function ConnectedTeamTable({
             </th>
 
             <th className="px-4 py-3 text-center">
-              New Agents
+              New Called
             </th>
 
             <th className="px-4 py-3 text-center">
-              Total Connected
+              New Connected
             </th>
 
             <th className="px-4 py-3 text-center">
-              Existing Follow-ups
+              Existing Contacted
+            </th>
+
+            <th className="px-4 py-3 text-center">
+              Unique Contacted
+            </th>
+
+            <th className="px-4 py-3 text-center">
+              Calls
+            </th>
+
+            <th className="px-4 py-3 text-center">
+              Meetings
+            </th>
+
+            <th className="px-4 py-3 text-center">
+              Invalid No.
+            </th>
+
+            <th className="px-4 py-3 text-center">
+              Business Shut
             </th>
           </tr>
         </thead>
@@ -2317,27 +2495,46 @@ function ConnectedTeamTable({
                   </div>
                 </td>
 
-                <td className="px-4 py-4 text-center font-bold text-violet-700">
-                  {row.newAgents}
+                <td className="px-4 py-4 text-center font-bold text-blue-700">
+                  {row.newAgentsCalled}
                 </td>
 
-                <td className="px-4 py-4 text-center font-bold text-blue-700">
-                  {row.totalConnected}
+                <td className="px-4 py-4 text-center font-bold text-violet-700">
+                  {row.newAgentsContacted}
                 </td>
 
                 <td className="px-4 py-4 text-center font-bold text-emerald-700">
-                  {row.existingFollowUps}
+                  {row.existingAgentsContacted}
+                </td>
+
+                <td className="px-4 py-4 text-center font-bold text-blue-700">
+                  {row.uniqueAgentsContacted}
+                </td>
+
+                <td className="px-4 py-4 text-center font-bold text-slate-800">
+                  {row.calls}
+                </td>
+
+                <td className="px-4 py-4 text-center font-bold text-slate-800">
+                  {row.meetings}
+                </td>
+
+                <td className="px-4 py-4 text-center font-bold text-red-600">
+                  {row.invalidNumber}
+                </td>
+
+                <td className="px-4 py-4 text-center font-bold text-amber-700">
+                  {row.businessShutDown}
                 </td>
               </tr>
             ))
           ) : (
             <tr>
               <td
-                colSpan={4}
+                colSpan={9}
                 className="px-4 py-10 text-center text-sm text-slate-500"
               >
-                No agent connection data
-                available for today.
+                No team activity found for the selected filters.
               </td>
             </tr>
           )}
@@ -2382,6 +2579,12 @@ export default function AdminEngagementDashboard() {
     loading,
     error
   } = useAuth("admin");
+
+  const {
+    scope,
+    teamDirectory,
+    userLookup
+  } = useAdminScope();
 
   const [
     engagements,
@@ -2428,10 +2631,23 @@ export default function AdminEngagementDashboard() {
     setChannel
   ] = useState("all");
 
+  const [team, setTeam] = useState("all");
+
   const [
     assignedTo,
     setAssignedTo
   ] = useState("all");
+
+  const [agentSegment, setAgentSegment] = useState("all");
+  const [outcome, setOutcome] = useState("all");
+
+  useEffect(() => {
+    setPeriod(scope.dateRange || "30d");
+    setFromDate(scope.dateFrom || "");
+    setToDateValue(scope.dateTo || "");
+    setTeam(scope.team || "all");
+    setAssignedTo("all");
+  }, [scope.dateRange, scope.dateFrom, scope.dateTo, scope.team]);
 
   const [
     followUpSource,
@@ -2461,7 +2677,7 @@ export default function AdminEngagementDashboard() {
       "USER_NOT_REGISTERED"
     ) {
       router.replace(
-        "/admin/login"
+        "/login"
       );
     }
   }, [
@@ -2572,6 +2788,8 @@ export default function AdminEngagementDashboard() {
         }
       );
 
+
+
     return () => {
       unsubEngagements();
       unsubLeads();
@@ -2584,111 +2802,240 @@ export default function AdminEngagementDashboard() {
 
   const activeEngagements =
     useMemo(() => {
-      return engagements.filter(
-        item =>
-          !isDeletedRecord(item)
+      return filterRecordsByAccess(
+        engagements.filter(item => !isDeletedRecord(item)),
+        user,
+        "engagements.view",
+        "engagement",
+        { userLookup }
       );
-    }, [engagements]);
+    }, [engagements, user, userLookup]);
 
   const activeLeads =
     useMemo(() => {
-      return leads.filter(
-        item =>
-          !isDeletedRecord(item)
+      return filterRecordsByAccess(
+        leads.filter(item => !isDeletedRecord(item)),
+        user,
+        "leads.view",
+        "lead",
+        { userLookup }
       );
-    }, [leads]);
+    }, [leads, user, userLookup]);
 
   const activeTravelAgents =
     useMemo(() => {
-      return travelAgents.filter(
-        item =>
-          !isDeletedRecord(item)
+      return filterRecordsByAccess(
+        travelAgents.filter(item => !isDeletedRecord(item)),
+        user,
+        "travel_agents.view",
+        "travel_agent",
+        { userLookup }
       );
-    }, [travelAgents]);
+    }, [travelAgents, user, userLookup]);
 
   const activeEngagementTasks =
     useMemo(() => {
-      return engagementTasks.filter(
-        item =>
-          !isDeletedRecord(item)
+      return filterRecordsByAccess(
+        engagementTasks.filter(item => !isDeletedRecord(item)),
+        user,
+        "engagements.view",
+        "engagement",
+        { userLookup }
       );
-    }, [engagementTasks]);
+    }, [engagementTasks, user, userLookup]);
 
-  const assignedOptions =
-    useMemo(() => {
-      const map = new Map();
 
-      [
-        ...activeEngagements,
-        ...activeLeads,
-        ...activeTravelAgents,
-        ...activeEngagementTasks
-      ].forEach(item => {
-        const key =
-          getAssignedKey(item);
+  const assignedOptions = useMemo(() => {
+    return getMembersForTeam(teamDirectory, team).map(member => ({
+      value: member.key,
+      label: member.label,
+      email: member.email,
+      team: member.team
+    }));
+  }, [teamDirectory, team]);
 
-        const label =
-          getAssignedName(item);
+  const outcomeOptions = useMemo(() => {
+    const values = new Map(
+      ENGAGEMENT_OUTCOME_OPTIONS.map(option => [option.key, option.label])
+    );
 
-        if (
-          key &&
-          !map.has(key)
-        ) {
-          map.set(
-            key,
-            label
-          );
-        }
+    // Keep legacy outcome values filterable without letting them dictate the
+    // primary filter vocabulary.
+    activeEngagements.forEach(item => {
+      const raw = item?.outcomeCode || item?.outcomeLabel || item?.outcome || "";
+      const value = String(raw || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+      if (!value || values.has(value)) return;
+      values.set(value, String(item?.outcomeLabel || raw || value).trim());
+    });
+
+    return Array.from(values.entries()).map(([value, label]) => ({ value, label }));
+  }, [activeEngagements]);
+
+  const channelOptions = useMemo(() => {
+    const preferred = ["call", "whatsapp", "email", "meeting"];
+    const seen = new Set(preferred);
+    activeEngagements.forEach(item => {
+      const value = getChannel(getRecordChannel(item));
+      if (value) seen.add(value);
+    });
+    return [...preferred, ...Array.from(seen).filter(item => !preferred.includes(item)).sort()];
+  }, [activeEngagements]);
+
+  const agentRelationshipIndex = useMemo(() => {
+    const aliasMap = new Map();
+
+    activeTravelAgents.forEach(agent => {
+      const keys = getAgentIdentityKeys(agent);
+      const canonicalKey = keys[0] || "";
+      if (!canonicalKey) return;
+
+      keys.forEach(key => {
+        aliasMap.set(key, canonicalKey);
+      });
+    });
+
+    const resolveAgentKey = item => {
+      const candidates = [
+        item?.agentId,
+        item?.travelAgentId,
+        item?.agencyId,
+        item?.travelAgent?.id,
+        item?.agent?.id,
+        getAgentName(item)
+      ]
+        .map(value => String(value || "").trim())
+        .filter(Boolean);
+
+      for (const candidate of candidates) {
+        const canonical = aliasMap.get(candidate);
+        if (canonical) return canonical;
+      }
+
+      return candidates[0] || "";
+    };
+
+    const firstActivityByAgent = new Map();
+    const firstActivityByPerformerAgent = new Map();
+    const firstCallByAgent = new Map();
+    const firstSuccessfulByAgent = new Map();
+    const firstCallByPerformerAgent = new Map();
+    const firstSuccessfulByPerformerAgent = new Map();
+    const engagedAgentKeys = new Set();
+
+    const chronological = activeEngagements
+      .map(item => ({
+        item,
+        date: toDate(getCreatedDate(item)),
+        agentKey: resolveAgentKey(item),
+        performer: getOperationalIdentity(item, userLookup)
+      }))
+      .filter(row => row.date && row.agentKey)
+      .sort((a, b) => {
+        const diff = a.date.getTime() - b.date.getTime();
+        if (diff !== 0) return diff;
+        return String(a.item?.id || "").localeCompare(String(b.item?.id || ""));
       });
 
-      return Array.from(
-        map.entries()
-      )
-        .map(
-          ([
-            value,
-            label
-          ]) => ({
-            value,
-            label
-          })
-        )
-        .sort((a, b) =>
-          a.label.localeCompare(
-            b.label
-          )
-        );
-    }, [
-      activeEngagements,
-      activeLeads,
-      activeTravelAgents,
-      activeEngagementTasks
-    ]);
+    chronological.forEach(row => {
+      const { item, date, agentKey, performer } = row;
+      const performerKey = performer?.key || "legacy_unmapped";
+      const performerAgentKey = `${performerKey}::${agentKey}`;
+      const channelValue = getChannel(getRecordChannel(item));
 
-  const channelOptions =
-    useMemo(() => {
-      const set = new Set();
+      engagedAgentKeys.add(agentKey);
 
-      [
-        ...activeEngagements,
-        ...activeLeads
-      ].forEach(item => {
-        const value = getChannel(
-          getRecordChannel(item)
-        );
+      if (!firstActivityByAgent.has(agentKey)) {
+        firstActivityByAgent.set(agentKey, { item, date, performerKey });
+      }
 
-        if (value) {
-          set.add(value);
+      if (!firstActivityByPerformerAgent.has(performerAgentKey)) {
+        firstActivityByPerformerAgent.set(performerAgentKey, { item, date });
+      }
+
+      if (channelValue === "call") {
+        if (!firstCallByAgent.has(agentKey)) {
+          firstCallByAgent.set(agentKey, { item, date, performerKey });
         }
-      });
 
-      return Array.from(
-        set
-      ).sort();
-    }, [
-      activeEngagements,
-      activeLeads
-    ]);
+        if (!firstCallByPerformerAgent.has(performerAgentKey)) {
+          firstCallByPerformerAgent.set(performerAgentKey, { item, date });
+        }
+      }
+
+      if (isSuccessfulConnection(item)) {
+        if (!firstSuccessfulByAgent.has(agentKey)) {
+          firstSuccessfulByAgent.set(agentKey, { item, date, performerKey });
+        }
+
+        if (!firstSuccessfulByPerformerAgent.has(performerAgentKey)) {
+          firstSuccessfulByPerformerAgent.set(performerAgentKey, { item, date });
+        }
+      }
+    });
+
+    return {
+      aliasMap,
+      resolveAgentKey,
+      firstActivityByAgent,
+      firstActivityByPerformerAgent,
+      firstCallByAgent,
+      firstSuccessfulByAgent,
+      firstCallByPerformerAgent,
+      firstSuccessfulByPerformerAgent,
+      engagedAgentKeys
+    };
+  }, [activeTravelAgents, activeEngagements, userLookup]);
+
+  const segmentAgentIds = useMemo(() => {
+    const set = new Set();
+
+    activeTravelAgents.forEach(agent => {
+      const keys = getAgentIdentityKeys(agent);
+      const canonicalKey = keys[0] || "";
+      if (!canonicalKey) return;
+
+      const performerAgentKey = assignedTo !== "all"
+        ? `${assignedTo}::${canonicalKey}`
+        : "";
+      const firstActivity = performerAgentKey
+        ? agentRelationshipIndex.firstActivityByPerformerAgent.get(performerAgentKey)
+        : agentRelationshipIndex.firstActivityByAgent.get(canonicalKey);
+      const hasContact = performerAgentKey
+        ? Boolean(firstActivity)
+        : agentRelationshipIndex.engagedAgentKeys.has(canonicalKey);
+      const firstContactInPeriod = firstActivity
+        ? isDateInRange(firstActivity.date, period, fromDate, toDateValue)
+        : false;
+      const firstContactBeforePeriod = firstActivity
+        ? isDateBeforeRange(firstActivity.date, period, fromDate, toDateValue)
+        : false;
+      const status = normalizeTravelAgentStatus(agent.status, agent.active);
+
+      const matches =
+        agentSegment === "all" ||
+        (agentSegment === "new" && firstContactInPeriod) ||
+        (agentSegment === "existing" && firstContactBeforePeriod) ||
+        (agentSegment === "never_contacted" && !hasContact) ||
+        (agentSegment === "contacted" && hasContact) ||
+        (agentSegment === "invalid_closed" &&
+          ["invalid_number", "business_shut_down", "wrong_details", "do_not_contact", "blacklisted"].includes(status));
+
+      if (matches) {
+        keys.forEach(key => set.add(key));
+        set.add(canonicalKey);
+      }
+    });
+
+    return set;
+  }, [
+    activeTravelAgents,
+    agentRelationshipIndex,
+    agentSegment,
+    assignedTo,
+    period,
+    fromDate,
+    toDateValue
+  ]);
 
   const filteredEngagements =
     useMemo(() => {
@@ -2716,12 +3063,19 @@ export default function AdminEngagementDashboard() {
                 )
               ) === channel;
 
-          const matchesAssigned =
-            assignedTo === "all"
-              ? true
-              : getAssignedKey(
-                item
-              ) === assignedTo;
+          const identity = getOperationalIdentity(item, userLookup);
+          const matchesAssigned = assignedTo === "all" || identity.key === assignedTo;
+          const matchesTeam =
+            team === "all" ||
+            (!identity.isUnmapped && teamMatchesScope(identity.team, team));
+          const outcomeValue = String(
+            item?.outcomeCode || item?.outcomeLabel || item?.outcome || item?.status || ""
+          ).trim().toLowerCase().replace(/[\s-]+/g, "_");
+          const matchesOutcome = outcome === "all" || outcomeValue === outcome;
+          const agentKey = agentRelationshipIndex.resolveAgentKey(item);
+          const matchesSegment =
+            agentSegment === "all" ||
+            (agentKey && segmentAgentIds.has(agentKey));
 
           const matchesDate =
             isDateInRange(
@@ -2735,6 +3089,9 @@ export default function AdminEngagementDashboard() {
             matchesSearch &&
             matchesChannel &&
             matchesAssigned &&
+            matchesTeam &&
+            matchesOutcome &&
+            matchesSegment &&
             matchesDate
           );
         }
@@ -2744,81 +3101,56 @@ export default function AdminEngagementDashboard() {
       search,
       channel,
       assignedTo,
+      team,
+      outcome,
+      agentSegment,
+      segmentAgentIds,
+      agentRelationshipIndex,
+      userLookup,
       period,
       fromDate,
       toDateValue
     ]);
   const filteredLeads = useMemo(() => {
-    const searchValue = search
-      .trim()
-      .toLowerCase();
-
     return activeLeads.filter(item => {
-      const matchesSearch = searchValue
-        ? getSearchText(item).includes(
-          searchValue
-        )
-        : true;
-
-      const matchesChannel =
-        channel === "all"
-          ? true
-          : getChannel(
-            getRecordChannel(item)
-          ) === channel;
-
-      const matchesAssigned =
-        assignedTo === "all"
-          ? true
-          : getAssignedKey(item) ===
-          assignedTo;
-
-      const matchesDate =
-        isDateInRange(
-          getCreatedDate(item),
-          period,
-          fromDate,
-          toDateValue
-        );
-
-      return (
-        matchesSearch &&
-        matchesChannel &&
-        matchesAssigned &&
-        matchesDate
+      const creator = getCreatorIdentity(item, userLookup);
+      const matchesTeam =
+        team === "all" ||
+        (!creator.isUnmapped && teamMatchesScope(creator.team, team));
+      const matchesDate = isDateInRange(
+        getCreatedDate(item),
+        period,
+        fromDate,
+        toDateValue
       );
+
+      return matchesTeam && matchesDate;
+    });
+  }, [activeLeads, team, userLookup, period, fromDate, toDateValue]);
+
+  const filteredTravelAgents = useMemo(() => {
+    return activeTravelAgents.filter(agent => {
+      if (!matchesSearchFilter(agent, search)) return false;
+
+      const creator = getCreatorIdentity(agent, userLookup);
+      if (team !== "all" && (creator.isUnmapped || !teamMatchesScope(creator.team, team))) {
+        return false;
+      }
+
+      const matchesSegment =
+        agentSegment === "all" ||
+        getAgentIdentityKeys(agent).some(key => segmentAgentIds.has(key));
+
+      return matchesSegment;
     });
   }, [
-    activeLeads,
+    activeTravelAgents,
     search,
-    channel,
-    assignedTo,
-    period,
-    fromDate,
-    toDateValue
+    team,
+    agentSegment,
+    segmentAgentIds,
+    userLookup
   ]);
-
-  const filteredTravelAgents =
-    useMemo(() => {
-      return activeTravelAgents.filter(
-        agent => {
-          return (
-            matchesSearchFilter(
-              agent,
-              search
-            ) &&
-            matchesAssignedFilter(
-              agent,
-              assignedTo
-            )
-          );
-        }
-      );
-    }, [
-      activeTravelAgents,
-      search,
-      assignedTo
-    ]);
 
   const filteredEngagementTasks =
     useMemo(() => {
@@ -2835,15 +3167,20 @@ export default function AdminEngagementDashboard() {
                 .includes(channel)
             );
 
+          const identity = getOperationalIdentity(task, userLookup);
+          const matchesTeam =
+            team === "all" ||
+            (!identity.isUnmapped && teamMatchesScope(identity.team, team));
+          const agentKey = agentRelationshipIndex.resolveAgentKey(task);
+          const matchesSegment =
+            agentSegment === "all" ||
+            (agentKey && segmentAgentIds.has(agentKey));
+
           return (
-            matchesSearchFilter(
-              task,
-              search
-            ) &&
-            matchesAssignedFilter(
-              task,
-              assignedTo
-            ) &&
+            matchesSearchFilter(task, search) &&
+            matchesAssignedFilter(task, assignedTo, userLookup) &&
+            matchesTeam &&
+            matchesSegment &&
             matchesChannel
           );
         }
@@ -2852,7 +3189,12 @@ export default function AdminEngagementDashboard() {
       activeEngagementTasks,
       search,
       assignedTo,
-      channel
+      team,
+      channel,
+      agentSegment,
+      segmentAgentIds,
+      agentRelationshipIndex,
+      userLookup
     ]);
 
   const taskMetrics = useMemo(() => {
@@ -2882,15 +3224,12 @@ export default function AdminEngagementDashboard() {
           "upcoming"
       ).length,
 
-      completedToday:
+      completedInPeriod:
         filteredEngagementTasks.filter(
           item => {
             return (
-              getTaskStatus(item) ===
-              "completed" &&
-              isTodayDate(
-                item?.completedAt
-              )
+              getTaskStatus(item) === "completed" &&
+              isDateInRange(item?.completedAt, period, fromDate, toDateValue)
             );
           }
         ).length,
@@ -2902,7 +3241,7 @@ export default function AdminEngagementDashboard() {
             "skipped"
         ).length
     };
-  }, [filteredEngagementTasks]);
+  }, [filteredEngagementTasks, period, fromDate, toDateValue]);
 
   const visibleTaskQueue =
     useMemo(() => {
@@ -2912,14 +3251,10 @@ export default function AdminEngagementDashboard() {
             const status =
               getTaskStatus(task);
 
-            if (
-              taskBucket === "completed"
-            ) {
+            if (taskBucket === "completed") {
               return (
                 status === "completed" &&
-                isTodayDate(
-                  task?.completedAt
-                )
+                isDateInRange(task?.completedAt, period, fromDate, toDateValue)
               );
             }
 
@@ -2977,321 +3312,241 @@ export default function AdminEngagementDashboard() {
       });
     }, [
       filteredEngagementTasks,
-      taskBucket
+      taskBucket,
+      period,
+      fromDate,
+      toDateValue
     ]);
 
-  const connectionIntelligence =
-    useMemo(() => {
-      const successfulHistory =
-        activeEngagements
-          .filter(
-            isSuccessfulConnection
-          )
-          .filter(item =>
-            toDate(
-              getCreatedDate(item)
-            )
-          )
-          .sort((a, b) => {
-            return (
-              (
-                toDate(
-                  getCreatedDate(a)
-                )?.getTime() || 0
-              ) -
-              (
-                toDate(
-                  getCreatedDate(b)
-                )?.getTime() || 0
-              )
-            );
-          });
+  const connectionIntelligence = useMemo(() => {
+    // Relationship definition:
+    // - New Agent Called = this performer is calling the Travel Agent for the
+    //   first time in the selected period. The agent may have existed in the
+    //   CRM for months before that first call.
+    // - New Agent Connected = this performer's first successful connection
+    //   with the Travel Agent happened in the selected period.
+    // - Existing Agent Contacted = the performer had already connected
+    //   successfully with that Travel Agent before the selected period.
+    // This mirrors the Team Engagement dashboard instead of using the Travel
+    // Agent profile creation date as the relationship definition.
+    const companyConnectedAgentIds = new Set();
+    const companyNewCalledAgentIds = new Set();
+    const companyNewConnectedAgentIds = new Set();
+    const companyExistingConnectedAgentIds = new Set();
+    const companyInvalidAgentIds = new Set();
+    const companyBusinessShutAgentIds = new Set();
+    const companyWrongDetailsAgentIds = new Set();
+    const teamMap = new Map();
 
-      const firstSuccessfulByAgent =
-        new Map();
-
-      successfulHistory.forEach(
-        item => {
-          const key =
-            getAgentKey(item);
-
-          if (
-            !key ||
-            firstSuccessfulByAgent.has(
-              key
-            )
-          ) {
-            return;
-          }
-
-          firstSuccessfulByAgent.set(
-            key,
-            item
-          );
-        }
-      );
-
-      const todayRows =
-        activeEngagements
-          .filter(item =>
-            isTodayDate(
-              getCreatedDate(item)
-            )
-          )
-          .filter(
-            isSuccessfulConnection
-          )
-          .filter(item =>
-            matchesSearchFilter(
-              item,
-              search
-            )
-          )
-          .filter(item =>
-            matchesAssignedFilter(
-              item,
-              assignedTo
-            )
-          )
-          .filter(item => {
-            return (
-              channel === "all" ||
-              getChannel(
-                getRecordChannel(
-                  item
-                )
-              ) === channel
-            );
-          })
-          .sort((a, b) => {
-            return (
-              (
-                toDate(
-                  getCreatedDate(a)
-                )?.getTime() || 0
-              ) -
-              (
-                toDate(
-                  getCreatedDate(b)
-                )?.getTime() || 0
-              )
-            );
-          });
-
-      const uniqueToday =
-        new Map();
-
-      todayRows.forEach(item => {
-        const key =
-          getAgentKey(item);
-
-        if (
-          !key ||
-          uniqueToday.has(key)
-        ) {
-          return;
-        }
-
-        uniqueToday.set(
-          key,
-          item
-        );
-      });
-
-      const newAgentKeys =
-        new Set();
-
-      firstSuccessfulByAgent.forEach(
-        (item, key) => {
-          if (
-            isTodayDate(
-              getCreatedDate(item)
-            )
-          ) {
-            newAgentKeys.add(key);
-          }
-        }
-      );
-
-      const teamMap =
-        new Map();
-
-      uniqueToday.forEach(
-        (item, key) => {
-          const teamKey =
-            getTeamKey(item);
-
-          if (
-            !teamMap.has(teamKey)
-          ) {
-            teamMap.set(teamKey, {
-              key: teamKey,
-              name: getTeamName(
-                item
-              ),
-              email: getTeamEmail(
-                item
-              ),
-              newAgents: 0,
-              totalConnected: 0,
-              existingFollowUps: 0
-            });
-          }
-
-          const row =
-            teamMap.get(teamKey);
-
-          row.totalConnected += 1;
-
-          if (
-            newAgentKeys.has(key)
-          ) {
-            row.newAgents += 1;
-          } else {
-            row.existingFollowUps += 1;
-          }
-        }
-      );
-
-      return {
-        newAgentKeys,
-
-        newAgentsConnectedToday:
-          Array.from(
-            uniqueToday.keys()
-          ).filter(key =>
-            newAgentKeys.has(key)
-          ).length,
-
-        totalAgentsConnectedToday:
-          uniqueToday.size,
-
-        existingAgentsFollowedUpToday:
-          Array.from(
-            uniqueToday.keys()
-          ).filter(
-            key =>
-              !newAgentKeys.has(key)
-          ).length,
-
-        teamRows: Array.from(
-          teamMap.values()
-        ).sort(
-          (a, b) =>
-            b.totalConnected -
-            a.totalConnected
-        )
-      };
-    }, [
-      activeEngagements,
-      search,
-      assignedTo,
-      channel
-    ]);
-
-  const businessPulse =
-    useMemo(() => {
-      const scopedLeads =
-        activeLeads.filter(item => {
-          return (
-            matchesSearchFilter(
-              item,
-              search
-            ) &&
-            matchesAssignedFilter(
-              item,
-              assignedTo
-            ) &&
-            (
-              channel === "all" ||
-              getChannel(
-                getRecordChannel(
-                  item
-                )
-              ) === channel
-            )
-          );
+    const ensureTeamRow = identity => {
+      const teamKey = identity?.key || "legacy_unmapped";
+      if (!teamMap.has(teamKey)) {
+        teamMap.set(teamKey, {
+          key: teamKey,
+          name: identity?.name || "Legacy / Unmapped",
+          email: identity?.email || "",
+          isUnmapped: Boolean(identity?.isUnmapped),
+          connectedAgentIds: new Set(),
+          newCalledAgentIds: new Set(),
+          newConnectedAgentIds: new Set(),
+          existingConnectedAgentIds: new Set(),
+          invalidAgentIds: new Set(),
+          businessShutAgentIds: new Set(),
+          calls: 0,
+          meetings: 0
         });
+      }
+      return teamMap.get(teamKey);
+    };
 
-      const newAgentProfilesToday =
-        filteredTravelAgents.filter(
-          agent =>
-            isTodayDate(
-              getAgentCreatedDate(
-                agent
-              )
-            )
-        ).length;
+    filteredEngagements.forEach(item => {
+      const identity = getOperationalIdentity(item, userLookup);
+      const row = ensureTeamRow(identity);
+      const performerKey = identity?.key || "legacy_unmapped";
+      const agentKey = agentRelationshipIndex.resolveAgentKey(item);
+      const performerAgentKey = agentKey ? `${performerKey}::${agentKey}` : "";
+      const recordChannel = getChannel(getRecordChannel(item));
+      const outcomeValue = String(
+        item?.outcomeCode || item?.outcomeLabel || item?.outcome || item?.status || ""
+      ).trim().toLowerCase().replace(/[\s-]+/g, "_");
 
-      const queriesReceivedToday =
-        scopedLeads.filter(lead =>
-          isTodayDate(
-            lead?.createdAt
-          )
-        ).length;
+      if (recordChannel === "call") row.calls += 1;
+      if (recordChannel === "meeting") row.meetings += 1;
 
-      const quotesSharedToday =
-        scopedLeads.filter(lead => {
-          return (
-            isQuoteSentLead(lead) &&
-            isTodayDate(
-              getLeadActivityDate(
-                lead
-              )
-            )
-          );
-        }).length;
+      if (agentKey && recordChannel === "call" && performerAgentKey) {
+        const firstCall = agentRelationshipIndex.firstCallByPerformerAgent.get(performerAgentKey);
+        if (
+          firstCall &&
+          isDateInRange(firstCall.date, period, fromDate, toDateValue)
+        ) {
+          companyNewCalledAgentIds.add(agentKey);
+          row.newCalledAgentIds.add(agentKey);
+        }
+      }
 
-      const convertedToday =
-        scopedLeads.filter(lead => {
-          return (
-            isWonLead(lead) &&
-            isTodayDate(
-              getLeadActivityDate(
-                lead
-              )
-            )
-          );
-        }).length;
+      if (agentKey && outcomeValue === "invalid_number") {
+        row.invalidAgentIds.add(agentKey);
+        companyInvalidAgentIds.add(agentKey);
+      }
+      if (agentKey && ["business_shut_down", "not_in_business"].includes(outcomeValue)) {
+        row.businessShutAgentIds.add(agentKey);
+        companyBusinessShutAgentIds.add(agentKey);
+      }
+      if (agentKey && outcomeValue === "wrong_details") {
+        companyWrongDetailsAgentIds.add(agentKey);
+      }
 
-      return {
-        newAgentProfilesToday,
-        queriesReceivedToday,
-        quotesSharedToday,
-        convertedToday,
+      if (!agentKey || !isSuccessfulConnection(item)) return;
 
-        activeQueries:
-          scopedLeads.filter(
-            isActiveQueryLead
-          ).length,
+      companyConnectedAgentIds.add(agentKey);
+      row.connectedAgentIds.add(agentKey);
 
-        hotLeads:
-          scopedLeads.filter(
-            isHotLead
-          ).length,
+      const firstSuccessful = performerAgentKey
+        ? agentRelationshipIndex.firstSuccessfulByPerformerAgent.get(performerAgentKey)
+        : null;
 
-        paymentPending:
-          scopedLeads.filter(
-            isPaymentPendingLead
-          ).length,
+      if (
+        firstSuccessful &&
+        isDateInRange(firstSuccessful.date, period, fromDate, toDateValue)
+      ) {
+        companyNewConnectedAgentIds.add(agentKey);
+        row.newConnectedAgentIds.add(agentKey);
+      } else if (
+        firstSuccessful &&
+        isDateBeforeRange(firstSuccessful.date, period, fromDate, toDateValue)
+      ) {
+        companyExistingConnectedAgentIds.add(agentKey);
+        row.existingConnectedAgentIds.add(agentKey);
+      }
+    });
 
-        revisionPending:
-          scopedLeads.filter(
-            isRevisionPendingLead
-          ).length,
+    // If the same agent is a first-time relationship for one selected team
+    // member but a repeat relationship for another, the company snapshot
+    // prioritizes New for that period so the same agent is not presented in
+    // both company-level buckets. Team rows retain each member's own history.
+    companyNewConnectedAgentIds.forEach(agentKey => {
+      companyExistingConnectedAgentIds.delete(agentKey);
+    });
 
-        quoteSent:
-          scopedLeads.filter(
-            isQuoteSentLead
-          ).length
-      };
-    }, [
-      activeLeads,
-      filteredTravelAgents,
-      search,
-      assignedTo,
-      channel
-    ]);
+    const teamRows = Array.from(teamMap.values())
+      .map(row => ({
+        key: row.key,
+        name: row.name,
+        email: row.email,
+        isUnmapped: row.isUnmapped,
+        newAgentsCalled: row.newCalledAgentIds.size,
+        newAgentsContacted: row.newConnectedAgentIds.size,
+        existingAgentsContacted: row.existingConnectedAgentIds.size,
+        uniqueAgentsContacted: row.connectedAgentIds.size,
+        calls: row.calls,
+        meetings: row.meetings,
+        invalidNumber: row.invalidAgentIds.size,
+        businessShutDown: row.businessShutAgentIds.size
+      }))
+      .filter(row =>
+        row.uniqueAgentsContacted > 0 ||
+        row.calls > 0 ||
+        row.meetings > 0 ||
+        row.invalidNumber > 0 ||
+        row.businessShutDown > 0
+      )
+      .sort((a, b) =>
+        b.newAgentsContacted - a.newAgentsContacted ||
+        b.uniqueAgentsContacted - a.uniqueAgentsContacted ||
+        b.calls - a.calls ||
+        a.name.localeCompare(b.name)
+      );
+
+    return {
+      newAgentsCalled: companyNewCalledAgentIds.size,
+      newAgentsConnected: companyNewConnectedAgentIds.size,
+      totalAgentsConnected: companyConnectedAgentIds.size,
+      existingAgentsConnected: companyExistingConnectedAgentIds.size,
+      invalidNumber: companyInvalidAgentIds.size,
+      businessShutDown: companyBusinessShutAgentIds.size,
+      wrongDetails: companyWrongDetailsAgentIds.size,
+      teamRows
+    };
+  }, [
+    filteredEngagements,
+    agentRelationshipIndex,
+    period,
+    fromDate,
+    toDateValue,
+    userLookup
+  ]);
+
+  const engagementActivitySummary = useMemo(() => {
+    const summary = {
+      calls: 0,
+      whatsapp: 0,
+      emails: 0,
+      meetings: 0
+    };
+
+    filteredEngagements.forEach(item => {
+      const recordChannel = getChannel(getRecordChannel(item));
+      if (recordChannel === "call") summary.calls += 1;
+      else if (recordChannel === "whatsapp") summary.whatsapp += 1;
+      else if (recordChannel === "email") summary.emails += 1;
+      else if (recordChannel === "meeting") summary.meetings += 1;
+    });
+
+    return summary;
+  }, [filteredEngagements]);
+
+
+  const businessPulse = useMemo(() => {
+    // Business snapshot follows the GLOBAL reporting scope only. Page-specific
+    // engagement filters (performer/channel/outcome/agent segment/search) must
+    // not silently change lead/revenue counters because those filters describe
+    // outreach activity, not lead ownership.
+    const teamScopedLeads = activeLeads.filter(lead => {
+      const creator = getCreatorIdentity(lead, userLookup);
+      return (
+        team === "all" ||
+        (!creator.isUnmapped && teamMatchesScope(creator.team, team))
+      );
+    });
+
+    const periodLeads = teamScopedLeads.filter(lead =>
+      isDateInRange(getCreatedDate(lead), period, fromDate, toDateValue)
+    );
+
+    const periodAgents = activeTravelAgents.filter(agent => {
+      const creator = getCreatorIdentity(agent, userLookup);
+      const matchesTeam =
+        team === "all" ||
+        (!creator.isUnmapped && teamMatchesScope(creator.team, team));
+      return matchesTeam && isDateInRange(getAgentCreatedDate(agent), period, fromDate, toDateValue);
+    });
+
+    return {
+      newAgentProfiles: periodAgents.length,
+      queriesReceived: periodLeads.length,
+      quotesShared: teamScopedLeads.filter(lead =>
+        isQuoteSentLead(lead) &&
+        isDateInRange(getLeadActivityDate(lead), period, fromDate, toDateValue)
+      ).length,
+      converted: teamScopedLeads.filter(lead =>
+        isWonLead(lead) &&
+        isDateInRange(getLeadActivityDate(lead), period, fromDate, toDateValue)
+      ).length,
+      activeQueries: periodLeads.filter(isActiveQueryLead).length,
+      hotLeads: periodLeads.filter(isHotLead).length,
+      paymentPending: periodLeads.filter(isPaymentPendingLead).length,
+      revisionPending: periodLeads.filter(isRevisionPendingLead).length,
+      quoteSent: periodLeads.filter(isQuoteSentLead).length
+    };
+  }, [
+    activeLeads,
+    activeTravelAgents,
+    team,
+    userLookup,
+    period,
+    fromDate,
+    toDateValue
+  ]);
 
   const agentPortfolio =
     useMemo(() => {
@@ -3450,6 +3705,20 @@ export default function AdminEngagementDashboard() {
                 !agent?.nextEngagementTaskId
               );
             }
+          ).length,
+
+        invalidNumberStatus:
+          filteredTravelAgents.filter(
+            agent =>
+              normalizeTravelAgentStatus(agent?.status || agent?.agentStatus, agent?.active) ===
+              "invalid_number"
+          ).length,
+
+        businessShutDownStatus:
+          filteredTravelAgents.filter(
+            agent =>
+              normalizeTravelAgentStatus(agent?.status || agent?.agentStatus, agent?.active) ===
+              "business_shut_down"
           ).length
       };
     }, [filteredTravelAgents]);
@@ -3483,6 +3752,11 @@ export default function AdminEngagementDashboard() {
               assignedKey:
                 getAssignedKey(
                   item
+                ),
+              assignedIdentity:
+                getAssignedIdentity(
+                  item,
+                  userLookup
                 ),
               channel: getChannel(
                 getRecordChannel(
@@ -3520,6 +3794,8 @@ export default function AdminEngagementDashboard() {
               id: item.id,
               sourceType:
                 "engagement",
+              agentId:
+                item?.travelAgentId || item?.agentId || item?.agencyId || "",
               agentName:
                 getAgentName(item),
               destinationName:
@@ -3533,6 +3809,11 @@ export default function AdminEngagementDashboard() {
               assignedKey:
                 getAssignedKey(
                   item
+                ),
+              assignedIdentity:
+                getAssignedIdentity(
+                  item,
+                  userLookup
                 ),
               channel: getChannel(
                 getRecordChannel(
@@ -3577,7 +3858,8 @@ export default function AdminEngagementDashboard() {
         });
     }, [
       activeLeads,
-      activeEngagements
+      activeEngagements,
+      userLookup
     ]);
   const filteredFollowUpItems = useMemo(() => {
     const searchValue = search.trim().toLowerCase();
@@ -3595,7 +3877,13 @@ export default function AdminEngagementDashboard() {
       const matchesAssigned =
         assignedTo === "all"
           ? true
-          : item.assignedKey === assignedTo;
+          : item?.assignedIdentity?.key === assignedTo;
+
+      const matchesTeam =
+        team === "all"
+          ? true
+          : String(item?.assignedIdentity?.team || "").trim().toLowerCase() ===
+            String(team).trim().toLowerCase();
 
       const matchesSource =
         followUpSource === "all"
@@ -3606,6 +3894,7 @@ export default function AdminEngagementDashboard() {
         matchesSearch &&
         matchesChannel &&
         matchesAssigned &&
+        matchesTeam &&
         matchesSource
       );
     });
@@ -3614,6 +3903,7 @@ export default function AdminEngagementDashboard() {
     search,
     channel,
     assignedTo,
+    team,
     followUpSource
   ]);
 
@@ -4236,170 +4526,85 @@ export default function AdminEngagementDashboard() {
       filteredLeads
     ]);
 
-  const teamEngagementRows =
-    useMemo(() => {
-      const teamMap =
-        new Map();
+  const teamEngagementRows = useMemo(() => {
+    const teamMap = new Map();
 
-      filteredEngagements.forEach(
-        item => {
-          const key =
-            getTeamKey(item);
+    const ensure = identity => {
+      const key = identity?.key || "legacy-unmapped";
+      if (!teamMap.has(key)) {
+        teamMap.set(key, {
+          key,
+          name: identity?.name || "Legacy / Unmapped",
+          email: identity?.email || "",
+          team: identity?.team || "",
+          isUnmapped: identity?.isUnmapped === true,
+          engagements: 0,
+          calls: 0,
+          whatsapp: 0,
+          emails: 0,
+          meetings: 0,
+          leads: 0,
+          todayFollowUps: 0,
+          overdueFollowUps: 0
+        });
+      }
+      return teamMap.get(key);
+    };
 
-          if (
-            !teamMap.has(key)
-          ) {
-            teamMap.set(key, {
-              key,
-              name:
-                getTeamName(item),
-              email:
-                getTeamEmail(item),
-              engagements: 0,
-              calls: 0,
-              whatsapp: 0,
-              emails: 0,
-              meetings: 0,
-              leads: 0,
-              todayFollowUps: 0,
-              overdueFollowUps: 0
-            });
-          }
+    // Keep every active staff member visible, even with zero activity.
+    getMembersForTeam(teamDirectory, team)
+      .filter(member => assignedTo === "all" || member.key === assignedTo)
+      .forEach(member => ensure({ ...member, isUnmapped: false }));
 
-          const row =
-            teamMap.get(key);
+    filteredEngagements.forEach(item => {
+      const row = ensure(getOperationalIdentity(item, userLookup));
+      const channelValue = getChannel(getRecordChannel(item));
+      row.engagements += 1;
+      if (channelValue === "call") row.calls += 1;
+      if (channelValue === "whatsapp") row.whatsapp += 1;
+      if (channelValue === "email") row.emails += 1;
+      if (
+        item?.isOfflineMeeting === true ||
+        item?.isOnlineMeeting === true ||
+        item?.meetingAt ||
+        item?.meetingMode ||
+        channelValue === "meeting"
+      ) row.meetings += 1;
 
-          const channelValue =
-            getChannel(
-              getRecordChannel(
-                item
-              )
-            );
+      if (isPendingEngagementDocumentFollowUp(item)) {
+        const dueAt = getFollowUpDate(item);
+        if (isTodayDate(dueAt)) row.todayFollowUps += 1;
+        if (isOverdueDate(dueAt)) row.overdueFollowUps += 1;
+      }
+    });
 
-          row.engagements += 1;
+    filteredLeads.forEach(lead => {
+      const fromEngagement =
+        lead?.engagementId ||
+        lead?.createdFromEngagement === true ||
+        String(lead?.source || "").toLowerCase() === "engagement";
+      if (!fromEngagement) return;
+      ensure(getOperationalIdentity(lead, userLookup)).leads += 1;
+    });
 
-          if (
-            channelValue === "call"
-          ) {
-            row.calls += 1;
-          }
-
-          if (
-            channelValue ===
-            "whatsapp"
-          ) {
-            row.whatsapp += 1;
-          }
-
-          if (
-            channelValue === "email"
-          ) {
-            row.emails += 1;
-          }
-
-          if (
-            item?.isOfflineMeeting ===
-            true ||
-            item?.isOnlineMeeting ===
-            true ||
-            item?.meetingAt ||
-            item?.meetingMode
-          ) {
-            row.meetings += 1;
-          }
-
-          if (
-            isPendingEngagementDocumentFollowUp(
-              item
-            )
-          ) {
-            const dueAt =
-              getFollowUpDate(
-                item
-              );
-
-            if (
-              isTodayDate(
-                dueAt
-              )
-            ) {
-              row.todayFollowUps +=
-                1;
-            }
-
-            if (
-              isOverdueDate(
-                dueAt
-              )
-            ) {
-              row.overdueFollowUps +=
-                1;
-            }
-          }
-        }
-      );
-
-      filteredLeads.forEach(
-        lead => {
-          const key =
-            getTeamKey(lead);
-
-          if (
-            !teamMap.has(key)
-          ) {
-            teamMap.set(key, {
-              key,
-              name:
-                getTeamName(lead),
-              email:
-                getTeamEmail(lead),
-              engagements: 0,
-              calls: 0,
-              whatsapp: 0,
-              emails: 0,
-              meetings: 0,
-              leads: 0,
-              todayFollowUps: 0,
-              overdueFollowUps: 0
-            });
-          }
-
-          if (
-            lead?.engagementId ||
-            lead?.createdFromEngagement ===
-            true ||
-            String(
-              lead?.source || ""
-            ).toLowerCase() ===
-            "engagement"
-          ) {
-            teamMap.get(
-              key
-            ).leads += 1;
-          }
-        }
-      );
-
-      return Array.from(
-        teamMap.values()
-      )
-        .map(row => ({
-          ...row,
-
-          conversionRate: percent(
-            row.leads,
-            row.engagements
-          )
-        }))
-        .sort(
-          (a, b) =>
-            b.engagements -
-            a.engagements
-        );
-    }, [
-      filteredEngagements,
-      filteredLeads
-    ]);
+    return Array.from(teamMap.values())
+      .map(row => ({
+        ...row,
+        conversionRate: percent(row.leads, row.engagements)
+      }))
+      .sort((a, b) => {
+        if (a.isUnmapped !== b.isUnmapped) return a.isUnmapped ? 1 : -1;
+        if (b.engagements !== a.engagements) return b.engagements - a.engagements;
+        return a.name.localeCompare(b.name);
+      });
+  }, [
+    filteredEngagements,
+    filteredLeads,
+    teamDirectory,
+    team,
+    assignedTo,
+    userLookup
+  ]);
 
   const mostUsedChannel =
     useMemo(() => {
@@ -4421,19 +4626,12 @@ export default function AdminEngagementDashboard() {
       );
     }, [metrics.channelMap]);
 
-  function applyQuickDate(value) {
-    setPeriod(value);
-    setFromDate("");
-    setToDateValue("");
-  }
-
   function resetFilters() {
     setSearch("");
-    setPeriod("30d");
-    setFromDate("");
-    setToDateValue("");
     setChannel("all");
     setAssignedTo("all");
+    setAgentSegment("all");
+    setOutcome("all");
     setFollowUpSource("all");
     setTaskBucket("today");
   }
@@ -4489,8 +4687,8 @@ export default function AdminEngagementDashboard() {
                 />
 
                 <CommandMetric
-                  label="New Agents Today"
-                  value={connectionIntelligence.newAgentsConnectedToday}
+                  label="New Agents Reached"
+                  value={connectionIntelligence.newAgentsConnected}
                   icon={UserPlus}
                   tone="blue"
                 />
@@ -4537,8 +4735,8 @@ export default function AdminEngagementDashboard() {
                     onClick={resetFilters}
                     className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/15"
                   >
-                    <RefreshCcw className="h-4 w-4" />
-                    Refresh
+                    <RotateCcw className="h-4 w-4" />
+                    Clear Page Filters
                   </button>
                 </div>
               </div>
@@ -4546,206 +4744,116 @@ export default function AdminEngagementDashboard() {
           </div>
         </section>
 
-        {/* QUICK DATE FILTERS */}
-        <section className="rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-            <CalendarDays className="h-4 w-4 text-slate-500" />
-            Quick Date Filters
-          </div>
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            <QuickDateButton
-              label="Today"
-              active={period === "today"}
-              onClick={() =>
-                applyQuickDate("today")
-              }
-            />
-
-            <QuickDateButton
-              label="Yesterday"
-              active={period === "yesterday"}
-              onClick={() =>
-                applyQuickDate("yesterday")
-              }
-            />
-
-            <QuickDateButton
-              label="Last 7 Days"
-              active={period === "7d"}
-              onClick={() =>
-                applyQuickDate("7d")
-              }
-            />
-
-            <QuickDateButton
-              label="Last 30 Days"
-              active={period === "30d"}
-              onClick={() =>
-                applyQuickDate("30d")
-              }
-            />
-
-            <QuickDateButton
-              label="This Month"
-              active={period === "thisMonth"}
-              onClick={() =>
-                applyQuickDate("thisMonth")
-              }
-            />
-
-            <QuickDateButton
-              label="Last Month"
-              active={period === "lastMonth"}
-              onClick={() =>
-                applyQuickDate("lastMonth")
-              }
-            />
-
-            <QuickDateButton
-              label="Clear Date"
-              active={period === "all"}
-              onClick={() =>
-                applyQuickDate("all")
-              }
-            />
-          </div>
-        </section>
-
         {/* FILTER PANEL */}
-        <section className="rounded-2xl border border-slate-200 bg-white p-3">
-          <div className="rounded-2xl border border-slate-100 bg-white p-3">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-7">
-              <div className="relative xl:col-span-2">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+        <section className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">Engagement Filters</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Date = Activity Date. Performer = the Users-table member who logged/performed the activity. Acquisition uses Agent Created By.
+              </p>
+            </div>
+            <span className="text-xs text-slate-400">
+              {filteredEngagements.length} engagement records in scope
+            </span>
+          </div>
 
-                <input
-                  value={search}
-                  onChange={event =>
-                    setSearch(
-                      event.target.value
-                    )
-                  }
-                  placeholder="Search agent, destination, lead, remark..."
-                  className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
-                />
-              </div>
-
-              <select
-                value={channel}
-                onChange={event =>
-                  setChannel(
-                    event.target.value
-                  )
-                }
-                className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
-              >
-                <option value="all">
-                  All Channels
-                </option>
-
-                {channelOptions.map(
-                  item => (
-                    <option
-                      key={item}
-                      value={item}
-                    >
-                      {item
-                        .charAt(0)
-                        .toUpperCase() +
-                        item.slice(1)}
-                    </option>
-                  )
-                )}
-              </select>
-
-              <select
-                value={assignedTo}
-                onChange={event =>
-                  setAssignedTo(
-                    event.target.value
-                  )
-                }
-                className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
-              >
-                <option value="all">
-                  All Assigned
-                </option>
-
-                {assignedOptions.map(
-                  item => (
-                    <option
-                      key={item.value}
-                      value={item.value}
-                    >
-                      {item.label}
-                    </option>
-                  )
-                )}
-              </select>
-
-              <select
-                value={followUpSource}
-                onChange={event =>
-                  setFollowUpSource(
-                    event.target.value
-                  )
-                }
-                className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
-              >
-                <option value="all">
-                  All Follow-ups
-                </option>
-
-                <option value="lead">
-                  Lead Follow-ups
-                </option>
-
-                <option value="engagement">
-                  Engagement Follow-ups
-                </option>
-              </select>
-
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
+            <div className="relative xl:col-span-2">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
-                type="date"
-                value={fromDate}
-                onChange={event => {
-                  setFromDate(
-                    event.target.value
-                  );
-
-                  setPeriod("custom");
-                }}
-                className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
-              />
-
-              <input
-                type="date"
-                value={toDateValue}
-                onChange={event => {
-                  setToDateValue(
-                    event.target.value
-                  );
-
-                  setPeriod("custom");
-                }}
-                className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+                value={search}
+                onChange={event => setSearch(event.target.value)}
+                placeholder="Search agent, destination, lead, remark..."
+                className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
               />
             </div>
+
+            <select
+              value={assignedTo}
+              onChange={event => setAssignedTo(event.target.value)}
+              className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+            >
+              <option value="all">All Activity Performers</option>
+              {assignedOptions.map(item => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={agentSegment}
+              onChange={event => setAgentSegment(event.target.value)}
+              className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+            >
+              <option value="all">All Agent Segments</option>
+              <option value="new">New / First Contact</option>
+              <option value="existing">Existing / Repeat Contact</option>
+              <option value="never_contacted">Never Contacted</option>
+              <option value="contacted">Contacted</option>
+              <option value="invalid_closed">Invalid / Closed</option>
+            </select>
+
+            <select
+              value={channel}
+              onChange={event => setChannel(event.target.value)}
+              className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+            >
+              <option value="all">All Channels</option>
+              {channelOptions.map(item => (
+                <option key={item} value={item}>{item.charAt(0).toUpperCase() + item.slice(1)}</option>
+              ))}
+            </select>
+
+            <select
+              value={outcome}
+              onChange={event => setOutcome(event.target.value)}
+              className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+            >
+              <option value="all">All Outcomes</option>
+              {outcomeOptions.map(item => (
+                <option key={item.value} value={item.value}>{item.label}</option>
+              ))}
+            </select>
+
           </div>
+
+          {(search || assignedTo !== "all" || agentSegment !== "all" || channel !== "all" || outcome !== "all") && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+              {assignedTo !== "all" && (
+                <FilterChip
+                  label={`Performer: ${assignedOptions.find(item => item.value === assignedTo)?.label || "Selected"}`}
+                  onClear={() => setAssignedTo("all")}
+                />
+              )}
+              {agentSegment !== "all" && <FilterChip label={`Segment: ${agentSegment.replace(/_/g, " ")}`} onClear={() => setAgentSegment("all")} />}
+              {channel !== "all" && <FilterChip label={`Channel: ${channel}`} onClear={() => setChannel("all")} />}
+              {outcome !== "all" && <FilterChip label={`Outcome: ${outcomeOptions.find(item => item.value === outcome)?.label || outcome}`} onClear={() => setOutcome("all")} />}
+              {search && <FilterChip label="Search active" onClear={() => setSearch("")} />}
+
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="ml-auto inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                <RotateCcw size={13} />
+                Clear All
+              </button>
+            </div>
+          )}
         </section>
 
-        {/* TODAY BUSINESS SNAPSHOT */}
+        {/* SELECTED PERIOD BUSINESS SNAPSHOT */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h2 className="text-sm font-semibold text-slate-900">
-                Today&apos;s Business Snapshot
+                {period === "today" ? "Today's Business Snapshot" : "Selected Period Business Snapshot"}
               </h2>
 
               <p className="mt-1 text-xs text-slate-500">
-                Company-wide agent connection, query, quotation and conversion
-                activity for today.
+                Business flow is shown as Agent Added → Agent Contacted → Lead Generated → Quote Sent → Converted. Contact metrics use the engagement filters; lead and quotation metrics use the Global Date + Team scope.
               </p>
             </div>
 
@@ -4756,92 +4864,139 @@ export default function AdminEngagementDashboard() {
 
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
             <BusinessMetricCard
-              label="New Agents Connected"
-              value={
-                connectionIntelligence
-                  .newAgentsConnectedToday
-              }
-              helper="First successful connection recorded today."
-              icon={UserPlus}
-              tone="violet"
-            />
-
-            <BusinessMetricCard
-              label="Total Agents Connected"
-              value={
-                connectionIntelligence
-                  .totalAgentsConnectedToday
-              }
-              helper="Unique new and existing agents reached today."
-              icon={PhoneCall}
-              tone="blue"
-            />
-
-            <BusinessMetricCard
-              label="Existing Follow-ups"
-              value={
-                connectionIntelligence
-                  .existingAgentsFollowedUpToday
-              }
-              helper="Existing agents successfully contacted today."
-              icon={Users}
-              tone="emerald"
-            />
-
-            <BusinessMetricCard
-              label="New Profiles Added"
-              value={
-                businessPulse
-                  .newAgentProfilesToday
-              }
-              helper="Travel-agent profiles created today."
+              label="New Agents Added"
+              value={businessPulse.newAgentProfiles}
+              helper="Travel-agent profiles created in this period."
               icon={BriefcaseBusiness}
               tone="slate"
             />
 
             <BusinessMetricCard
-              label="Queries Received"
-              value={
-                businessPulse
-                  .queriesReceivedToday
-              }
-              helper="Lead records created today."
+              label="New Agents Called"
+              value={connectionIntelligence.newAgentsCalled}
+              helper="Unique agents whose first call by the team member happened in this period."
+              icon={PhoneCall}
+              tone="blue"
+            />
+
+            <BusinessMetricCard
+              label="New Agents Connected"
+              value={connectionIntelligence.newAgentsConnected}
+              helper="Unique agents successfully connected by the team member for the first time in this period."
+              icon={UserPlus}
+              tone="violet"
+            />
+
+            <BusinessMetricCard
+              label="Existing Agents Contacted"
+              value={connectionIntelligence.existingAgentsConnected}
+              helper="Unique agents successfully contacted again after a prior connection."
+              icon={UserCheck}
+              tone="emerald"
+            />
+
+            <BusinessMetricCard
+              label="Total Unique Contacted"
+              value={connectionIntelligence.totalAgentsConnected}
+              helper="Deduplicated unique travel agents reached in this period."
+              icon={PhoneCall}
+              tone="blue"
+            />
+
+            <BusinessMetricCard
+              label="Leads Generated"
+              value={businessPulse.queriesReceived}
+              helper="Lead records created in this period."
               icon={MessageCircle}
               tone="blue"
             />
 
             <BusinessMetricCard
-              label="Quotes Shared"
-              value={
-                businessPulse
-                  .quotesSharedToday
-              }
-              helper="Leads moved to quote-sent stage today."
+              label="Quotes Sent"
+              value={businessPulse.quotesShared}
+              helper="Leads where a quotation was sent in this period."
               icon={FileText}
               tone="amber"
             />
 
             <BusinessMetricCard
-              label="Completed Tasks"
-              value={
-                taskMetrics
-                  .completedToday
-              }
-              helper="Cadence tasks completed today."
-              icon={CheckCircle2}
-              tone="emerald"
-            />
-
-            <BusinessMetricCard
-              label="Converted Today"
-              value={
-                businessPulse
-                  .convertedToday
-              }
-              helper="Leads converted or won today."
+              label="Converted"
+              value={businessPulse.converted}
+              helper="Leads converted or won in this period."
               icon={CircleDollarSign}
               tone="emerald"
             />
+          </div>
+
+          <div className="mt-4 border-t border-slate-100 pt-4">
+            <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Activity & Invalid Outcomes
+                </p>
+                <p className="mt-1 text-xs text-slate-400">
+                  Activity counts may include repeat touches. Invalid figures are unique affected agents in the selected engagement scope.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+              <BusinessMetricCard
+                label="Calls Made"
+                value={engagementActivitySummary.calls}
+                helper="All call activities, including repeat calls."
+                icon={PhoneCall}
+                tone="blue"
+              />
+
+              <BusinessMetricCard
+                label="WhatsApp"
+                value={engagementActivitySummary.whatsapp}
+                helper="WhatsApp engagement activities logged."
+                icon={MessageCircle}
+                tone="emerald"
+              />
+
+              <BusinessMetricCard
+                label="Meetings"
+                value={engagementActivitySummary.meetings}
+                helper="Meeting engagement records logged in this period."
+                icon={CalendarClock}
+                tone="violet"
+              />
+
+              <BusinessMetricCard
+                label="Completed Tasks"
+                value={taskMetrics.completedInPeriod}
+                helper="Cadence tasks completed in this period."
+                icon={CheckCircle2}
+                tone="emerald"
+              />
+
+              <BusinessMetricCard
+                label="Invalid Number"
+                value={connectionIntelligence.invalidNumber}
+                helper="Unique agents marked Invalid Number in this period."
+                icon={AlertTriangle}
+                tone="red"
+              />
+
+              <BusinessMetricCard
+                label="Business Shut Down"
+                value={connectionIntelligence.businessShutDown}
+                helper="Unique agents marked Business Shut Down in this period."
+                icon={BriefcaseBusiness}
+                tone="amber"
+              />
+
+              <BusinessMetricCard
+                label="Wrong Details"
+                value={connectionIntelligence.wrongDetails}
+                helper="Unique agents reported with wrong details in this period."
+                icon={AlertTriangle}
+                tone="red"
+              />
+            </div>
           </div>
         </section>
 
@@ -4961,15 +5116,11 @@ export default function AdminEngagementDashboard() {
           <div className="xl:col-span-2">
             <SectionCard
               icon={UserCheck}
-              title="Today&apos;s Agent Connection by Team"
-              description="New agents, total unique agents connected and existing follow-ups by employee."
+              title={period === "today" ? "Today's Team Agent Activity" : "Team Agent Activity"}
+              description="Relationship-based activity. New means the team member is contacting that Travel Agent for the first time, even if the agent profile already existed in the CRM. Existing means the team member had connected with that agent before the selected period."
               rightContent={
                 <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                  {
-                    connectionIntelligence
-                      .totalAgentsConnectedToday
-                  }{" "}
-                  unique agents
+                  {connectionIntelligence.totalAgentsConnected} company-wide unique
                 </span>
               }
             >
@@ -5082,7 +5233,23 @@ export default function AdminEngagementDashboard() {
             title="Agent Data Quality & Cadence Risks"
             description="Profile gaps that reduce successful calling and automatic task creation."
           >
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <HealthCard
+                label="Invalid Number (Current)"
+                value={dataQuality.invalidNumberStatus}
+                helper="Travel agents currently marked Invalid Number."
+                icon={AlertTriangle}
+                tone="red"
+              />
+
+              <HealthCard
+                label="Business Shut (Current)"
+                value={dataQuality.businessShutDownStatus}
+                helper="Travel agents currently marked Business Shut Down."
+                icon={BriefcaseBusiness}
+                tone="red"
+              />
+
               <HealthCard
                 label="Missing SPOC"
                 value={
@@ -5412,25 +5579,23 @@ export default function AdminEngagementDashboard() {
 
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-              Follow-up Source
+              Agent Segment
             </p>
 
             <p className="mt-2 text-lg font-bold capitalize text-slate-900">
-              {followUpSource === "all" ? "All" : followUpSource}
+              {agentSegment === "all" ? "All Agents" : agentSegment.replace(/_/g, " ")}
             </p>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-              Assigned Filter
+              Activity Performed By
             </p>
 
             <p className="mt-2 truncate text-lg font-bold text-slate-900">
               {assignedTo === "all"
-                ? "All Team"
-                : assignedOptions.find(
-                  item => item.value === assignedTo
-                )?.label || "Selected"}
+                ? team === "all" ? "All Activity Performers" : `All Performers - ${getTeamOptionLabel(team)}`
+                : assignedOptions.find(item => item.value === assignedTo)?.label || "Selected"}
             </p>
           </div>
 

@@ -471,6 +471,14 @@ export default function EngagementPage() {
 
             <div className="flex flex-col sm:flex-row gap-2 lg:justify-end">
               <Link
+                href={`/meetings?agentId=${encodeURIComponent(agentId)}`}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-500/20 border border-violet-200/30 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-500/30"
+              >
+                <CalendarClock className="w-4 h-4" />
+                Schedule Meeting
+              </Link>
+
+              <Link
                 href={agentProfileHref}
                 className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/10 border border-white/15 px-4 py-2 text-sm font-semibold text-white hover:bg-white/15"
               >
@@ -751,6 +759,7 @@ export default function EngagementPage() {
                               agent={agent}
                               highlight={e.id === highlightId}
                               agentProfileHref={agentProfileHref}
+                              meetingScheduleHref={`/meetings?agentId=${encodeURIComponent(agentId)}&engagementId=${encodeURIComponent(e.id)}`}
                               showProfileBadge={false}
                             />
                           </TimelineItemWrapper>

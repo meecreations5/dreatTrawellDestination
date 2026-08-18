@@ -14,16 +14,14 @@ import {
   X
 } from "lucide-react";
 
-import {
-  getDownloadURL,
-  ref,
-  uploadBytes
-} from "firebase/storage";
-
-import { storage } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { canAccessRecord } from "@/lib/rolePermissions";
 
 import createCustomerPayment from "@/lib/leadCustomerPayments";
+import {
+  PAYMENT_FILE_KINDS,
+  uploadPaymentFile
+} from "@/lib/paymentFileUpload";
 
 import {
   CUSTOMER_PAYMENT_TYPE_OPTIONS,
@@ -32,7 +30,6 @@ import {
   DEFAULT_CUSTOMER_PAYMENT_FORM,
   PAYMENT_MODE_OPTIONS,
   PAYMENT_MODES,
-  PAYMENT_STORAGE_PATHS,
   PAYER_TYPE_OPTIONS,
   requiresBankName,
   requiresTransactionRef
@@ -153,40 +150,6 @@ function formatMoney(value, currency = "INR") {
   }
 }
 
-function safeFileName(name = "") {
-  return cleanString(name)
-    .replace(/[^\w.\-]+/g, "_")
-    .replace(/_+/g, "_")
-    .slice(0, 120);
-}
-
-async function uploadReceiptFile({
-  leadId,
-  file
-}) {
-  if (!file) {
-    return {
-      receiptUrl: "",
-      receiptFileName: ""
-    };
-  }
-
-  const fileName = `${Date.now()}-${safeFileName(file.name)}`;
-
-  const fileRef = ref(
-    storage,
-    `${PAYMENT_STORAGE_PATHS.CUSTOMER_RECEIPTS}/${leadId}/${fileName}`
-  );
-
-  await uploadBytes(fileRef, file);
-
-  const receiptUrl = await getDownloadURL(fileRef);
-
-  return {
-    receiptUrl,
-    receiptFileName: file.name
-  };
-}
 
 /* =========================
    SMALL COMPONENTS
@@ -359,14 +322,26 @@ export default function AddCustomerPaymentModal({
       return;
     }
 
+    if (!canAccessRecord(user, "payments.create", lead, "lead")) {
+      setError("You do not have permission to create payments for this lead.");
+      return;
+    }
+
     setSaving(true);
     setError("");
 
     try {
-      const receiptPayload = await uploadReceiptFile({
+      const uploadedReceipt = await uploadPaymentFile({
         leadId,
-        file: receiptFile
+        file: receiptFile,
+        kind: PAYMENT_FILE_KINDS.CUSTOMER_RECEIPT
       });
+
+      const receiptPayload = {
+        receiptUrl: uploadedReceipt.url,
+        receiptFileName: uploadedReceipt.fileName,
+        receiptStoragePath: uploadedReceipt.storagePath
+      };
 
       const result = await createCustomerPayment({
         leadId,

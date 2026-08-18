@@ -39,10 +39,16 @@ export default function AgentSideDrawer({
             </p>
           </div>
 
-          <TravelAgentStatusToggle
-            agentId={agent.id}
-            currentStatus={agent.status}
-          />
+          <div className="text-right">
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+              Agent Status
+            </p>
+            <TravelAgentStatusToggle
+              agentId={agent.id}
+              currentStatus={agent.status}
+              currentActive={agent.active}
+            />
+          </div>
         </div>
 
         {/* SPOC */}

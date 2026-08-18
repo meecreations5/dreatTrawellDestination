@@ -10,9 +10,11 @@ import {
 
 import {
   LOST_REASON_OPTIONS,
+  CANCEL_INVALID_REASON_OPTIONS,
   getLeadStageMeta,
   isConvertedStage,
-  isLostStage
+  isLostStage,
+  isCancelledInvalidStage
 } from "@/lib/leadStages";
 
 export default function LeadStageCloseModal({
@@ -25,17 +27,20 @@ export default function LeadStageCloseModal({
 }) {
   const [remark, setRemark] = useState("");
   const [lostReason, setLostReason] = useState("");
+  const [cancelReason, setCancelReason] = useState("");
   const [localError, setLocalError] = useState("");
 
   const stageMeta = getLeadStageMeta(newStage);
   const isConverted = isConvertedStage(newStage);
   const isLost = isLostStage(newStage);
+  const isCancelledInvalid = isCancelledInvalidStage(newStage);
 
   useEffect(() => {
     if (!open) return;
 
     setRemark("");
     setLostReason("");
+    setCancelReason("");
     setLocalError("");
   }, [open, newStage]);
 
@@ -48,13 +53,21 @@ export default function LeadStageCloseModal({
       ];
     }
 
+    if (isCancelledInvalid) {
+      return [
+        "Travel requirement was cancelled before a genuine sales opportunity developed.",
+        "Duplicate / invalid lead closed after verification.",
+        "Contact or requirement details were incorrect."
+      ];
+    }
+
     return [
       "Agent dropped due to budget mismatch.",
       "No response after multiple follow-ups.",
       "Agent chose another travel partner.",
       "Travel date is not fixed yet."
     ];
-  }, [isConverted]);
+  }, [isConverted, isCancelledInvalid]);
 
   if (!open) return null;
 
@@ -66,18 +79,26 @@ export default function LeadStageCloseModal({
       return;
     }
 
+    if (isCancelledInvalid && !cancelReason) {
+      setLocalError("Cancellation / invalid reason is required.");
+      return;
+    }
+
     if (!remark.trim()) {
       setLocalError(
         isLost
           ? "Lost remark is required."
-          : "Conversion remark is required."
+          : isCancelledInvalid
+            ? "Cancellation / invalid remark is required."
+            : "Won / conversion remark is required."
       );
       return;
     }
 
     onConfirm?.({
       remark: remark.trim(),
-      lostReason: isLost ? lostReason : ""
+      lostReason: isLost ? lostReason : "",
+      cancelReason: isCancelledInvalid ? cancelReason : ""
     });
   };
 
@@ -142,8 +163,10 @@ export default function LeadStageCloseModal({
             `}
           >
             {isConverted
-              ? "Mark this lead as converted after final confirmation."
-              : "Mark this lead as lost with a clear reason."}
+              ? "Close this lead as Won only after final business confirmation."
+              : isCancelledInvalid
+                ? "Use this only for cancelled, duplicate or invalid opportunities. It is not counted as a sales loss."
+                : "Close this lead as Lost with a clear commercial reason."}
           </div>
 
           {isLost && (
@@ -177,9 +200,28 @@ export default function LeadStageCloseModal({
             </div>
           )}
 
+          {isCancelledInvalid && (
+            <div>
+              <label className="text-xs font-medium text-gray-500">
+                Cancel / Invalid Reason <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={cancelReason}
+                disabled={saving}
+                onChange={e => { setCancelReason(e.target.value); setLocalError(""); }}
+                className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:bg-gray-50 disabled:text-gray-400"
+              >
+                <option value="">Select reason</option>
+                {CANCEL_INVALID_REASON_OPTIONS.map(item => (
+                  <option key={item.value} value={item.value}>{item.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div>
             <label className="text-xs font-medium text-gray-500">
-              {isLost ? "Lost Remark" : "Conversion Remark"}{" "}
+              {isLost ? "Lost Remark" : isCancelledInvalid ? "Cancellation / Invalid Remark" : "Won / Conversion Remark"}{" "}
               <span className="text-red-500">*</span>
             </label>
 
@@ -194,7 +236,9 @@ export default function LeadStageCloseModal({
               placeholder={
                 isLost
                   ? "Example: Agent selected another vendor due to price difference."
-                  : "Example: Agent confirmed final quotation and payment is expected."
+                  : isCancelledInvalid
+                    ? "Example: Duplicate requirement verified and closed as invalid."
+                    : "Example: Agent confirmed final quotation and payment is expected."
               }
               className="
                 mt-1 w-full border border-gray-200 rounded-lg

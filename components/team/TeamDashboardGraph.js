@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   collection,
-  doc,
   getDocs,
   onSnapshot,
   query,
@@ -13,12 +12,15 @@ import {
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import {
+  getLeadAssignee,
+  getLeadOwner
+} from "@/lib/leadOwnership";
 
 import {
   AlertTriangle,
   ArrowRight,
   BarChart3,
-  CalendarCheck,
   CheckCircle2,
   Clock,
   Compass,
@@ -74,16 +76,6 @@ function isSameDay(dateA, dateB = new Date()) {
   return toDateKey(dateA) === toDateKey(dateB);
 }
 
-function formatTime(value) {
-  const date = toDate(value);
-
-  if (!date) return "—";
-
-  return date.toLocaleTimeString("en-IN", {
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-}
 
 function formatDate(value) {
   const date = toDate(value);
@@ -110,14 +102,6 @@ function formatShortDateTime(value) {
   });
 }
 
-function formatMinutes(minutes) {
-  if (!minutes || Number.isNaN(Number(minutes))) return "0h 0m";
-
-  const hrs = Math.floor(Number(minutes) / 60);
-  const mins = Number(minutes) % 60;
-
-  return `${hrs}h ${mins}m`;
-}
 
 /* =========================
    BUSINESS HELPERS
@@ -148,24 +132,11 @@ function getUid(value) {
 }
 
 function getLeadCreatedByUid(lead) {
-  return (
-    getUid(lead.createdByUid) ||
-    getUid(lead.createdBy) ||
-    getUid(lead.createdByUser) ||
-    getUid(lead.createdByUserId) ||
-    ""
-  );
+  return getLeadOwner(lead).uid || "";
 }
 
 function getLeadAssignedToUid(lead) {
-  return (
-    getUid(lead.assignedToUid) ||
-    getUid(lead.assignedTo) ||
-    getUid(lead.assignedToUser) ||
-    getUid(lead.ownerUid) ||
-    getUid(lead.accountManagerUid) ||
-    ""
-  );
+  return getLeadAssignee(lead).uid || "";
 }
 
 function getLeadTitle(lead) {
@@ -278,6 +249,42 @@ function getEngagementDate(item) {
   );
 }
 
+function getTravelAgentCreatedDate(agent) {
+  return (
+    toDate(agent.createdAt) ||
+    toDate(agent.addedAt) ||
+    toDate(agent.createdOn) ||
+    null
+  );
+}
+
+function getTravelAgentCreatorUid(agent) {
+  return (
+    getUid(agent.createdByUid) ||
+    getUid(agent.createdBy) ||
+    getUid(agent.creatorUid) ||
+    ""
+  );
+}
+
+function getEngagementAgentId(item) {
+  return (
+    getUid(item.agentId) ||
+    getUid(item.travelAgentId) ||
+    getUid(item.agencyId) ||
+    ""
+  );
+}
+
+function isCallEngagement(item) {
+  return String(
+    item.channel || item.type || item.engagementType || ""
+  )
+    .trim()
+    .toLowerCase()
+    .includes("call");
+}
+
 function getChannelIcon(channel = "") {
   const value = String(channel).toLowerCase();
 
@@ -337,7 +344,7 @@ function StatCard({
     <button
       type="button"
       onClick={onClick}
-      className="group text-left rounded-3xl border border-slate-200 bg-white p-4  hover:shadow-md hover:-translate-y-0.5 transition disabled:cursor-default"
+      className="group min-h-[126px] text-left rounded-3xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.03)] hover:shadow-md hover:-translate-y-0.5 transition focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:cursor-default"
       disabled={!onClick}
     >
       <div className="flex items-start justify-between gap-3">
@@ -365,7 +372,7 @@ function StatCard({
 
 function SectionCard({ title, subtitle, icon: Icon, children, right }) {
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white  overflow-hidden">
+    <section className="rounded-3xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)] overflow-hidden">
       <div className="flex items-center justify-between gap-4 border-b border-slate-100 px-4 py-4">
         <div className="flex items-center gap-3 min-w-0">
           {Icon && (
@@ -421,7 +428,7 @@ function QuickAction({ icon: Icon, label, description, onClick, tone = "blue" })
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-3xl border p-4 text-left transition ${toneMap[tone]}`}
+      className={`rounded-3xl border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${toneMap[tone]}`}
     >
       <div className="flex items-center justify-between gap-3">
         <div className="h-10 w-10 rounded-2xl bg-white/80 flex items-center justify-center ">
@@ -573,10 +580,10 @@ export default function TeamDashboardGraph() {
 
   const [leads, setLeads] = useState([]);
   const [engagements, setEngagements] = useState([]);
-  const [attendanceToday, setAttendanceToday] = useState(null);
   const [travelAgents, setTravelAgents] = useState([]);
   const [fetching, setFetching] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const todayKey = useMemo(() => toDateKey(new Date()), []);
 
@@ -597,7 +604,8 @@ export default function TeamDashboardGraph() {
         ownerUidLeads,
         createdByEngagements,
         ownerEngagements,
-        agentRows
+        createdAgentRows,
+        assignedAgentRows
       ] = await Promise.all([
         safeGetDocs(
           query(
@@ -637,8 +645,14 @@ export default function TeamDashboardGraph() {
         ),
         safeGetDocs(
           query(
-            collection(db, "travel-agents"),
-            where("assignedTo", "==", uid)
+            collection(db, "travelAgents"),
+            where("createdByUid", "==", uid)
+          )
+        ),
+        safeGetDocs(
+          query(
+            collection(db, "travelAgents"),
+            where("assignedToUid", "==", uid)
           )
         )
       ]);
@@ -659,7 +673,7 @@ export default function TeamDashboardGraph() {
 
       setLeads(mergedLeads);
       setEngagements(mergedEngagements);
-      setTravelAgents(agentRows || []);
+      setTravelAgents(mergeById(createdAgentRows, assignedAgentRows));
       setLastUpdated(new Date());
       setFetching(false);
     }
@@ -669,40 +683,8 @@ export default function TeamDashboardGraph() {
     return () => {
       active = false;
     };
-  }, [loading, user?.uid]);
+  }, [loading, user?.uid, refreshKey]);
 
-  /* =========================
-     LIVE ATTENDANCE LISTENER
-     Firestore path:
-     attendance/{uid}_{YYYY-MM-DD}
-  ========================= */
-  useEffect(() => {
-    if (loading || !user?.uid) return;
-
-    const attendanceDocId = `${user.uid}_${todayKey}`;
-    const attendanceRef = doc(db, "attendance", attendanceDocId);
-
-    const unsubscribe = onSnapshot(
-      attendanceRef,
-      (docSnap) => {
-        if (!docSnap.exists()) {
-          setAttendanceToday(null);
-          return;
-        }
-
-        setAttendanceToday({
-          id: docSnap.id,
-          ...docSnap.data()
-        });
-      },
-      (error) => {
-        console.error("Today attendance listener failed:", error);
-        setAttendanceToday(null);
-      }
-    );
-
-    return () => unsubscribe();
-  }, [loading, user?.uid, todayKey]);
 
   const stats = useMemo(() => {
     const health = {
@@ -755,6 +737,34 @@ export default function TeamDashboardGraph() {
     const meetingsToday = engagements.filter(item => {
       return isMeetingEngagement(item) && isSameDay(getMeetingDate(item));
     });
+
+    const newAgentsToday = travelAgents.filter(agent => {
+      return (
+        getTravelAgentCreatorUid(agent) === user?.uid &&
+        isSameDay(getTravelAgentCreatedDate(agent))
+      );
+    });
+
+    // A New Agent Call is the first call this team member has ever logged
+    // against that Travel Agent. The Travel Agent profile may have existed in
+    // the CRM long before the first outreach.
+    const firstCallByAgent = new Map();
+
+    [...engagements]
+      .filter(isCallEngagement)
+      .sort((a, b) => {
+        const da = getEngagementDate(a)?.getTime() || 0;
+        const db = getEngagementDate(b)?.getTime() || 0;
+        return da - db;
+      })
+      .forEach(item => {
+        const agentId = getEngagementAgentId(item);
+        if (!agentId || firstCallByAgent.has(agentId)) return;
+        firstCallByAgent.set(agentId, item);
+      });
+
+    const newAgentCallsToday = Array.from(firstCallByAgent.values())
+      .filter(item => isSameDay(getEngagementDate(item)));
 
     const latestEngagements = [...engagements]
       .sort((a, b) => {
@@ -816,6 +826,8 @@ export default function TeamDashboardGraph() {
       overdueLeads,
       dueTodayLeads,
       meetingsToday,
+      newAgentsToday,
+      newAgentCallsToday,
       latestEngagements,
       topDestinations,
       topCities,
@@ -823,77 +835,6 @@ export default function TeamDashboardGraph() {
     };
   }, [leads, engagements, travelAgents, user?.uid]);
 
-  const attendanceStatus = useMemo(() => {
-    if (!attendanceToday) {
-      return {
-        label: "Not marked",
-        tone: "amber",
-        icon: Clock,
-        checkIn: "—",
-        checkOut: "—",
-        total: "0h 0m"
-      };
-    }
-
-    const sessions = Array.isArray(attendanceToday.sessions)
-      ? attendanceToday.sessions
-      : [];
-
-    const firstSession = sessions[0];
-    const lastSession = sessions[sessions.length - 1];
-
-    const checkedIn = firstSession?.checkInAt || attendanceToday.checkInAt;
-    const checkedOut = lastSession?.checkOutAt || attendanceToday.checkOutAt;
-
-    const totalMinutes =
-      Number(attendanceToday.totalMinutes || 0) ||
-      sessions.reduce((sum, session) => {
-        return sum + Number(session.minutes || 0);
-      }, 0);
-
-    const hasOpenSession = sessions.some(
-      session => session.checkInAt && !session.checkOutAt
-    );
-
-    const hasCompletedSession = sessions.some(
-      session => session.checkInAt && session.checkOutAt
-    );
-
-    if (hasOpenSession) {
-      return {
-        label: "Checked in",
-        tone: "blue",
-        icon: CalendarCheck,
-        checkIn: formatTime(checkedIn),
-        checkOut: "—",
-        total: formatMinutes(totalMinutes)
-      };
-    }
-
-    if (
-      hasCompletedSession ||
-      attendanceToday.status === "present" ||
-      totalMinutes > 0
-    ) {
-      return {
-        label: "Present",
-        tone: "green",
-        icon: CheckCircle2,
-        checkIn: formatTime(checkedIn),
-        checkOut: formatTime(checkedOut),
-        total: formatMinutes(totalMinutes)
-      };
-    }
-
-    return {
-      label: attendanceToday.status || "Marked",
-      tone: "blue",
-      icon: CalendarCheck,
-      checkIn: formatTime(checkedIn),
-      checkOut: formatTime(checkedOut),
-      total: formatMinutes(totalMinutes)
-    };
-  }, [attendanceToday]);
 
   if (fetching) {
     return (
@@ -936,7 +877,6 @@ export default function TeamDashboardGraph() {
     1
   );
 
-  const AttendanceIcon = attendanceStatus.icon;
 
   return (
     <div className="space-y-5">
@@ -944,21 +884,21 @@ export default function TeamDashboardGraph() {
       {/* ================= TODAY PULSE ================= */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard
-          title="Attendance Today"
-          value={attendanceStatus.label}
-          subtitle={`In ${attendanceStatus.checkIn} • Out ${attendanceStatus.checkOut}`}
-          icon={attendanceStatus.icon}
-          tone={attendanceStatus.tone}
-          onClick={() => router.push("/attendance")}
+          title="New Agents Added Today"
+          value={stats.newAgentsToday.length}
+          subtitle="Travel-agent profiles created by you today"
+          icon={Users}
+          tone="blue"
+          onClick={() => router.push("/travel-agents")}
         />
 
         <StatCard
-          title="Overdue Follow-ups"
-          value={stats.overdueLeads.length}
-          subtitle="Needs immediate attention"
-          icon={AlertTriangle}
-          tone="red"
-          onClick={() => router.push("/leads")}
+          title="New Agents Called"
+          value={stats.newAgentCallsToday.length}
+          subtitle="Agents you called for the first time today"
+          icon={Phone}
+          tone="green"
+          onClick={() => router.push("/engagements/my")}
         />
 
         <StatCard
@@ -971,30 +911,30 @@ export default function TeamDashboardGraph() {
         />
 
         <StatCard
-          title="Meetings Today"
-          value={stats.meetingsToday.length}
-          subtitle="Online / offline meetings"
-          icon={Video}
-          tone="purple"
-          onClick={() => router.push("/engagements")}
+          title="Overdue Follow-ups"
+          value={stats.overdueLeads.length}
+          subtitle="Needs immediate attention"
+          icon={AlertTriangle}
+          tone="red"
+          onClick={() => router.push("/leads")}
         />
       </div>
 
       {/* ================= LEAD OWNERSHIP ================= */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard
-          title="Created By Me"
+          title="Owned By Me"
           value={stats.ownership.createdByMe}
-          subtitle="Leads originally created by you"
+          subtitle="Permanent creator credit"
           icon={Plus}
           tone="blue"
           onClick={() => router.push("/leads")}
         />
 
         <StatCard
-          title="Assigned To Me"
+          title="Assigned Workload"
           value={stats.ownership.assignedToMe}
-          subtitle="Leads currently assigned to you"
+          subtitle="Current follow-up responsibility"
           icon={Users}
           tone="green"
           onClick={() => router.push("/leads")}
@@ -1010,9 +950,9 @@ export default function TeamDashboardGraph() {
         />
 
         <StatCard
-          title="Self Owned"
+          title="Owner + Assignee"
           value={stats.ownership.selfOwned}
-          subtitle="Created and assigned to you"
+          subtitle="You created and currently work it"
           icon={CheckCircle2}
           tone="slate"
           onClick={() => router.push("/leads")}
@@ -1020,7 +960,7 @@ export default function TeamDashboardGraph() {
       </div>
 
       {/* ================= QUICK ACTIONS ================= */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <QuickAction
           icon={Plus}
           label="Add Lead"
@@ -1035,14 +975,6 @@ export default function TeamDashboardGraph() {
           description="Log call or follow-up"
           tone="purple"
           onClick={() => router.push("/engagements/my")}
-        />
-
-        <QuickAction
-          icon={CalendarCheck}
-          label="Attendance"
-          description="Check-in / check-out"
-          tone="green"
-          onClick={() => router.push("/attendance")}
         />
 
         <QuickAction
@@ -1203,67 +1135,6 @@ export default function TeamDashboardGraph() {
         {/* RIGHT SIDE */}
         <div className="space-y-5">
 
-          {/* ATTENDANCE DETAIL */}
-          <SectionCard
-            title="Today Attendance"
-            subtitle={`Date: ${formatDate(new Date())}`}
-            icon={CalendarCheck}
-            right={
-              <button
-                onClick={() => router.push("/attendance")}
-                className="text-xs font-semibold text-blue-700 hover:text-blue-800"
-              >
-                Mark
-              </button>
-            }
-          >
-            <div className="rounded-3xl bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-100 p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-semibold text-blue-600">
-                    Status
-                  </p>
-                  <p className="mt-1 text-xl font-bold capitalize text-slate-950">
-                    {attendanceStatus.label}
-                  </p>
-                </div>
-
-                <div className="h-12 w-12 rounded-2xl bg-white text-blue-700 flex items-center justify-center ">
-                  <AttendanceIcon className="w-6 h-6" />
-                </div>
-              </div>
-
-              <div className="mt-4 grid grid-cols-3 gap-2">
-                <div className="rounded-2xl bg-white/80 p-3">
-                  <p className="text-[11px] text-slate-500">
-                    Check-in
-                  </p>
-                  <p className="mt-1 text-sm font-bold text-slate-900">
-                    {attendanceStatus.checkIn}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl bg-white/80 p-3">
-                  <p className="text-[11px] text-slate-500">
-                    Check-out
-                  </p>
-                  <p className="mt-1 text-sm font-bold text-slate-900">
-                    {attendanceStatus.checkOut}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl bg-white/80 p-3">
-                  <p className="text-[11px] text-slate-500">
-                    Total
-                  </p>
-                  <p className="mt-1 text-sm font-bold text-slate-900">
-                    {attendanceStatus.total}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </SectionCard>
-
           {/* LATEST ENGAGEMENT */}
           <SectionCard
             title="Latest Engagements"
@@ -1357,7 +1228,16 @@ export default function TeamDashboardGraph() {
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setRefreshKey(prev => prev + 1)}
+            className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 font-semibold text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+          >
+            <RefreshCcw className="h-3.5 w-3.5" />
+            Refresh
+          </button>
+
           {stats.overdueLeads.length > 0 ? (
             <>
               <XCircle className="w-3.5 h-3.5 text-red-500" />

@@ -30,6 +30,7 @@ import {
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { canAccessRecord } from "@/lib/rolePermissions";
 
 import {
   cancelCustomerPayment,
@@ -349,7 +350,7 @@ function PaymentActions({
 
     return (
       <div className="flex flex-wrap gap-2">
-        {isPending && (
+        {isPending && onMarkVendorPaid && (
           <button
             type="button"
             disabled={isSaving}
@@ -369,7 +370,7 @@ function PaymentActions({
           </button>
         )}
 
-        {!isPaid && (
+        {!isPaid && onCancelVendor && (
           <button
             type="button"
             disabled={isSaving}
@@ -398,7 +399,7 @@ function PaymentActions({
 
   return (
     <div className="flex flex-wrap gap-2">
-      {(isPending || isRejected) && (
+      {(isPending || isRejected) && onVerifyCustomer && (
         <button
           type="button"
           disabled={isSaving}
@@ -418,7 +419,7 @@ function PaymentActions({
         </button>
       )}
 
-      {isPending && (
+      {isPending && onRejectCustomer && (
         <button
           type="button"
           disabled={isSaving}
@@ -434,7 +435,7 @@ function PaymentActions({
         </button>
       )}
 
-      {!isVerified && (
+      {!isVerified && onCancelCustomer && (
         <button
           type="button"
           disabled={isSaving}
@@ -662,6 +663,9 @@ export default function PaymentHistoryList({
 }) {
   const { user } = useAuth();
   const leadId = getLeadId(lead);
+  const canViewVendorCost = Boolean(user && canAccessRecord(user, "payments.view_vendor_cost", lead, "lead"));
+  const canApprovePayment = Boolean(user && canAccessRecord(user, "payments.approve", lead, "lead"));
+  const canEditPayment = Boolean(user && canAccessRecord(user, "payments.edit", lead, "lead"));
 
   const [customerPayments, setCustomerPayments] = useState([]);
   const [vendorPayments, setVendorPayments] = useState([]);
@@ -715,7 +719,7 @@ export default function PaymentHistoryList({
   }, [leadId]);
 
   useEffect(() => {
-    if (!leadId) {
+    if (!leadId || !canViewVendorCost) {
       setVendorPayments([]);
       setLoadingVendor(false);
       return;
@@ -753,7 +757,7 @@ export default function PaymentHistoryList({
     );
 
     return () => unsub();
-  }, [leadId]);
+  }, [leadId, canViewVendorCost]);
 
   const allPayments = useMemo(() => {
     return [...customerPayments, ...vendorPayments].sort(sortPaymentsByLatest);
@@ -927,12 +931,14 @@ export default function PaymentHistoryList({
               onClick={() => setFilter("customer")}
             />
 
-            <FilterButton
-              active={filter === "vendor"}
-              label="Vendor Paid"
-              count={vendorPayments.length}
-              onClick={() => setFilter("vendor")}
-            />
+            {canViewVendorCost && (
+              <FilterButton
+                active={filter === "vendor"}
+                label="Vendor Paid"
+                count={vendorPayments.length}
+                onClick={() => setFilter("vendor")}
+              />
+            )}
 
             <FilterButton
               active={filter === "pending"}
@@ -976,11 +982,11 @@ export default function PaymentHistoryList({
               key={`${payment.paymentDirection}-${payment.id}`}
               payment={payment}
               savingId={savingId}
-              onVerifyCustomer={handleVerifyCustomer}
-              onRejectCustomer={handleRejectCustomer}
-              onCancelCustomer={handleCancelCustomer}
-              onMarkVendorPaid={handleMarkVendorPaid}
-              onCancelVendor={handleCancelVendor}
+              onVerifyCustomer={canApprovePayment ? handleVerifyCustomer : null}
+              onRejectCustomer={canApprovePayment ? handleRejectCustomer : null}
+              onCancelCustomer={canEditPayment ? handleCancelCustomer : null}
+              onMarkVendorPaid={canApprovePayment ? handleMarkVendorPaid : null}
+              onCancelVendor={canEditPayment ? handleCancelVendor : null}
             />
           ))}
         </div>

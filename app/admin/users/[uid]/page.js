@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { doc, getDoc } from "firebase/firestore";
 import { useParams, useRouter } from "next/navigation";
 import {
   AlertCircle,
@@ -25,11 +25,14 @@ import { useAuth } from "@/hooks/useAuth";
 import AdminGuard from "@/components/AdminGuard";
 
 import {
-  MODULE_PERMISSIONS,
   ROLE_OPTIONS,
-  getPermissionsByRole,
-  isManagementRole
+  canAccess,
+  isManagementRole,
+  isSuperAdmin as isSuperAdminUser
 } from "@/lib/rolePermissions";
+import AccessOverrideMatrix from "@/components/access/AccessOverrideMatrix";
+import AccessAuditLog from "@/components/access/AccessAuditLog";
+import { updateUserAccess as saveUserAccess } from "@/lib/updateUserAccess";
 
 const inputClass = `
   w-full rounded-xl border border-gray-200 bg-white
@@ -45,9 +48,11 @@ const errorText = "mt-1 text-xs text-red-600";
 const roleIcons = {
   super_admin: Crown,
   admin: ShieldCheck,
+  manager: Users,
   employee: Users,
   associate: Handshake,
-  partner: Building2
+  partner: Building2,
+  finance: Briefcase
 };
 
 const providers = [
@@ -76,14 +81,10 @@ function normalizeRole(data = {}) {
     return "admin";
   }
 
-  if (data.role === "associate") {
-    return "associate";
-  }
-
-  if (data.role === "partner") {
-    return "partner";
-  }
-
+  if (data.role === "manager") return "manager";
+  if (data.role === "associate") return "associate";
+  if (data.role === "partner") return "partner";
+  if (data.role === "finance") return "finance";
   return "employee";
 }
 
@@ -100,6 +101,7 @@ export default function EditUserPage() {
   const [saving, setSaving] = useState(false);
   const [pageLoading, setPageLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [changeReason, setChangeReason] = useState("");
 
   const isSelf = useMemo(() => {
     if (!user || !form || !uid) return false;
@@ -112,10 +114,12 @@ export default function EditUserPage() {
     [form?.role]
   );
 
-  const selectedPermissions = useMemo(
-    () => getPermissionsByRole(form?.role),
-    [form?.role]
-  );
+  const canEditUser = canAccess(user, "users.edit");
+  const canManageRole = canAccess(user, "users.manage_role");
+  const canManageAccess = canAccess(user, "users.manage_access");
+  const actorIsSuperAdmin = isSuperAdminUser(user);
+  const targetIsSuperAdmin = form?.role === "super_admin" || form?.isSuperAdmin === true;
+  const targetSuperAdminLocked = targetIsSuperAdmin && !actorIsSuperAdmin;
 
   const SelectedRoleIcon = roleIcons[form?.role] || User;
 
@@ -138,7 +142,6 @@ export default function EditUserPage() {
 
         const data = snap.data();
         const role = normalizeRole(data);
-        const permissions = getPermissionsByRole(role);
 
         const normalizedUser = {
           id: snap.id,
@@ -146,8 +149,9 @@ export default function EditUserPage() {
           role,
           isAdmin: role === "super_admin" || role === "admin",
           isSuperAdmin: role === "super_admin",
-          permissions,
+          accessOverrides: data.accessOverrides || data.permissionOverrides || {},
           active: data.active !== false,
+          teamName: data.teamName || (typeof data.team === "string" ? data.team : data.departmentName || ""),
           authProvider: data.authProvider || "google",
           associateType: role === "associate" ? data.associateType || "" : ""
         };
@@ -167,7 +171,7 @@ export default function EditUserPage() {
     if (!loading && user) {
       loadUser();
     }
-  }, [uid, user, loading]);
+  }, [uid, user?.uid, loading]);
 
   const updateForm = (key, value) => {
     setForm((prev) => ({
@@ -183,16 +187,17 @@ export default function EditUserPage() {
   };
 
   const updateRole = (role) => {
-    if (isSelf) return;
-
-    const permissions = getPermissionsByRole(role);
+    if (isSelf || !canManageRole || targetSuperAdminLocked) return;
 
     setForm((prev) => ({
       ...prev,
       role,
-      permissions,
       isAdmin: role === "super_admin" || role === "admin",
       isSuperAdmin: role === "super_admin",
+      active: role === "super_admin" ? true : prev.active !== false,
+      // Super Admin must use unrestricted role defaults. Do not carry old
+      // individual overrides into a Super Admin promotion.
+      accessOverrides: role === "super_admin" ? {} : (prev.accessOverrides || {}),
       associateType: role === "associate" ? prev.associateType : ""
     }));
 
@@ -248,25 +253,18 @@ export default function EditUserPage() {
       setSaving(true);
 
       const safeRole = isSelf ? originalUser.role : form.role;
-      const permissions = getPermissionsByRole(safeRole);
 
-      await updateDoc(doc(db, "users", uid), {
+      await saveUserAccess({
+        userId: uid,
         name: form.name.trim(),
         mobile: form.mobile?.trim() || "",
-
+        teamName: String(form.teamName || "").trim(),
         role: safeRole,
-        isAdmin: safeRole === "super_admin" || safeRole === "admin",
-        isSuperAdmin: safeRole === "super_admin",
-
-        permissions,
-
-        associateType:
-          safeRole === "associate" ? form.associateType || "" : "",
-
+        accessOverrides: form.accessOverrides || {},
+        associateType: safeRole === "associate" ? form.associateType || "" : "",
         active: isSelf ? true : form.active === true,
         authProvider: form.authProvider || "google",
-
-        updatedAt: new Date()
+        changeReason: changeReason.trim()
       });
 
       router.replace("/admin/users");
@@ -281,7 +279,7 @@ export default function EditUserPage() {
 
   if (loading || pageLoading || (!form && !notFound)) {
     return (
-      <AdminGuard permission="userManagement">
+      <AdminGuard permission="users.view">
         <main className="min-h-screen ">
           <div className="mx-auto max-w-6xl space-y-4">
             <div className="animate-pulse rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
@@ -300,7 +298,7 @@ export default function EditUserPage() {
 
   if (notFound) {
     return (
-      <AdminGuard permission="userManagement">
+      <AdminGuard permission="users.view">
         <main className="flex min-h-screen items-center justify-center">
           <div className="w-full max-w-md rounded-3xl border border-red-100 bg-white p-8 text-center shadow-sm">
             <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-red-50 text-red-600">
@@ -329,7 +327,7 @@ export default function EditUserPage() {
   }
 
   return (
-    <AdminGuard permission="userManagement">
+    <AdminGuard permission="users.view">
       <main className="min-h-screen">
         <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
           {/* HEADER */}
@@ -349,7 +347,7 @@ export default function EditUserPage() {
               </h1>
 
               <p className="mt-1 text-sm text-gray-500">
-                Update user profile, role and module permissions.
+                Update user profile, role defaults and individual access overrides.
               </p>
             </div>
 
@@ -434,10 +432,26 @@ export default function EditUserPage() {
                         className={`${inputClass} pl-10`}
                         value={form.name || ""}
                         placeholder="Enter full name"
+                        disabled={!canEditUser}
                         onChange={(e) => updateForm("name", e.target.value)}
                       />
                     </div>
                     {errors.name && <p className={errorText}>{errors.name}</p>}
+                  </div>
+
+                  <div>
+                    <label className={labelClass}>Team / Department</label>
+                    <div className="relative mt-1">
+                      <Building2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                      <input
+                        className={`${inputClass} pl-10`}
+                        value={form.teamName || ""}
+                        placeholder="e.g. Sales, Operations, Management"
+                        disabled={!canEditUser}
+                        onChange={(e) => updateForm("teamName", e.target.value)}
+                      />
+                    </div>
+                    {errors.teamName && <p className={errorText}>{errors.teamName}</p>}
                   </div>
 
                   <div>
@@ -448,6 +462,7 @@ export default function EditUserPage() {
                         className={`${inputClass} pl-10`}
                         value={form.mobile || ""}
                         placeholder="+91 98765 43210"
+                        disabled={!canEditUser}
                         onChange={(e) => updateForm("mobile", e.target.value)}
                       />
                     </div>
@@ -459,6 +474,7 @@ export default function EditUserPage() {
                     <select
                       className={`${inputClass} mt-1`}
                       value={form.authProvider || "google"}
+                      disabled={!canEditUser}
                       onChange={(e) =>
                         updateForm("authProvider", e.target.value)
                       }
@@ -488,7 +504,7 @@ export default function EditUserPage() {
                       Role Management
                     </h2>
                     <p className="text-sm text-gray-500">
-                      Change the role to automatically update permissions.
+                      Changing the role updates the role defaults. Existing individual overrides remain in place unless you change them below.
                     </p>
                   </div>
                 </div>
@@ -497,12 +513,17 @@ export default function EditUserPage() {
                   {ROLE_OPTIONS.map((role) => {
                     const Icon = roleIcons[role.value] || User;
                     const active = form.role === role.value;
+                    const roleOptionLocked =
+                      isSelf ||
+                      !canManageRole ||
+                      targetSuperAdminLocked ||
+                      (role.value === "super_admin" && !actorIsSuperAdmin);
 
                     return (
                       <button
                         key={role.value}
                         type="button"
-                        disabled={isSelf}
+                        disabled={roleOptionLocked}
                         onClick={() => updateRole(role.value)}
                         className={`rounded-2xl border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
                           active
@@ -545,7 +566,7 @@ export default function EditUserPage() {
                     <select
                       className={`${inputClass} mt-1`}
                       value={form.associateType || ""}
-                      disabled={isSelf}
+                      disabled={isSelf || !canEditUser}
                       onChange={(e) =>
                         updateForm("associateType", e.target.value)
                       }
@@ -563,72 +584,55 @@ export default function EditUserPage() {
                 )}
               </div>
 
-              {/* PERMISSIONS */}
+              {/* ROLE + INDIVIDUAL ACCESS OVERRIDES */}
               <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-                <div className="mb-5 flex items-start justify-between gap-4">
+                <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
-                    <h2 className="text-base font-semibold text-gray-900">
-                      Module Permissions
-                    </h2>
-
-                    <p className="text-sm text-gray-500">
-                      {form.role === "super_admin"
-                        ? "Super Admin automatically gets access to all modules."
-                        : form.role === "admin"
-                        ? "Admin gets only Destination, Travel Agent, Communication and Document Management."
-                        : "This role does not receive admin module access by default."}
-                    </p>
+                    <h2 className="text-base font-semibold text-gray-900">Role & Individual Access</h2>
+                    <p className="mt-1 text-sm text-gray-500">Role is the default. Set Default, Allow or Deny per action, with optional scope and temporary dates.</p>
                   </div>
-
-                  <div className="inline-flex items-center gap-2 rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-600">
+                  <span className="inline-flex items-center gap-2 self-start rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-600">
                     <Lock className="h-3.5 w-3.5" />
-                    Auto assigned
-                  </div>
+                    {isSelf
+                      ? "Self access protected"
+                      : targetSuperAdminLocked
+                      ? "Super Admin protected"
+                      : targetIsSuperAdmin
+                      ? "Change role first"
+                      : canManageAccess
+                      ? "Overrides enabled"
+                      : "View only"}
+                  </span>
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {MODULE_PERMISSIONS.map((item) => {
-                    const allowed = Boolean(selectedPermissions[item.key]);
+                {!canManageAccess && !targetIsSuperAdmin ? (
+                  <div className="mb-4 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                    You can view effective access, but Manage Access permission is required to change individual overrides.
+                  </div>
+                ) : null}
 
-                    return (
-                      <div
-                        key={item.key}
-                        className={`rounded-2xl border p-4 ${
-                          allowed
-                            ? "border-green-100 bg-green-50"
-                            : "border-gray-200 bg-gray-50"
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p
-                              className={`text-sm font-semibold ${
-                                allowed ? "text-green-800" : "text-gray-600"
-                              }`}
-                            >
-                              {item.label}
-                            </p>
+                <AccessOverrideMatrix
+                  value={form.accessOverrides || {}}
+                  role={form.role}
+                  targetUser={form}
+                  disabled={isSelf || !canManageAccess || targetIsSuperAdmin}
+                  onChange={next => updateForm("accessOverrides", next)}
+                />
 
-                            <p className="mt-1 text-xs leading-5 text-gray-500">
-                              {item.description}
-                            </p>
-                          </div>
-
-                          <span
-                            className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${
-                              allowed
-                                ? "bg-green-100 text-green-700"
-                                : "bg-gray-200 text-gray-500"
-                            }`}
-                          >
-                            {allowed ? "Allowed" : "No Access"}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
+                <div className="mt-5">
+                  <label className={labelClass}>Access Change Reason</label>
+                  <textarea
+                    value={changeReason}
+                    disabled={isSelf || (!canManageRole && !canManageAccess && !canEditUser)}
+                    onChange={e => setChangeReason(e.target.value)}
+                    placeholder="Optional overall reason for the audit log"
+                    rows={3}
+                    className={`${inputClass} mt-1 resize-none`}
+                  />
                 </div>
               </div>
+
+              {(canManageAccess || canManageRole) ? <AccessAuditLog userId={uid} /> : null}
             </section>
 
             {/* SUMMARY */}
@@ -676,7 +680,7 @@ export default function EditUserPage() {
                       <input
                         type="checkbox"
                         checked={form.active === true}
-                        disabled={isSelf}
+                        disabled={isSelf || !canEditUser || targetIsSuperAdmin}
                         onChange={(e) =>
                           updateForm("active", e.target.checked)
                         }
@@ -707,17 +711,19 @@ export default function EditUserPage() {
                       "Super Admin will get full access including Dashboard, User Management, Role Management and Settings."}
 
                     {form.role === "admin" &&
-                      "Admin will not access the main dashboard. Admin gets only Destination, Travel Agent, Communication and Document Management."}
+                      "Admin keeps the existing operational admin defaults. Individual Allow/Deny overrides can refine access."}
 
+                    {form.role === "manager" && "Manager defaults are team-scoped for relationship, meeting, lead, quotation and reporting work."}
+                    {form.role === "finance" && "Finance defaults focus on payments, vendor visibility and reports."}
                     {!isManagementRole(form.role) &&
-                      "This user will not receive admin module permissions by default."}
+                      "This user receives own/assigned team-workspace access by default; individual overrides can refine it."}
                   </div>
                 </div>
 
                 <div className="mt-5 flex flex-col gap-3">
                   <button
                     type="button"
-                    disabled={saving}
+                    disabled={saving || (!canEditUser && !canManageRole && !canManageAccess)}
                     onClick={save}
                     className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >

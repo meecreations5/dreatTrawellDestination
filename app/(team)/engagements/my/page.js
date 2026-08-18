@@ -1012,6 +1012,18 @@ const getViewEngagementHref =
       : "/engagements";
   };
 
+const getMeetingScheduleHref =
+  engagement => {
+    const agentId = getAgentId(engagement);
+    if (!agentId) return "";
+
+    const params = new URLSearchParams();
+    params.set("agentId", agentId);
+    if (engagement?.id) params.set("engagementId", engagement.id);
+
+    return `/meetings?${params.toString()}`;
+  };
+
 const getLeadCreateHref =
   engagement => {
     const params =
@@ -3266,6 +3278,11 @@ export default function MyEngagementsPage() {
                                       }
                                       leadCreateHref={
                                         getLeadCreateHref(
+                                          engagement
+                                        )
+                                      }
+                                      meetingScheduleHref={
+                                        getMeetingScheduleHref(
                                           engagement
                                         )
                                       }

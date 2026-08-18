@@ -14,11 +14,15 @@ import {
 } from "lucide-react";
 
 import LeadStatusChip from "@/components/leads/LeadStatusChip";
+import { LeadPotentialBadge } from "@/components/leads/LeadPotentialControl";
 import InitialAvatar from "@/components/ui/InitialAvatar";
 import TravelChip from "@/components/ui/TravelChip";
 import AssignLeadModal from "@/components/leads/AssignLeadModal";
 import { reopenLead } from "@/lib/reopenLead";
 import { useAuth } from "@/hooks/useAuth";
+import { getLeadOwner as getLeadOwnerIdentity } from "@/lib/leadOwnership";
+import { formatLeadAge, getLeadAging } from "@/lib/leadAging";
+import { formatLeadTravelRange, getLeadTravelCountdown, getLeadTravelStartDate } from "@/lib/leadTravelDates";
 
 const normalizeRole = value =>
   String(value || "")
@@ -77,10 +81,16 @@ const getCustomerName = lead =>
   "Unnamed customer";
 
 const getAssignedName = lead =>
-  lead.assignedTo ||
   lead.assignedToName ||
+  lead.assignedTo ||
   lead.assignedUserName ||
+  lead.assignedToEmail ||
   "Unassigned";
+
+const getOwnerName = lead =>
+  getLeadOwnerIdentity(lead)?.name ||
+  getLeadOwnerIdentity(lead)?.email ||
+  "Legacy creator";
 
 const getLeadHealth = lead => {
   const status = getLeadStatus(lead);
@@ -92,7 +102,7 @@ const getLeadHealth = lead => {
     };
   }
 
-  const nextActionAt = toDate(lead.nextActionAt);
+  const nextActionAt = getLeadAging(lead).nextActionAt;
 
   if (!nextActionAt) {
     return {
@@ -163,14 +173,16 @@ export default function AdminLeadCard({
 
   const status = getLeadStatus(lead);
   const health = getLeadHealth(lead);
+  const aging = getLeadAging(lead);
   const HealthIcon = health.icon;
 
-  const nextActionAt = toDate(lead.nextActionAt);
+  const nextActionAt = aging.nextActionAt;
   const isInactive = status === "inactive";
 
-  const isClosed =
-    lead.stage === "closed_won" ||
-    lead.stage === "closed_lost";
+  const isClosed = aging.terminal;
+  const travelStart = getLeadTravelStartDate(lead);
+  const travelLabel = formatLeadTravelRange(lead, { short: true });
+  const travelCountdown = getLeadTravelCountdown(lead);
 
   const showAdminActions = canManageLead(user);
 
@@ -231,7 +243,10 @@ export default function AdminLeadCard({
             </p>
           </div>
 
-          <LeadStatusChip stage={lead.stage} />
+          <div className="flex flex-wrap justify-end gap-1.5">
+            <LeadPotentialBadge lead={lead} />
+            <LeadStatusChip stage={lead.stage} />
+          </div>
         </div>
 
         {/* META CHIPS */}
@@ -258,17 +273,45 @@ export default function AdminLeadCard({
             <HealthIcon className="h-3 w-3" />
             {health.label}
           </span>
+          {travelStart ? (
+            <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium ${travelCountdown.key === "past" ? "border-red-100 bg-red-50 text-red-700" : travelCountdown.days != null && travelCountdown.days <= 7 ? "border-amber-100 bg-amber-50 text-amber-700" : "border-blue-100 bg-blue-50 text-blue-700"}`}>
+              <CalendarClock className="h-3 w-3" />
+              Travel {travelLabel} · {travelCountdown.label}
+            </span>
+          ) : (
+            <span className="inline-flex items-center rounded-full border border-amber-100 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700">Travel date missing</span>
+          )}
+          <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600">
+            Lead age {formatLeadAge(aging.ageDays)}
+          </span>
+          {aging.stageAgeDays != null ? (
+            <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-500">
+              Stage {formatLeadAge(aging.stageAgeDays)}
+            </span>
+          ) : null}
         </div>
 
         {/* FOOTER */}
-        <div className="mt-4 grid grid-cols-1 gap-3 border-t border-gray-100 pt-3 sm:grid-cols-2">
+        <div className="mt-4 grid grid-cols-1 gap-3 border-t border-gray-100 pt-3 sm:grid-cols-3">
+          <div className="flex items-center gap-2 text-xs text-gray-600">
+            <InitialAvatar name={getOwnerName(lead)} />
+            <div className="min-w-0">
+              <p className="text-[11px] text-gray-400">Lead owner</p>
+              <p className="truncate font-medium text-gray-700">
+                {getOwnerName(lead)}
+              </p>
+              <p className="text-[10px] text-gray-400">Creator credit</p>
+            </div>
+          </div>
+
           <div className="flex items-center gap-2 text-xs text-gray-600">
             <InitialAvatar name={getAssignedName(lead)} />
             <div className="min-w-0">
-              <p className="text-[11px] text-gray-400">Assigned to</p>
+              <p className="text-[11px] text-gray-400">Current assignee</p>
               <p className="truncate font-medium text-gray-700">
                 {getAssignedName(lead)}
               </p>
+              <p className="text-[10px] text-gray-400">Working responsibility</p>
             </div>
           </div>
 

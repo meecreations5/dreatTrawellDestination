@@ -11,6 +11,9 @@ import {
   Wallet
 } from "lucide-react";
 
+import { useAuth } from "@/hooks/useAuth";
+import { canAccessRecord } from "@/lib/rolePermissions";
+
 import {
   CUSTOMER_PAYMENT_SUMMARY_STATUS,
   VENDOR_PAYMENT_SUMMARY_STATUS,
@@ -215,6 +218,9 @@ export default function PaymentSummaryCard({
   lead,
   className = ""
 }) {
+  const { user } = useAuth();
+  const canViewVendorCost = Boolean(user && canAccessRecord(user, "payments.view_vendor_cost", lead, "lead"));
+  const canViewRevenueGp = Boolean(user && canAccessRecord(user, "payments.view_revenue_gp", lead, "lead"));
   const currency = getCurrency(lead);
 
   const totalReceivableAmount = getCustomerQuoteAmount(lead);
@@ -371,6 +377,7 @@ export default function PaymentSummaryCard({
       </section>
 
       {/* VENDOR PAYABLE */}
+      {canViewVendorCost && (
       <section className="rounded-3xl border border-purple-100 bg-white overflow-hidden shadow-sm">
         <div className="bg-gradient-to-r from-purple-50 to-blue-50 px-5 py-4 border-b border-purple-100">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -435,8 +442,10 @@ export default function PaymentSummaryCard({
           />
         </div>
       </section>
+      )}
 
       {/* PROFIT SUMMARY */}
+      {canViewRevenueGp && (
       <section className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm">
         <div className="flex items-center gap-2">
           <TrendingUp size={18} className="text-gray-700" />
@@ -492,6 +501,7 @@ export default function PaymentSummaryCard({
           />
         </div>
       </section>
+      )}
     </div>
   );
 }

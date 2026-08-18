@@ -13,17 +13,15 @@ import {
   Folder,
   GitBranch,
   UserCog,
-  CalendarDays,
   PlaneTakeoff,
   Settings,
-  History,
-  ClipboardCheck,
-  Calendar,
   UploadCloud,
   ShieldCheck,
   Building2,
   ListChecks,
-  UserCheck
+  UserCheck,
+  CalendarClock,
+  ListTodo
 } from "lucide-react";
 
 export const adminSidebar = [
@@ -31,49 +29,56 @@ export const adminSidebar = [
     label: "Dashboard",
     icon: LayoutDashboard,
     href: "/admin/dashboard",
-    permission: "dashboard"
+    permission: "dashboard.view"
+  },
+
+  {
+    label: "Action Center",
+    icon: ListTodo,
+    href: "/admin/action-center",
+    permission: "dashboard.view"
   },
 
   {
     label: "Travel Agents",
     icon: PlaneTakeoff,
-    permission: "travelAgentManagement",
+    permission: "travel_agents.view",
     children: [
       {
         label: "Dashboard",
         icon: BarChart3,
         href: "/admin/travel-agents/dashboard",
-        permission: "travelAgentManagement"
+        permission: "travel_agents.view"
       },
       {
         label: "All Agents",
         icon: Users,
         href: "/admin/travel-agents",
-        permission: "travelAgentManagement"
+        permission: "travel_agents.view"
       },
       {
         label: "Assigned Agents",
         icon: UserCheck,
         href: "/admin/travel-agents/assigned",
-        permission: "travelAgentManagement"
+        permission: "travel_agents.view"
       },
       {
         label: "My Assigned",
         icon: ListChecks,
         href: "/admin/travel-agents/my-assigned",
-        permission: "travelAgentManagement"
+        permission: "travel_agents.view"
       },
       {
         label: "Add Agent",
         icon: UserPlus,
         href: "/admin/travel-agents/new",
-        permission: "travelAgentManagement"
+        permission: "travel_agents.create"
       },
       {
         label: "Bulk Upload",
         icon: UploadCloud,
         href: "/admin/travel-agents/bulk-upload",
-        permission: "travelAgentManagement"
+        permission: "travel_agents.create"
       }
     ]
   },
@@ -82,31 +87,38 @@ export const adminSidebar = [
     label: "Engagements",
     icon: Handshake,
     href: "/admin/engagements",
-    permission: "travelAgentManagement"
+    permission: "engagements.view"
+  },
+
+  {
+    label: "Meetings",
+    icon: CalendarClock,
+    href: "/admin/meetings",
+    permission: "meetings.view"
   },
 
   {
     label: "Leads",
     icon: Target,
-    permission: "leadManagement",
+    permission: "leads.view",
     children: [
       {
         label: "All Leads",
         icon: Target,
         href: "/admin/leads",
-        permission: "leadManagement"
+        permission: "leads.view"
       },
       {
         label: "Manual Lead",
         icon: PlusCircle,
         href: "/admin/leads/new",
-        permission: "leadManagement"
+        permission: "leads.create"
       },
       {
         label: "Analytics",
         icon: BarChart3,
         href: "/admin/leads/dashboard",
-        permission: "leadManagement"
+        permission: "leads.view"
       }
     ]
   },
@@ -114,19 +126,19 @@ export const adminSidebar = [
   {
     label: "Vendors",
     icon: Building2,
-    permission: "vendorManagement",
+    permission: "vendors.view",
     children: [
       {
         label: "All Vendors",
         icon: Building2,
         href: "/admin/vendors",
-        permission: "vendorManagement"
+        permission: "vendors.view"
       },
       {
         label: "Add Vendor",
         icon: PlusCircle,
         href: "/admin/vendors/new",
-        permission: "vendorManagement"
+        permission: "vendors.create"
       }
     ]
   },
@@ -134,19 +146,19 @@ export const adminSidebar = [
   {
     label: "Destinations",
     icon: Map,
-    permission: "destinationManagement",
+    permission: "destinations.view",
     children: [
       {
         label: "All Destinations",
         icon: MapPin,
         href: "/admin/destinations",
-        permission: "destinationManagement"
+        permission: "destinations.view"
       },
       {
         label: "Add Destination",
         icon: PlusCircle,
         href: "/admin/destinations/new",
-        permission: "destinationManagement"
+        permission: "destinations.create"
       }
     ]
   },
@@ -154,19 +166,19 @@ export const adminSidebar = [
   {
     label: "Communication",
     icon: MessageSquare,
-    permission: "communicationManagement",
+    permission: "communications.view",
     children: [
       {
         label: "Templates",
         icon: FileText,
         href: "/admin/communication-templates",
-        permission: "communicationManagement"
+        permission: "communications.view"
       },
       {
         label: "Categories",
         icon: Folder,
         href: "/admin/template-categories",
-        permission: "communicationManagement"
+        permission: "communications.view"
       }
     ]
   },
@@ -174,77 +186,46 @@ export const adminSidebar = [
   {
     label: "Documents",
     icon: Folder,
-    permission: "documentManagement",
+    permission: "documents.view",
     children: [
       {
         label: "Repository",
         icon: FileText,
         href: "/admin/documents",
-        permission: "documentManagement"
+        permission: "documents.view"
       },
       {
         label: "Versions",
         icon: GitBranch,
         href: "/admin/documents/versions",
-        permission: "documentManagement"
+        permission: "documents.view"
       }
     ]
   },
 
-  {
-    label: "Attendance",
-    icon: CalendarDays,
-    permission: "attendanceManagement",
-    children: [
-      {
-        label: "Leave",
-        icon: ClipboardCheck,
-        href: "/admin/attendance/leave",
-        permission: "attendanceManagement"
-      },
-      {
-        label: "History",
-        icon: History,
-        href: "/admin/attendance/history",
-        permission: "attendanceManagement"
-      },
-      {
-        label: "Monthly",
-        icon: Calendar,
-        href: "/admin/attendance/monthly",
-        permission: "attendanceManagement"
-      },
-      {
-        label: "Regularisation",
-        icon: ClipboardCheck,
-        href: "/admin/attendance/regularisation",
-        permission: "attendanceManagement"
-      }
-    ]
-  },
 
   {
     label: "Team Management",
     icon: UserCog,
-    permission: "userManagement",
+    permission: "users.view",
     children: [
       {
         label: "Users",
         icon: Users,
         href: "/admin/users",
-        permission: "userManagement"
+        permission: "users.view"
       },
       {
         label: "Add User",
         icon: UserPlus,
         href: "/admin/users/new",
-        permission: "userManagement"
+        permission: "users.create"
       },
       {
         label: "Role Management",
         icon: ShieldCheck,
         href: "/admin/roles",
-        permission: "roleManagement"
+        permission: "users.manage_role"
       }
     ]
   },
@@ -252,13 +233,13 @@ export const adminSidebar = [
   {
     label: "Settings",
     icon: Settings,
-    permission: "settingsManagement",
+    permission: "settings.view",
     children: [
       {
         label: "Branding",
         icon: Building2,
         href: "/admin/settings/branding",
-        permission: "settingsManagement"
+        permission: "settings.view"
       }
     ]
   },
@@ -266,13 +247,13 @@ export const adminSidebar = [
   {
     label: "Quotation",
     icon: FileText,
-    permission: "quotationManagement",
+    permission: "quotations.view",
     children: [
       {
         label: "Quotation Templates",
         icon: FileText,
         href: "/admin/settings/quotation-templates",
-        permission: "quotationManagement"
+        permission: "quotations.view"
       }
     ]
   }

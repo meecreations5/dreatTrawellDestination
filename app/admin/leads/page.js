@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   collection,
   doc,
@@ -20,6 +20,7 @@ import {
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { useAdminScope } from "@/components/admin/AdminScopeProvider";
 
 import AdminLeadCard from "@/components/admin/AdminLeadCard";
 import AdminLeadTable from "@/components/admin/AdminLeadTable";
@@ -28,6 +29,21 @@ import AdminLeadCardSkeleton from "@/components/admin/AdminLeadCardSkeleton";
 import EmptyState from "@/components/ui/EmptyState";
 
 import { exportLeadsCsv } from "@/lib/exportLeadsCsv";
+import { getLeadAssignee, getLeadOwner } from "@/lib/leadOwnership";
+import { normalizeLeadStage } from "@/lib/leadStages";
+import { getLeadTravelMonthKey, matchesLeadTravelMonth } from "@/lib/leadTravelDates";
+import { getLeadAging } from "@/lib/leadAging";
+import { normalizeLeadClosingPotential } from "@/lib/leadPotential";
+import { buildLocationOptions, getLeadAgentLocationParts, matchesLocation } from "@/lib/locationFilters";
+import { matchesAdminDateScope } from "@/lib/adminScope";
+import { canAccess, canAccessRecord, filterRecordsByAccess } from "@/lib/rolePermissions";
+import {
+  findDirectoryMember,
+  getMembersForTeam,
+  memberMatchesValues,
+  resolveDirectoryIdentity,
+  teamMatchesScope
+} from "@/lib/teamDirectory";
 
 /* =========================
    BASIC HELPERS
@@ -186,7 +202,7 @@ const getLeadHealth = lead => {
     return "inactive";
   }
 
-  const nextActionAt = toDate(lead.nextActionAt);
+  const nextActionAt = getLeadNextActionDate(lead);
 
   if (!nextActionAt) {
     return "no_followup";
@@ -226,18 +242,6 @@ const getAssignedName = lead => {
   );
 };
 
-const getAssignedFilterValues = lead => {
-  return [
-    lead.assignedToUid,
-    lead.assignedToEmail,
-    lead.assignedTo,
-    lead.assignedToName,
-    lead.assignedUserName
-  ]
-    .filter(Boolean)
-    .map(value => String(value).trim());
-};
-
 const getDestinationName = lead => {
   return (
     lead.destinationName ||
@@ -245,6 +249,15 @@ const getDestinationName = lead => {
     lead.city ||
     lead.location ||
     ""
+  );
+};
+
+const getLeadNextActionDate = lead => {
+  return toDate(
+    lead?.nextActionAt ||
+    lead?.nextActionDueAt ||
+    lead?.followUpAt ||
+    lead?.nextFollowUpAt
   );
 };
 
@@ -264,66 +277,14 @@ const getSearchText = lead => {
     .toLowerCase();
 };
 
-const getUserOption = user => {
-  const value = getFirstValue(
-    user.uid,
-    user.id,
-    user.userId,
-    user.email,
-    user.workEmail,
-    user.officialEmail
-  );
-
-  const label = getFirstValue(
-    user.displayName,
-    user.fullName,
-    user.name,
-    user.email,
-    user.workEmail,
-    user.officialEmail
-  );
-
-  if (!value || !label) return null;
-
-  return {
-    value,
-    label,
-    email: getFirstValue(user.email, user.workEmail, user.officialEmail)
-  };
-};
-
-const getLeadAssignedOption = lead => {
-  const value = getFirstValue(
-    lead.assignedToUid,
-    lead.assignedToEmail,
-    lead.assignedTo,
-    lead.assignedToName,
-    lead.assignedUserName
-  );
-
-  const label = getFirstValue(
-    lead.assignedToName,
-    lead.assignedUserName,
-    lead.assignedTo,
-    lead.assignedToEmail,
-    lead.assignedToUid
-  );
-
-  if (!value || !label) return null;
-
-  return {
-    value,
-    label,
-    email: getFirstValue(lead.assignedToEmail, lead.assignedTo)
-  };
-};
-
 export default function AdminLeadsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user } = useAuth();
+  const { scope, teamDirectory, userLookup } = useAdminScope();
 
   const [leads, setLeads] = useState([]);
-  const [teamMembers, setTeamMembers] = useState([]);
+  const [travelAgents, setTravelAgents] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const [view, setView] = useState("card");
@@ -334,13 +295,57 @@ export default function AdminLeadsPage() {
   const isSuperAdmin = isUserSuperAdmin(user);
 
   const [filters, setFilters] = useState({
-    stage: "all",
+    search: "",
+    owner: "all",
     assignedTo: "all",
-    nextAction: "all",
-    leadHealth: "all",
-    dateRange: "all",
-    search: ""
+    potential: "all",
+    stage: "all",
+    followUp: "all",
+    destination: "all",
+    state: "",
+    city: "",
+    subArea: "",
+    travelMonth: "all",
+    openOnly: false,
+    priorityAttention: false
   });
+
+  useEffect(() => {
+    setFilters(prev => ({
+      ...prev,
+      owner: "all",
+      assignedTo: "all"
+    }));
+  }, [scope.team]);
+
+  useEffect(() => {
+    const followUp = searchParams.get("followUp");
+    const potential = searchParams.get("potential");
+    const stage = searchParams.get("stage");
+    const destination = searchParams.get("destination");
+    const state = searchParams.get("state");
+    const city = searchParams.get("city");
+    const subArea = searchParams.get("subArea");
+    const travelMonth = searchParams.get("travelMonth");
+    const openOnly = searchParams.get("openOnly") === "1";
+    const priorityAttention = searchParams.get("priorityAttention") === "1";
+
+    if (!followUp && !potential && !stage && !destination && !state && !city && !subArea && !travelMonth && !openOnly && !priorityAttention) return;
+
+    setFilters(prev => ({
+      ...prev,
+      followUp: ["today", "overdue", "upcoming", "none"].includes(followUp) ? followUp : prev.followUp,
+      potential: potential || prev.potential,
+      stage: stage || prev.stage,
+      destination: destination || prev.destination,
+      state: state || prev.state,
+      city: city || prev.city,
+      subArea: subArea || prev.subArea,
+      travelMonth: travelMonth || prev.travelMonth,
+      openOnly: openOnly || prev.openOnly,
+      priorityAttention
+    }));
+  }, [searchParams]);
 
   const [sort] = useState({
     key: "createdAt",
@@ -387,63 +392,87 @@ export default function AdminLeadsPage() {
     return () => unsub();
   }, []);
 
-  /* =========================
-     REALTIME LOAD - USERS / TEAM
-     This fills All Team dropdown.
-  ========================== */
   useEffect(() => {
     const unsub = onSnapshot(
-      collection(db, "users"),
-      snap => {
-        setTeamMembers(
-          snap.docs.map(d => ({
-            id: d.id,
-            ...d.data()
-          }))
-        );
-      },
-      error => {
-        console.warn("Unable to load users for team filter:", error);
-        setTeamMembers([]);
-      }
+      collection(db, "travelAgents"),
+      snap => setTravelAgents(snap.docs.map(item => ({ id: item.id, ...item.data() }))),
+      error => console.warn("Travel Agent location master unavailable:", error)
     );
-
     return () => unsub();
   }, []);
 
   const activeLeads = useMemo(() => {
-    return leads.filter(lead => !isLeadDeleted(lead));
-  }, [leads]);
+    const current = leads.filter(lead => !isLeadDeleted(lead));
+    return filterRecordsByAccess(current, user, "leads.view", "lead", { userLookup });
+  }, [leads, user, userLookup]);
 
-  const teamOptions = useMemo(() => {
+  const visibleDirectoryMembers = useMemo(() => {
+    return getMembersForTeam(teamDirectory, scope.team);
+  }, [teamDirectory, scope.team]);
+
+  const ownerOptions = useMemo(() => {
+    return visibleDirectoryMembers.map(member => ({
+      value: member.key,
+      label: member.label,
+      email: member.email,
+      team: member.team
+    }));
+  }, [visibleDirectoryMembers]);
+
+  const assigneeOptions = ownerOptions;
+
+  const destinationOptions = useMemo(() => {
+    return Array.from(
+      new Set(
+        activeLeads
+          .map(lead => String(getDestinationName(lead) || "").trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+  }, [activeLeads]);
+
+  const travelMonthOptions = useMemo(() => {
+    return Array.from(
+      new Set(
+        activeLeads
+          .filter(lead => !getLeadAging(lead).terminal)
+          .map(getLeadTravelMonthKey)
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+  }, [activeLeads]);
+
+  const travelAgentMap = useMemo(() => {
     const map = new Map();
+    travelAgents.forEach(agent => map.set(agent.id, agent));
+    return map;
+  }, [travelAgents]);
 
-    teamMembers.forEach(member => {
-      const option = getUserOption(member);
-      if (!option) return;
+  const getLeadLocation = lead => {
+    const agentId = lead?.travelAgentId || lead?.agentId || "";
+    return getLeadAgentLocationParts(lead, agentId ? travelAgentMap.get(agentId) : null);
+  };
 
-      map.set(option.value, option);
-    });
+  const locationOptions = useMemo(
+    () => buildLocationOptions(activeLeads, getLeadLocation, filters.state, filters.city),
+    [activeLeads, travelAgentMap, filters.state, filters.city]
+  );
 
-    activeLeads.forEach(lead => {
-      const option = getLeadAssignedOption(lead);
-      if (!option) return;
-
-      if (!map.has(option.value)) {
-        map.set(option.value, option);
-      }
-    });
-
-    return Array.from(map.values()).sort((a, b) =>
-      String(a.label).localeCompare(String(b.label))
+  const getMemberForLeadIdentity = identity => {
+    if (!identity) return null;
+    const resolved = resolveDirectoryIdentity(
+      { uid: identity.uid, email: identity.email, name: identity.name },
+      userLookup
     );
-  }, [teamMembers, activeLeads]);
+    return resolved?.isUnmapped ? null : resolved;
+  };
 
   /* =========================
      SUPER ADMIN ACTIONS
   ========================== */
   const handleStatusChange = async lead => {
     if (!isSuperAdmin || !lead?.id) return;
+    if (!canAccessRecord(user, "leads.edit", lead, "lead", { userLookup })) return;
 
     const currentStatus = getLeadStatus(lead);
     const nextStatus = currentStatus === "active" ? "inactive" : "active";
@@ -528,72 +557,65 @@ export default function AdminLeadsPage() {
      FILTERED LEADS
   ========================== */
   const filteredLeads = useMemo(() => {
+    const now = new Date();
+    const today = new Date();
+
     return activeLeads.filter(lead => {
       const search = filters.search.trim().toLowerCase();
 
-      if (search && !getSearchText(lead).includes(search)) {
-        return false;
+      if (search && !getSearchText(lead).includes(search)) return false;
+
+      if (filters.stage !== "all" && normalizeLeadStage(lead.stage) !== filters.stage) return false;
+      const closingPotential = normalizeLeadClosingPotential(lead);
+      if (filters.potential !== "all" && closingPotential !== filters.potential) return false;
+      if (filters.priorityAttention && !["hot", "at_risk"].includes(closingPotential)) return false;
+      if (!matchesLocation(getLeadLocation(lead), filters)) return false;
+
+      const owner = getLeadOwner(lead);
+      const assignee = getLeadAssignee(lead);
+      const ownerMember = getMemberForLeadIdentity(owner);
+      const assigneeMember = getMemberForLeadIdentity(assignee);
+
+      if (scope.team !== "all") {
+        const ownerInTeam = ownerMember ? teamMatchesScope(ownerMember.team, scope.team) : false;
+        const assigneeInTeam = assigneeMember ? teamMatchesScope(assigneeMember.team, scope.team) : false;
+        if (!ownerInTeam && !assigneeInTeam) return false;
       }
 
-      if (
-        filters.stage !== "all" &&
-        lead.stage !== filters.stage
-      ) {
-        return false;
+      if (filters.owner !== "all") {
+        const member = findDirectoryMember(teamDirectory, filters.owner);
+        const values = [owner.uid, owner.email, owner.name];
+        if (!member || !memberMatchesValues(member, values)) return false;
       }
 
-      if (filters.assignedTo !== "all") {
-        const assignedValues = getAssignedFilterValues(lead);
-
-        if (!assignedValues.includes(filters.assignedTo)) {
-          return false;
-        }
+      if (filters.assignedTo === "unassigned") {
+        if (assignee.uid || assignee.email || assignee.name) return false;
+      } else if (filters.assignedTo !== "all") {
+        const member = findDirectoryMember(teamDirectory, filters.assignedTo);
+        const values = [assignee.uid, assignee.email, assignee.name];
+        if (!member || !memberMatchesValues(member, values)) return false;
       }
 
-      if (
-        filters.leadHealth !== "all" &&
-        getLeadHealth(lead) !== filters.leadHealth
-      ) {
-        return false;
-      }
+      const aging = getLeadAging(lead, now);
+      if (filters.openOnly && aging.terminal) return false;
+      if (!matchesLeadTravelMonth(lead, filters.travelMonth)) return false;
 
+      const travelPipelineMode = filters.openOnly && filters.travelMonth !== "all";
       const createdDate = getLeadCreatedDate(lead);
-      const today = new Date();
-      const yesterday = getYesterday();
+      if (!travelPipelineMode && !matchesAdminDateScope(createdDate, scope.dateRange, scope.dateFrom, scope.dateTo)) return false;
 
-      if (filters.dateRange === "today") {
-        if (!createdDate || !isSameDay(createdDate, today)) {
-          return false;
-        }
-      }
+      if (filters.destination !== "all" && String(getDestinationName(lead) || "").trim() !== filters.destination) return false;
 
-      if (filters.dateRange === "yesterday") {
-        if (!createdDate || !isSameDay(createdDate, yesterday)) {
-          return false;
-        }
-      }
 
-      const nextActionAt = toDate(lead.nextActionAt);
-
-      if (filters.nextAction === "overdue") {
-        if (!nextActionAt || nextActionAt >= new Date()) {
-          return false;
-        }
-      }
-
-      if (filters.nextAction === "today") {
-        if (!nextActionAt || !isSameDay(nextActionAt, new Date())) {
-          return false;
-        }
-      }
-
-      if (filters.nextAction === "none") {
-        if (lead.nextActionAt) return false;
-      }
+      const nextActionAt = aging.nextActionAt;
+      if (filters.followUp === "overdue" && !aging.overdue) return false;
+      if (filters.followUp === "today" && (aging.terminal || !nextActionAt || !isSameDay(nextActionAt, today))) return false;
+      if (filters.followUp === "upcoming" && (aging.terminal || !nextActionAt || nextActionAt <= now || isSameDay(nextActionAt, today))) return false;
+      if (filters.followUp === "none" && !aging.noNextAction) return false;
 
       return true;
     });
-  }, [activeLeads, filters]);
+  }, [activeLeads, filters, teamDirectory, userLookup, travelAgentMap, scope.team, scope.dateRange, scope.dateFrom, scope.dateTo]);
 
   /* =========================
      SORTED LEADS
@@ -679,18 +701,26 @@ export default function AdminLeadsPage() {
         setView={setView}
         filters={filters}
         setFilters={setFilters}
-        teamOptions={teamOptions}
+        ownerOptions={ownerOptions}
+        assigneeOptions={assigneeOptions}
+        destinationOptions={destinationOptions}
+        locationOptions={locationOptions}
+        travelMonthOptions={travelMonthOptions}
         totalCount={activeLeads.length}
         filteredCount={sortedLeads.length}
         isSuperAdmin={isSuperAdmin}
-        onExport={() => {
+        onExport={canAccess(user, "leads.export") ? () => {
           if (!sortedLeads.length) {
             alert("No leads to export");
             return;
           }
 
-          exportLeadsCsv(sortedLeads);
-        }}
+          exportLeadsCsv(sortedLeads, {
+            travelAgentMap,
+            includeVendorCost: canAccess(user, "payments.view_vendor_cost"),
+            includeRevenueGp: canAccess(user, "payments.view_revenue_gp")
+          });
+        } : null}
       />
 
       {loading && (

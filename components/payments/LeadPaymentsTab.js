@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useAuth } from "@/hooks/useAuth";
+import { canAccessRecord } from "@/lib/rolePermissions";
 import {
   AlertTriangle,
   ArrowDownCircle,
@@ -300,7 +302,11 @@ export default function LeadPaymentsTab({
   lead,
   className = ""
 }) {
+  const { user } = useAuth();
   const leadId = getLeadId(lead);
+  const canCreatePayment = Boolean(user && canAccessRecord(user, "payments.create", lead, "lead"));
+  const canViewVendorCost = Boolean(user && canAccessRecord(user, "payments.view_vendor_cost", lead, "lead"));
+  const canViewRevenueGp = Boolean(user && canAccessRecord(user, "payments.view_revenue_gp", lead, "lead"));
 
   const [customerPaymentOpen, setCustomerPaymentOpen] = useState(false);
   const [vendorPaymentOpen, setVendorPaymentOpen] = useState(false);
@@ -408,7 +414,8 @@ export default function LeadPaymentsTab({
               </p>
             </div>
 
-            <div className="flex flex-col gap-2 sm:flex-row">
+            {canCreatePayment && (
+              <div className="flex flex-col gap-2 sm:flex-row">
               <button
                 type="button"
                 onClick={() => setCustomerPaymentOpen(true)}
@@ -421,18 +428,21 @@ export default function LeadPaymentsTab({
                 Add Received
               </button>
 
-              <button
-                type="button"
-                onClick={() => setVendorPaymentOpen(true)}
-                className="
-                  inline-flex items-center justify-center gap-2 rounded-2xl bg-purple-500
-                  px-4 py-2.5 text-sm font-semibold text-white hover:bg-purple-600
-                "
-              >
-                <ArrowUpCircle size={16} />
-                Add Vendor Paid
-              </button>
-            </div>
+              {canViewVendorCost && (
+                <button
+                  type="button"
+                  onClick={() => setVendorPaymentOpen(true)}
+                  className="
+                    inline-flex items-center justify-center gap-2 rounded-2xl bg-purple-500
+                    px-4 py-2.5 text-sm font-semibold text-white hover:bg-purple-600
+                  "
+                >
+                  <ArrowUpCircle size={16} />
+                  Add Vendor Paid
+                </button>
+              )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -448,6 +458,7 @@ export default function LeadPaymentsTab({
             tone="green"
           />
 
+{canViewVendorCost && (
           <MiniStat
             icon={BadgeIndianRupee}
             label="Vendor Cost"
@@ -458,7 +469,10 @@ export default function LeadPaymentsTab({
             subValue="Payable to vendor"
             tone="purple"
           />
+          )}
 
+          {canViewRevenueGp && (
+            <>
           <MiniStat
             icon={CircleDollarSign}
             label="Expected Profit"
@@ -490,6 +504,8 @@ export default function LeadPaymentsTab({
                 : "green"
             }
           />
+            </>
+          )}
         </div>
       </section>
 
@@ -501,7 +517,7 @@ export default function LeadPaymentsTab({
         </WarningBox>
       )}
 
-      {!hasVendorCost && (
+      {canViewVendorCost && !hasVendorCost && (
         <WarningBox>
           Vendor cost is not available yet. You can still add vendor payment
           manually, but vendor payable and profit calculation will become more
@@ -510,6 +526,7 @@ export default function LeadPaymentsTab({
       )}
 
       {/* QUICK ACTIONS */}
+      {canCreatePayment && (
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <ActionCard
           icon={ArrowDownCircle}
@@ -528,6 +545,7 @@ export default function LeadPaymentsTab({
           onClick={() => setCustomerPaymentOpen(true)}
         />
 
+        {canViewVendorCost && (
         <ActionCard
           icon={ArrowUpCircle}
           title="Vendor Payment Sent"
@@ -544,7 +562,9 @@ export default function LeadPaymentsTab({
           tone="purple"
           onClick={() => setVendorPaymentOpen(true)}
         />
+        )}
       </section>
+      )}
 
       {/* SUMMARY */}
       <PaymentSummaryCard lead={lead} />
@@ -553,19 +573,23 @@ export default function LeadPaymentsTab({
       <PaymentHistoryList lead={lead} />
 
       {/* MODALS */}
+      {canCreatePayment && (
       <AddCustomerPaymentModal
         open={customerPaymentOpen}
         lead={lead}
         onClose={() => setCustomerPaymentOpen(false)}
         onSaved={() => setCustomerPaymentOpen(false)}
       />
+      )}
 
+      {canCreatePayment && canViewVendorCost && (
       <AddVendorPaymentModal
         open={vendorPaymentOpen}
         lead={lead}
         onClose={() => setVendorPaymentOpen(false)}
         onSaved={() => setVendorPaymentOpen(false)}
       />
+      )}
     </div>
   );
 }

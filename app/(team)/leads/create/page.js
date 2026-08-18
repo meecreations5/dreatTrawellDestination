@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   collection,
   getDocs,
@@ -296,6 +296,9 @@ async function uploadReferenceFiles({ files, user }) {
 export default function ManualLeadCreatePage() {
   const { user, loading } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedAgentId = searchParams.get("agentId") || "";
+  const requestedMeetingId = searchParams.get("meetingId") || "";
 
   const agentSearchRef = useRef(null);
   const referenceEditorRef = useRef(null);
@@ -305,6 +308,8 @@ export default function ManualLeadCreatePage() {
   const [team, setTeam] = useState([]);
 
   const [destinationId, setDestinationId] = useState("");
+  const [travelStartDate, setTravelStartDate] = useState("");
+  const [travelEndDate, setTravelEndDate] = useState("");
   const [agentId, setAgentId] = useState("");
   const [agentSearch, setAgentSearch] = useState("");
   const [showAgentSuggestions, setShowAgentSuggestions] = useState(false);
@@ -513,6 +518,25 @@ export default function ManualLeadCreatePage() {
     setFormError("");
   };
 
+  useEffect(() => {
+    if (!requestedAgentId || agentId || availableAgents.length === 0) return;
+
+    const selectedAgent = availableAgents.find(
+      item => item.id === requestedAgentId
+    );
+
+    if (!selectedAgent) return;
+
+    setAgentId(selectedAgent.id);
+    setAgentSearch(
+      `${selectedAgent.agencyName || "Unnamed Agency"}${
+        selectedAgent.agentCode ? ` (${selectedAgent.agentCode})` : ""
+      }`
+    );
+    setSpocIndex(0);
+    setShowAgentSuggestions(false);
+  }, [agentId, availableAgents, requestedAgentId]);
+
   const clearSelectedAgent = () => {
     setAgentId("");
     setAgentSearch("");
@@ -629,6 +653,11 @@ export default function ManualLeadCreatePage() {
       return;
     }
 
+    if (travelStartDate && travelEndDate && travelEndDate < travelStartDate) {
+      setFormError("Travel end date cannot be before the start date.");
+      return;
+    }
+
     const normalizedAssignedUser = {
       ...assignedUser,
       uid: assignedUser?.uid || assignedUser?.id || user?.uid,
@@ -673,7 +702,11 @@ export default function ManualLeadCreatePage() {
         spoc,
         assignedUser: normalizedAssignedUser,
         createdUser: normalizedCreatedUser,
-        clientReference
+        clientReference,
+        sourceMeetingId: requestedMeetingId,
+        travelStartDate,
+        travelEndDate,
+        travelMonth: travelStartDate ? travelStartDate.slice(0, 7) : ""
       });
 
       router.push(`/leads/${leadId}`);
@@ -721,6 +754,12 @@ export default function ManualLeadCreatePage() {
           </div>
         )}
 
+        {requestedMeetingId && (
+          <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+            Creating this lead from a completed Travel Agent meeting. The new lead will be linked back to the meeting automatically.
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* FORM */}
           <form
@@ -765,6 +804,30 @@ export default function ManualLeadCreatePage() {
                       No active destinations found.
                     </p>
                   )}
+                </div>
+
+                {/* TRAVEL DATE */}
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <label className={labelClass}>Travel Start Date</label>
+                    <input
+                      type="date"
+                      className={inputClass}
+                      value={travelStartDate}
+                      onChange={e => { setTravelStartDate(e.target.value); setFormError(""); }}
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className={labelClass}>Travel End Date <span className="text-xs font-normal text-gray-400">(optional)</span></label>
+                    <input
+                      type="date"
+                      className={inputClass}
+                      min={travelStartDate || undefined}
+                      value={travelEndDate}
+                      onChange={e => { setTravelEndDate(e.target.value); setFormError(""); }}
+                    />
+                  </div>
                 </div>
 
                 {/* TRAVEL AGENT AUTO SUGGEST */}

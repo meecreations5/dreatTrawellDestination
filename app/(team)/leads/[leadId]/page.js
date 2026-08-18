@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import {
   collection,
   doc,
@@ -35,6 +36,7 @@ import {
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { canAccessRecord } from "@/lib/rolePermissions";
 
 import Card from "@/components/ui/Card";
 import CardSkeleton from "@/components/ui/CardSkeleton";
@@ -42,28 +44,37 @@ import InitialAvatar from "@/components/ui/InitialAvatar";
 
 import LeadTimeline from "@/components/leads/LeadTimeline";
 import AddFollowUpModal from "@/components/leads/AddFollowUpModal";
-import QuotationEditor from "@/components/leads/QuotationEditor";
-import AssignLeadModal from "@/components/leads/AssignLeadModal";
-import ActivityViewerModal from "@/components/leads/ActivityViewerModal";
 import ClientReferenceCard from "@/components/leads/ClientReferenceCard";
 import LeadStageCloseModal from "@/components/leads/LeadStageCloseModal";
 
 import LeadStatusChip from "@/components/leads/LeadStatusChip";
 import LeadHealthChip from "@/components/leads/LeadHealthChip";
+import LeadPotentialControl, { LeadPotentialBadge } from "@/components/leads/LeadPotentialControl";
+import LeadTravelDatesControl from "@/components/leads/LeadTravelDatesControl";
 
-import LeadVendorsTab from "@/components/vendors/LeadVendorsTab";
-import VendorQuoteForm from "@/components/vendors/VendorQuoteForm";
-import VendorFollowUpModal from "@/components/vendors/VendorFollowUpModal";
-import VendorQuotesSidePanel from "@/components/vendors/VendorQuotesSidePanel";
-import CustomerQuotationTab from "@/components/leads/CustomerQuotationTab";
-import QuotationHistory from "@/components/leads/QuotationHistory";
-import LeadPaymentsTab from "@/components/payments/LeadPaymentsTab";
 
 import { updateLeadStage } from "@/lib/updateLeadStage";
 import { reopenLead } from "@/lib/reopenLead";
 import { getLeadHealth } from "@/lib/getLeadHealth";
 import { getNextActionStatus } from "@/lib/getNextActionStatus";
 import { saveVendorQuote } from "@/lib/leadVendorQuotes";
+import {
+  LEAD_OWNERSHIP_MODEL,
+  getLeadOwner as getLeadOwnerIdentity
+} from "@/lib/leadOwnership";
+import { useLeadTravelAgent } from "@/hooks/useLeadTravelAgent";
+
+/* Heavy lead workspaces are loaded only when the related tab/modal is opened. */
+const QuotationEditor = dynamic(() => import("@/components/leads/QuotationEditor"), { ssr: false });
+const AssignLeadModal = dynamic(() => import("@/components/leads/AssignLeadModal"), { ssr: false });
+const ActivityViewerModal = dynamic(() => import("@/components/leads/ActivityViewerModal"), { ssr: false });
+const LeadVendorsTab = dynamic(() => import("@/components/vendors/LeadVendorsTab"), { ssr: false });
+const VendorQuoteForm = dynamic(() => import("@/components/vendors/VendorQuoteForm"), { ssr: false });
+const VendorFollowUpModal = dynamic(() => import("@/components/vendors/VendorFollowUpModal"), { ssr: false });
+const VendorQuotesSidePanel = dynamic(() => import("@/components/vendors/VendorQuotesSidePanel"), { ssr: false });
+const CustomerQuotationTab = dynamic(() => import("@/components/leads/CustomerQuotationTab"), { ssr: false });
+const QuotationHistory = dynamic(() => import("@/components/leads/QuotationHistory"), { ssr: false });
+const LeadPaymentsTab = dynamic(() => import("@/components/payments/LeadPaymentsTab"), { ssr: false });
 
 /* =========================
    HELPERS
@@ -394,7 +405,8 @@ function NextBestActionCard({
 
 const closingStages = [
   LEAD_STAGES.CONVERTED,
-  LEAD_STAGES.LOST
+  LEAD_STAGES.LOST,
+  LEAD_STAGES.CANCELLED_INVALID
 ];
 
 const timelineFilters = [
@@ -433,6 +445,10 @@ export default function LeadDetailPage() {
   const [quotationToEdit, setQuotationToEdit] = useState(null);
   const [assignedUser, setAssignedUser] = useState(null);
 
+  const linkedTravelAgent = useLeadTravelAgent(lead);
+  const leadOwner = useMemo(() => getLeadOwnerIdentity(lead || {}), [lead]);
+  const usesCreatorOwnerModel = lead?.ownershipModel === LEAD_OWNERSHIP_MODEL;
+
   const [stageSaving, setStageSaving] = useState(false);
   const [stageError, setStageError] = useState("");
   const [stageModal, setStageModal] = useState({
@@ -457,13 +473,13 @@ export default function LeadDetailPage() {
       lead?.assignedToUid,
       lead?.assignedTo,
       lead?.assignedUserUid,
-      lead?.ownerUid,
+      !usesCreatorOwnerModel ? lead?.ownerUid : "",
       lead?.teamLeadUid,
       lead?.assignedToEmail,
       lead?.assignedUserEmail,
-      lead?.ownerEmail
+      !usesCreatorOwnerModel ? lead?.ownerEmail : ""
     );
-  }, [lead]);
+  }, [lead, usesCreatorOwnerModel]);
 
   /* =========================
      REALTIME LEAD SUBSCRIPTION
@@ -594,6 +610,7 @@ export default function LeadDetailPage() {
   );
 
   const travelAgentName = getFirstValue(
+    linkedTravelAgent?.agencyName,
     lead?.travelAgentName,
     lead?.agentName,
     lead?.agencyName,
@@ -601,6 +618,7 @@ export default function LeadDetailPage() {
   );
 
   const travelAgentId = getFirstValue(
+    linkedTravelAgent?.travelAgentId,
     lead?.travelAgentId,
     lead?.agentId,
     lead?.agencyId,
@@ -612,6 +630,20 @@ export default function LeadDetailPage() {
   const travelAgentProfileHref = travelAgentId
     ? `/travel-agents/${travelAgentId}`
     : "";
+
+  const linkedPrimarySpoc = Array.isArray(linkedTravelAgent?.agent?.spocs)
+    ? linkedTravelAgent.agent.spocs.find(item => item?.isPrimary) || linkedTravelAgent.agent.spocs[0] || null
+    : null;
+
+  const travelAgentSpocName = getFirstValue(linkedPrimarySpoc?.name, lead?.spoc?.name);
+  const travelAgentSpocEmail = getFirstValue(linkedPrimarySpoc?.email, lead?.spoc?.email);
+  const travelAgentSpocMobile = getFirstValue(
+    linkedPrimarySpoc?.mobile,
+    linkedPrimarySpoc?.phone,
+    linkedPrimarySpoc?.whatsapp,
+    lead?.spoc?.mobile
+  );
+
 
   const source = getFirstValue(
     lead?.source,
@@ -630,7 +662,7 @@ export default function LeadDetailPage() {
     lead?.assignedUserName,
     lead?.assignedName,
     lead?.teamLeadName,
-    lead?.ownerName,
+    !usesCreatorOwnerModel ? lead?.ownerName : "",
     getUserName(assignedUser),
     isEmail(assignedLookupValue) ? titleFromEmail(assignedLookupValue) : ""
   );
@@ -638,7 +670,7 @@ export default function LeadDetailPage() {
   const assignedEmail = getFirstValue(
     lead?.assignedToEmail,
     lead?.assignedUserEmail,
-    lead?.ownerEmail,
+    !usesCreatorOwnerModel ? lead?.ownerEmail : "",
     getUserEmail(assignedUser),
     isEmail(assignedLookupValue) ? assignedLookupValue : ""
   );
@@ -646,14 +678,14 @@ export default function LeadDetailPage() {
   const assignedRole = getFirstValue(
     lead?.assignedToRole,
     lead?.assignedUserRole,
-    lead?.ownerRole,
+    !usesCreatorOwnerModel ? lead?.ownerRole : "",
     getUserRole(assignedUser)
   );
 
   const assignedUid = getFirstValue(
     lead?.assignedToUid,
     lead?.assignedUserUid,
-    lead?.ownerUid,
+    !usesCreatorOwnerModel ? lead?.ownerUid : "",
     lead?.teamLeadUid,
     !isEmail(assignedLookupValue) ? assignedLookupValue : ""
   );
@@ -663,7 +695,7 @@ export default function LeadDetailPage() {
     assignedEmail ||
     assignedName ||
     lead?.assignedTo ||
-    lead?.ownerUid
+    (!usesCreatorOwnerModel && lead?.ownerUid)
   );
 
   const finalVendorCost = getNumericValue(
@@ -803,6 +835,7 @@ export default function LeadDetailPage() {
         newStage: stageModal.newStage,
         remark: payload?.remark || "",
         lostReason: payload?.lostReason || "",
+        cancelReason: payload?.cancelReason || "",
         user
       });
 
@@ -877,6 +910,17 @@ export default function LeadDetailPage() {
     );
   }
 
+  if (!canAccessRecord(user, "leads.view", lead, "lead")) {
+    return (
+      <main className="p-6 max-w-7xl mx-auto">
+        <Card className="py-10 text-center">
+          <h2 className="text-lg font-semibold text-gray-800">Access restricted</h2>
+          <p className="mt-1 text-sm text-gray-500">This lead is outside your permitted data scope.</p>
+        </Card>
+      </main>
+    );
+  }
+
   return (
     <main className="p-4 sm:p-6 max-w-7xl mx-auto">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -895,7 +939,7 @@ export default function LeadDetailPage() {
                   </h2>
                 </div>
 
-                <LeadStatusChip stage={stage} />
+                <div className="flex flex-col items-end gap-2"><LeadStatusChip stage={stage} /><LeadPotentialBadge lead={lead} /></div>
               </div>
 
               <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -938,7 +982,18 @@ export default function LeadDetailPage() {
             >
               Assign / Change Team
             </button>
+
+            <Link
+              href={`/meetings?agentId=${encodeURIComponent(lead.travelAgentId || lead.agentId || "")}&leadId=${encodeURIComponent(lead.id || "")}`}
+              className={`${actionButtonClass} block bg-emerald-600 text-center text-white hover:bg-emerald-700`}
+            >
+              Schedule Agent Meeting
+            </Link>
           </Card>
+
+          <LeadPotentialControl lead={lead} user={user} disabled={isClosed} />
+
+          <LeadTravelDatesControl lead={lead} user={user} disabled={isClosed} />
 
           <ClientReferenceCard lead={lead} />
 
@@ -996,29 +1051,29 @@ export default function LeadDetailPage() {
                   href={travelAgentProfileHref}
                   className="text-sm font-semibold text-blue-700 hover:underline"
                 >
-                  {travelAgentName || lead.spoc?.name || "View Travel Agent"}
+                  {travelAgentName || travelAgentSpocName || "View Travel Agent"}
                 </Link>
               ) : (
                 <p className="text-sm font-semibold text-gray-900">
-                  {travelAgentName || lead.spoc?.name || "—"}
+                  {travelAgentName || travelAgentSpocName || "—"}
                 </p>
               )}
 
-              {lead.spoc?.name && travelAgentName && (
+              {travelAgentSpocName && travelAgentName && (
                 <p className="text-xs text-gray-500 mt-1">
-                  SPOC: {lead.spoc.name}
+                  SPOC: {travelAgentSpocName}
                 </p>
               )}
 
-              {lead.spoc?.email && (
+              {travelAgentSpocEmail && (
                 <p className="text-xs text-gray-500 truncate mt-1">
-                  {lead.spoc.email}
+                  {travelAgentSpocEmail}
                 </p>
               )}
 
-              {lead.spoc?.mobile && (
+              {travelAgentSpocMobile && (
                 <p className="text-xs text-gray-500 mt-1">
-                  {lead.spoc.mobile}
+                  {travelAgentSpocMobile}
                 </p>
               )}
 
@@ -1031,67 +1086,85 @@ export default function LeadDetailPage() {
           </Card>
 
           <Card className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
+            <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
-                Assigned To
+                Lead Responsibility
               </p>
-
-              {!isClosed && (
-                <button
-                  type="button"
-                  onClick={() => setAssignOpen(true)}
-                  className="text-xs text-blue-600 hover:underline"
-                >
-                  Change
-                </button>
-              )}
+              <p className="mt-1 text-xs text-gray-500">
+                Owner is permanent; assignee can change for workload and follow-up.
+              </p>
             </div>
 
-            {assignedName || assignedEmail || assignedUid ? (
+            <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-blue-700">
+                  Lead Owner
+                </p>
+                <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                  Permanent
+                </span>
+              </div>
               <div className="flex items-center gap-3">
-                <InitialAvatar
-                  name={assignedName || assignedEmail || assignedUid || "User"}
-                />
-
+                <InitialAvatar name={leadOwner.name || leadOwner.email || leadOwner.uid || "Owner"} />
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-gray-900 truncate">
-                    {assignedName || "Unassigned"}
+                  <p className="truncate text-sm font-semibold text-gray-900">
+                    {leadOwner.name || "Creator not available"}
                   </p>
-
-                  {assignedRole && (
-                    <p className="text-xs text-gray-500 truncate">
-                      {assignedRole}
-                    </p>
-                  )}
-
-                  {assignedEmail && (
-                    <p className="text-xs text-gray-500 truncate mt-0.5">
-                      {assignedEmail}
+                  {leadOwner.email && (
+                    <p className="mt-0.5 truncate text-xs text-gray-500">
+                      {leadOwner.email}
                     </p>
                   )}
                 </div>
               </div>
-            ) : (
-              <div className="rounded-2xl bg-gray-50 border border-dashed border-gray-200 p-3">
-                <p className="text-sm font-medium text-gray-700">
-                  Not assigned yet
-                </p>
+            </div>
 
-                <p className="text-xs text-gray-500 mt-1">
-                  Assign this lead to a team member.
+            <div className="rounded-2xl border border-gray-100 bg-gray-50 p-3">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-600">
+                  Current Assignee
                 </p>
-
                 {!isClosed && (
                   <button
                     type="button"
                     onClick={() => setAssignOpen(true)}
-                    className="mt-3 bg-blue-600 text-white px-3 py-1.5 rounded-xl text-xs"
+                    className="text-xs font-medium text-blue-600 hover:underline"
                   >
-                    Assign Now
+                    Change
                   </button>
                 )}
               </div>
-            )}
+
+              {assignedName || assignedEmail || assignedUid ? (
+                <div className="flex items-center gap-3">
+                  <InitialAvatar
+                    name={assignedName || assignedEmail || assignedUid || "User"}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-gray-900">
+                      {assignedName || "Unassigned"}
+                    </p>
+                    {assignedRole && (
+                      <p className="truncate text-xs text-gray-500">
+                        {assignedRole}
+                      </p>
+                    )}
+                    {assignedEmail && (
+                      <p className="mt-0.5 truncate text-xs text-gray-500">
+                        {assignedEmail}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <p className="text-sm font-medium text-gray-700">Not assigned yet</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Assign a team member for follow-up; lead ownership will not change.
+                  </p>
+                </div>
+              )}
+            </div>
           </Card>
 
           <div
@@ -1515,26 +1588,30 @@ export default function LeadDetailPage() {
         />
       )}
 
-      <VendorQuotesSidePanel
-        open={Boolean(activeVendorQuotesRequest)}
-        lead={lead}
-        leadId={lead.id}
-        vendorRequest={activeVendorQuotesRequest}
-        onClose={() => setActiveVendorQuotesRequest(null)}
-        onSelected={() => {
+      {activeVendorQuotesRequest && (
+        <VendorQuotesSidePanel
+          open={true}
+          lead={lead}
+          leadId={lead.id}
+          vendorRequest={activeVendorQuotesRequest}
+          onClose={() => setActiveVendorQuotesRequest(null)}
+          onSelected={() => {
           // Keep panel open after final quote selection.
           // Firestore realtime refresh will update the quote state.
-        }}
-      />
+          }}
+        />
+      )}
 
-      <VendorFollowUpModal
-        open={Boolean(activeVendorFollowUpRequest)}
-        lead={lead}
-        leadId={lead.id}
-        vendorRequest={activeVendorFollowUpRequest}
-        onClose={() => setActiveVendorFollowUpRequest(null)}
-        onSaved={() => setActiveVendorFollowUpRequest(null)}
-      />
+      {activeVendorFollowUpRequest && (
+        <VendorFollowUpModal
+          open={true}
+          lead={lead}
+          leadId={lead.id}
+          vendorRequest={activeVendorFollowUpRequest}
+          onClose={() => setActiveVendorFollowUpRequest(null)}
+          onSaved={() => setActiveVendorFollowUpRequest(null)}
+        />
+      )}
     </main>
   );
 }

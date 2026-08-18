@@ -23,6 +23,8 @@ export default function CreateLeadModal({ engagement, onClose }) {
 
   const [assignedUid, setAssignedUid] = useState("");
   const [destinationId, setDestinationId] = useState("");
+  const [travelStartDate, setTravelStartDate] = useState("");
+  const [travelEndDate, setTravelEndDate] = useState("");
   const [saving, setSaving] = useState(false);
 
   /* =========================
@@ -81,6 +83,11 @@ export default function CreateLeadModal({ engagement, onClose }) {
       return;
     }
 
+    if (travelStartDate && travelEndDate && travelEndDate < travelStartDate) {
+      alert("Travel end date cannot be before the start date");
+      return;
+    }
+
     setSaving(true);
 
     const destination = destinations.find(
@@ -108,7 +115,10 @@ export default function CreateLeadModal({ engagement, onClose }) {
           uid: user.uid,
           email: user.email,
           name: user.name
-        }
+        },
+        travelStartDate,
+        travelEndDate,
+        travelMonth: travelStartDate ? travelStartDate.slice(0, 7) : ""
       });
 
       alert("Lead created successfully");
@@ -148,6 +158,17 @@ export default function CreateLeadModal({ engagement, onClose }) {
               />
             ))}
           </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="space-y-1 text-xs font-medium text-gray-600">
+            <span>Travel Start Date</span>
+            <input type="date" value={travelStartDate} onChange={e => setTravelStartDate(e.target.value)} className="h-10 w-full rounded-md border border-gray-200 px-3 text-sm" />
+          </label>
+          <label className="space-y-1 text-xs font-medium text-gray-600">
+            <span>Travel End Date (optional)</span>
+            <input type="date" min={travelStartDate || undefined} value={travelEndDate} onChange={e => setTravelEndDate(e.target.value)} className="h-10 w-full rounded-md border border-gray-200 px-3 text-sm" />
+          </label>
         </div>
 
         {/* ASSIGN TO – CHIPS */}

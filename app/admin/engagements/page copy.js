@@ -1081,7 +1081,7 @@ export default function AdminEngagementDashboard() {
     }
 
     if (!loading && error === "USER_NOT_REGISTERED") {
-      router.replace("/admin/login");
+      router.replace("/login");
     }
   }, [loading, error, router]);
 

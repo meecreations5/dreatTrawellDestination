@@ -28,6 +28,12 @@ import {
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import {
+  getTravelAgentStatusMeta,
+  normalizeTravelAgentStatus
+} from "@/lib/travelAgentStatus";
+import { getTravelAgentPotentialMeta, normalizeTravelAgentPotential } from "@/lib/travelAgentPotential";
+import { buildLocationOptions, getTravelAgentLocationParts, matchesLocation } from "@/lib/locationFilters";
 
 import AgentFilterBar from "@/components/travel-agents/AgentFilterBar";
 import TravelChip from "@/components/ui/TravelChip";
@@ -43,6 +49,39 @@ const CHANNEL_ICON_MAP = {
   whatsapp: "whatsapp",
   meeting: "meeting"
 };
+
+function AgentStatusBadge({ agent, compact = false }) {
+  const status = normalizeTravelAgentStatus(agent?.status, agent?.active);
+  const meta = getTravelAgentStatusMeta(status);
+  const toneClass = {
+    green: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    amber: "border-amber-200 bg-amber-50 text-amber-700",
+    red: "border-rose-200 bg-rose-50 text-rose-700",
+    slate: "border-slate-200 bg-slate-100 text-slate-700"
+  }[meta.tone] || "border-slate-200 bg-slate-100 text-slate-700";
+
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border font-semibold ${toneClass} ${
+        compact ? "px-2 py-0.5 text-[10px]" : "px-2.5 py-1 text-[11px]"
+      }`}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
+function AgentPotentialBadge({ agent, compact = false }) {
+  const meta = getTravelAgentPotentialMeta(agent);
+  const tone = {
+    emerald: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    blue: "border-blue-200 bg-blue-50 text-blue-700",
+    amber: "border-amber-200 bg-amber-50 text-amber-700",
+    rose: "border-rose-200 bg-rose-50 text-rose-700",
+    slate: "border-slate-200 bg-slate-50 text-slate-600"
+  }[meta.tone] || "border-slate-200 bg-slate-50 text-slate-600";
+  return <span className={`inline-flex items-center rounded-full border font-semibold ${tone} ${compact ? "px-2 py-0.5 text-[10px]" : "px-2.5 py-1 text-[11px]"}`}>{meta.label}</span>;
+}
 
 /* =========================
    HELPERS
@@ -434,10 +473,15 @@ function AgentCard({ agent, lastEngagement, leadCount, city }) {
             {priority.label}
           </span>
 
-          <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] font-medium text-gray-600">
-            <BadgeCheck size={12} />
-            {agent.kycStatus || agent.status || "Active"}
-          </span>
+          <AgentStatusBadge agent={agent} />
+              <AgentPotentialBadge agent={agent} />
+
+          {agent.kycStatus ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[10px] font-medium text-gray-500">
+              <BadgeCheck size={11} />
+              KYC: {agent.kycStatus}
+            </span>
+          ) : null}
         </div>
       </div>
 
@@ -781,10 +825,15 @@ function AgentTable({
                         {health}
                       </p>
 
-                      <p className="inline-flex items-center gap-1 text-xs text-gray-400">
-                        <BadgeCheck size={12} />
-                        {agent.kycStatus || agent.status || "Active"}
-                      </p>
+                      <AgentStatusBadge agent={agent} />
+              <AgentPotentialBadge agent={agent} />
+
+                      {agent.kycStatus ? (
+                        <p className="inline-flex items-center gap-1 text-xs text-gray-400">
+                          <BadgeCheck size={12} />
+                          KYC: {agent.kycStatus}
+                        </p>
+                      ) : null}
                     </div>
                   </td>
 
@@ -836,8 +885,12 @@ export default function UserTravelAgentsPage() {
   const [filters, setFilters] = useState({
     search: "",
     engagement: "all",
+    status: "all",
+    potential: "all",
     channel: "all",
-    city: "all",
+    state: "",
+    city: "",
+    subArea: "",
     sortBy: "agency_az"
   });
 
@@ -998,22 +1051,10 @@ export default function UserTravelAgentsPage() {
     return map;
   }, [leads]);
 
-  const cityOptions = useMemo(() => {
-    const cities = new Set();
-
-    scopedAgents.forEach(agent => {
-      const meta = leadMetaMap[agent.id] || {};
-      const city = getAgentCity(agent, meta);
-
-      if (city) {
-        cities.add(city.trim());
-      }
-    });
-
-    return Array.from(cities).sort((a, b) =>
-      a.localeCompare(b, undefined, { sensitivity: "base" })
-    );
-  }, [scopedAgents, leadMetaMap]);
+  const locationOptions = useMemo(
+    () => buildLocationOptions(scopedAgents, getTravelAgentLocationParts, filters.state, filters.city),
+    [scopedAgents, filters.state, filters.city]
+  );
 
   const stats = useMemo(() => {
     const engaged = scopedAgents.filter(agent => {
@@ -1037,6 +1078,15 @@ export default function UserTravelAgentsPage() {
       return (leadMetaMap[agent.id]?.count || 0) >= 5;
     }).length;
 
+    const statusCounts = scopedAgents.reduce(
+      (acc, agent) => {
+        const status = normalizeTravelAgentStatus(agent.status, agent.active);
+        acc[status] = (acc[status] || 0) + 1;
+        return acc;
+      },
+      {}
+    );
+
     return {
       totalAgents: scopedAgents.length,
       engaged,
@@ -1044,6 +1094,9 @@ export default function UserTravelAgentsPage() {
       staleFollowUps,
       totalLeads,
       highLeadAgents,
+      activeAgents: statusCounts.active || 0,
+      invalidNumbers: statusCounts.invalid_number || 0,
+      businessShutDown: statusCounts.business_shut_down || 0,
       needsFollowUp: noActivity + staleFollowUps
     };
   }, [scopedAgents, lastEngagementMap, leadMetaMap]);
@@ -1071,7 +1124,10 @@ export default function UserTravelAgentsPage() {
           primarySpoc?.mobile,
           primarySpoc?.email,
           agent.website,
-          city
+          city,
+          getTravelAgentStatusMeta(
+            normalizeTravelAgentStatus(agent.status, agent.active)
+          ).label
         ]
           .map(normalize)
           .join(" ");
@@ -1082,11 +1138,14 @@ export default function UserTravelAgentsPage() {
       }
 
       if (
-        filters.city !== "all" &&
-        normalize(city) !== normalize(filters.city)
+        filters.status !== "all" &&
+        normalizeTravelAgentStatus(agent.status, agent.active) !== filters.status
       ) {
         return false;
       }
+
+      if (filters.potential !== "all" && normalizeTravelAgentPotential(agent) !== filters.potential) return false;
+      if (!matchesLocation(getTravelAgentLocationParts(agent), filters)) return false;
 
       if (filters.engagement === "engaged" && !last) {
         return false;
@@ -1226,8 +1285,12 @@ export default function UserTravelAgentsPage() {
   }, [
     filters.search,
     filters.engagement,
+    filters.status,
+    filters.potential,
     filters.channel,
+    filters.state,
     filters.city,
+    filters.subArea,
     filters.sortBy,
     pageSize
   ]);
@@ -1263,8 +1326,12 @@ export default function UserTravelAgentsPage() {
     setFilters({
       search: "",
       engagement: "all",
+      status: "all",
+      potential: "all",
       channel: "all",
-      city: "all",
+      state: "",
+      city: "",
+      subArea: "",
       sortBy: "agency_az"
     });
   };
@@ -1377,13 +1444,37 @@ export default function UserTravelAgentsPage() {
         </div>
 
         {/* STATS */}
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
           <StatCard
             icon={Building2}
             label="Total Agents"
             value={stats.totalAgents}
             helper="All agents"
             tone="blue"
+          />
+
+          <StatCard
+            icon={BadgeCheck}
+            label="Active"
+            value={stats.activeAgents}
+            helper="Contactable"
+            tone="emerald"
+          />
+
+          <StatCard
+            icon={Phone}
+            label="Invalid Number"
+            value={stats.invalidNumbers}
+            helper="Needs correction"
+            tone="orange"
+          />
+
+          <StatCard
+            icon={SearchX}
+            label="Business Shut"
+            value={stats.businessShutDown}
+            helper="Closed business"
+            tone="slate"
           />
 
           <StatCard
@@ -1400,14 +1491,6 @@ export default function UserTravelAgentsPage() {
             value={stats.engaged}
             helper="Has activity"
             tone="emerald"
-          />
-
-          <StatCard
-            icon={SearchX}
-            label="No Activity"
-            value={stats.noActivity}
-            helper="No engagement"
-            tone="amber"
           />
 
           <StatCard
@@ -1438,7 +1521,7 @@ export default function UserTravelAgentsPage() {
           <AgentFilterBar
             filters={filters}
             setFilters={setFilters}
-            cities={cityOptions}
+            locationOptions={locationOptions}
             onClear={clearFilters}
           />
         </div>

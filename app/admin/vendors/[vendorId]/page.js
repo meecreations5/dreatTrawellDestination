@@ -40,6 +40,7 @@ import {
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { canAccess } from "@/lib/rolePermissions";
 
 import VendorForm from "@/components/vendors/VendorForm";
 import VendorStatusChip from "@/components/vendors/VendorStatusChip";
@@ -427,6 +428,7 @@ export default function VendorDetailPage() {
   const { vendorId } = useParams();
   const router = useRouter();
   const { user, loading: authLoading } = useAuth(true);
+  const canEditVendor = canAccess(user, "vendors.edit");
 
   const [vendor, setVendor] = useState(null);
   const [vendorLoading, setVendorLoading] = useState(true);
@@ -598,6 +600,10 @@ export default function VendorDetailPage() {
 
   const updateVendorStatus = async nextStatus => {
     if (!vendor?.id || actionLoading) return;
+    if (!canEditVendor) {
+      setError("You do not have permission to edit vendors.");
+      return;
+    }
 
     const label =
       nextStatus === VENDOR_STATUS.INACTIVE
@@ -673,7 +679,7 @@ export default function VendorDetailPage() {
     );
   }
 
-  if (editMode) {
+  if (editMode && canEditVendor) {
     return (
       <main className="min-h-screen p-4 md:p-6">
         <div className="max-w-9xl mx-auto space-y-5">
@@ -835,18 +841,20 @@ export default function VendorDetailPage() {
                   </button>
                 )}
 
-                <button
-                  type="button"
-                  onClick={() => setEditMode(true)}
-                  className="
-                    inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl
-                    bg-blue-600 text-white text-sm font-medium
-                    hover:bg-blue-700
-                  "
-                >
-                  <Edit3 size={16} />
-                  Edit Vendor
-                </button>
+                {canEditVendor && (
+                  <button
+                    type="button"
+                    onClick={() => setEditMode(true)}
+                    className="
+                      inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl
+                      bg-blue-600 text-white text-sm font-medium
+                      hover:bg-blue-700
+                    "
+                  >
+                    <Edit3 size={16} />
+                    Edit Vendor
+                  </button>
+                )}
               </div>
             </div>
 

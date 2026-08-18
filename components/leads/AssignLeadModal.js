@@ -22,6 +22,8 @@ import {
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { getLeadAssignee } from "@/lib/leadOwnership";
+import { canAccessRecord } from "@/lib/rolePermissions";
 import {
   logLeadAction,
   LEAD_TIMELINE_TYPES
@@ -255,10 +257,9 @@ export default function AssignLeadModal({ leadId, lead, onClose }) {
   }, []);
 
   useEffect(() => {
+    const currentAssignee = getLeadAssignee(lead || {});
     const existingAssignedUid = getFirstValue(
-      lead?.assignedToUid,
-      lead?.assignedUserUid,
-      lead?.ownerUid,
+      currentAssignee.uid,
       lead?.teamLeadUid
     );
 
@@ -308,6 +309,11 @@ export default function AssignLeadModal({ leadId, lead, onClose }) {
 
     if (!user) {
       setError("User session not found.");
+      return;
+    }
+
+    if (!canAccessRecord(user, "leads.assign", lead, "lead")) {
+      setError("You do not have permission to assign this lead.");
       return;
     }
 

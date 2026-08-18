@@ -15,23 +15,20 @@ import {
   X
 } from "lucide-react";
 
-import {
-  getDownloadURL,
-  ref,
-  uploadBytes
-} from "firebase/storage";
-
-import { storage } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { canAccessRecord } from "@/lib/rolePermissions";
 
 import createVendorPayment from "@/lib/leadVendorPayments";
+import {
+  PAYMENT_FILE_KINDS,
+  uploadPaymentFile
+} from "@/lib/paymentFileUpload";
 
 import {
   DEFAULT_CURRENCY,
   DEFAULT_VENDOR_PAYMENT_FORM,
   PAYMENT_MODE_OPTIONS,
   PAYMENT_MODES,
-  PAYMENT_STORAGE_PATHS,
   PAYEE_TYPE_OPTIONS,
   VENDOR_PAYMENT_STATUS_OPTIONS,
   VENDOR_PAYMENT_TYPE_OPTIONS,
@@ -162,40 +159,6 @@ function formatMoney(value, currency = "INR") {
   }
 }
 
-function safeFileName(name = "") {
-  return cleanString(name)
-    .replace(/[^\w.\-]+/g, "_")
-    .replace(/_+/g, "_")
-    .slice(0, 120);
-}
-
-async function uploadPaymentProofFile({
-  leadId,
-  file
-}) {
-  if (!file) {
-    return {
-      paymentProofUrl: "",
-      paymentProofFileName: ""
-    };
-  }
-
-  const fileName = `${Date.now()}-${safeFileName(file.name)}`;
-
-  const fileRef = ref(
-    storage,
-    `${PAYMENT_STORAGE_PATHS.VENDOR_PROOFS}/${leadId}/${fileName}`
-  );
-
-  await uploadBytes(fileRef, file);
-
-  const paymentProofUrl = await getDownloadURL(fileRef);
-
-  return {
-    paymentProofUrl,
-    paymentProofFileName: file.name
-  };
-}
 
 /* =========================
    SMALL COMPONENTS
@@ -373,14 +336,26 @@ export default function AddVendorPaymentModal({
       return;
     }
 
+    if (!canAccessRecord(user, "payments.create", lead, "lead")) {
+      setError("You do not have permission to create payments for this lead.");
+      return;
+    }
+
     setSaving(true);
     setError("");
 
     try {
-      const proofPayload = await uploadPaymentProofFile({
+      const uploadedProof = await uploadPaymentFile({
         leadId,
-        file: paymentProofFile
+        file: paymentProofFile,
+        kind: PAYMENT_FILE_KINDS.VENDOR_PROOF
       });
+
+      const proofPayload = {
+        paymentProofUrl: uploadedProof.url,
+        paymentProofFileName: uploadedProof.fileName,
+        paymentProofStoragePath: uploadedProof.storagePath
+      };
 
       const result = await createVendorPayment({
         leadId,

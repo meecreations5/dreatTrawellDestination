@@ -33,6 +33,7 @@ import {
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { canAccess } from "@/lib/rolePermissions";
 import ImportDefaultTemplatesButton from "@/components/admin/communication-templates/ImportDefaultTemplatesButton";
 
 /* =========================
@@ -217,6 +218,8 @@ function getUserName(user = {}) {
 
 export default function CommunicationTemplatesPage() {
   const { user } = useAuth();
+  const canCreateTemplate = canAccess(user, "communications.create");
+  const canEditTemplate = canAccess(user, "communications.edit");
 
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -351,6 +354,11 @@ export default function CommunicationTemplatesPage() {
   }, [templates]);
 
   async function createTemplate() {
+    if (!canCreateTemplate) {
+      alert("You do not have permission to create communication templates.");
+      return;
+    }
+
     const name = cleanString(form.name);
 
     if (!name) {
@@ -432,6 +440,10 @@ export default function CommunicationTemplatesPage() {
   }
 
   async function toggleActive(template) {
+    if (!canEditTemplate) {
+      alert("You do not have permission to edit communication templates.");
+      return;
+    }
     try {
       await updateDoc(doc(db, "communicationTemplates", template.id), {
         active: template.active === false,
@@ -445,6 +457,10 @@ export default function CommunicationTemplatesPage() {
   }
 
   async function softDeleteTemplate(template) {
+    if (!canEditTemplate) {
+      alert("You do not have permission to edit communication templates.");
+      return;
+    }
     const confirmed = window.confirm(
       `Delete template "${template.name}"? This will hide it from communication flow.`
     );
@@ -492,6 +508,7 @@ export default function CommunicationTemplatesPage() {
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <ImportDefaultTemplatesButton />
 
+                {canCreateTemplate && (
                 <button
                   type="button"
                   onClick={() => setCreateOpen(true)}
@@ -500,6 +517,7 @@ export default function CommunicationTemplatesPage() {
                   <Plus className="h-4 w-4" />
                   New Template
                 </button>
+                )}
               </div>
             </div>
           </div>
@@ -666,7 +684,7 @@ export default function CommunicationTemplatesPage() {
         )}
       </div>
 
-      {createOpen && (
+      {canCreateTemplate && createOpen && (
         <CreateTemplateModal
           form={form}
           setForm={setForm}

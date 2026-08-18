@@ -23,6 +23,8 @@ import {
   IndianRupee,
   Loader2,
   MapPin,
+  RefreshCcw,
+  RotateCcw,
   ShieldAlert,
   ShieldCheck,
   Trash2,
@@ -32,7 +34,18 @@ import {
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
+import {
+  resolveDirectoryIdentity,
+  teamMatchesScope
+} from "@/lib/teamDirectory";
+import {
+  TRAVEL_AGENT_STATUS_OPTIONS,
+  getTravelAgentStatusMeta,
+  normalizeTravelAgentStatus
+} from "@/lib/travelAgentStatus";
 import { useAuth } from "@/hooks/useAuth";
+import { useAdminScope } from "@/components/admin/AdminScopeProvider";
+import { matchesAdminDateScope } from "@/lib/adminScope";
 import AdminGuard from "@/components/AdminGuard";
 
 import AssignTravelAgentModal from "@/components/travel-agents/AssignTravelAgentModal";
@@ -163,24 +176,6 @@ const formatDateTime = value => {
   });
 };
 
-const isWithinRange = (value, range) => {
-  if (range === "all") return true;
-
-  const date = toDate(value);
-  if (!date) return false;
-
-  const now = new Date();
-  const diff = now.getTime() - date.getTime();
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-
-  if (range === "30d") return days <= 30;
-  if (range === "90d") return days <= 90;
-  if (range === "180d") return days <= 180;
-  if (range === "365d") return days <= 365;
-
-  return true;
-};
-
 const percentage = (part, total) => {
   if (!total) return 0;
   return Math.round((part / total) * 100);
@@ -208,14 +203,8 @@ const getAgentLocation = agent => {
 const getPartnerSegment = agent =>
   agent.partnerSegment || agent.agencyType || "Not set";
 
-const getAgentStatus = agent => {
-  const status = normalizeText(agent.status);
-
-  if (status === "active" || agent.active === true) return "active";
-  if (status === "blacklisted") return "blacklisted";
-
-  return "inactive";
-};
+const getAgentStatus = agent =>
+  normalizeTravelAgentStatus(agent.status, agent.active);
 
 const getAgentCategory = agent =>
   agent.agentCategory || "B";
@@ -244,6 +233,63 @@ const getAssignedEmail = agent =>
 
 const getAssignedTeam = agent =>
   agent.assignedTeam || agent.team || "";
+
+const resolveIdentity = ({ uid = "", email = "", name = "" }, userLookup) =>
+  resolveDirectoryIdentity({ uid, email, name }, userLookup);
+
+const getCreatorIdentity = (item, userLookup) => {
+  const uid =
+    item?.createdByUid ||
+    item?.creatorUid ||
+    item?.createdByUserId ||
+    item?.ownerUid ||
+    "";
+  const email =
+    item?.createdByEmail ||
+    item?.creatorEmail ||
+    item?.ownerEmail ||
+    (typeof item?.createdBy === "string" && item.createdBy.includes("@")
+      ? item.createdBy
+      : "");
+  const name =
+    item?.createdByName ||
+    item?.creatorName ||
+    item?.createdByUserName ||
+    item?.ownerName ||
+    "";
+
+  return resolveIdentity({ uid, email, name }, userLookup);
+};
+
+const getEngagementIdentity = (item, userLookup) => {
+  const uid =
+    item?.createdByUid ||
+    item?.createdByUserId ||
+    item?.loggedByUid ||
+    item?.performedByUid ||
+    item?.userUid ||
+    item?.employeeUid ||
+    item?.ownerUid ||
+    "";
+  const email =
+    item?.createdByEmail ||
+    item?.loggedByEmail ||
+    item?.performedByEmail ||
+    item?.userEmail ||
+    item?.employeeEmail ||
+    item?.ownerEmail ||
+    "";
+  const name =
+    item?.createdByName ||
+    item?.loggedByName ||
+    item?.performedByName ||
+    item?.userName ||
+    item?.employeeName ||
+    item?.ownerName ||
+    "";
+
+  return resolveIdentity({ uid, email, name }, userLookup);
+};
 
 const getAssignmentStatus = agent => {
   if (agent.assignmentStatus) return agent.assignmentStatus;
@@ -327,6 +373,19 @@ const getLeadCreatedAt = lead =>
   lead.createdOn ||
   null;
 
+const getAgentCreatedAt = agent =>
+  agent.createdAt || agent.addedAt || agent.createdOn || null;
+
+const getEngagementDate = engagement =>
+  engagement.createdAt || engagement.updatedAt || engagement.engagedAt || null;
+
+const getEngagementAgentId = engagement =>
+  engagement.agentId ||
+  engagement.travelAgentId ||
+  engagement.travelAgent?.id ||
+  engagement.agent?.id ||
+  "";
+
 /* =========================
    TRANSACTION HELPERS
 ========================= */
@@ -403,11 +462,26 @@ const groupSum = (rows, keyGetter, valueGetter) => {
 };
 
 /* =========================
+   DASHBOARD FILTERS
+========================= */
+
+const INITIAL_AGENT_FILTERS = {
+  search: "",
+  agentStatus: "all",
+  category: "all",
+  assignmentStatus: "all",
+  assignmentPriority: "all",
+  paymentRisk: "all",
+  viewScope: "all"
+};
+
+/* =========================
    PAGE
 ========================= */
 
 export default function TravelAgentDashboardPage() {
   const { user } = useAuth();
+  const { scope, teamDirectory, userLookup } = useAdminScope();
 
   const isManagement = isManagementUser(user);
   const isSuperAdmin = isSuperAdminUser(user);
@@ -416,7 +490,9 @@ export default function TravelAgentDashboardPage() {
   const [leads, setLeads] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [destinations, setDestinations] = useState([]);
+  const [engagements, setEngagements] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [assignTarget, setAssignTarget] = useState(null);
@@ -425,17 +501,7 @@ export default function TravelAgentDashboardPage() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
-  const [filters, setFilters] = useState({
-    search: "",
-    dateRange: "all",
-    category: "all",
-    assignmentStatus: "all",
-    assignmentPriority: "all",
-    assignedTeam: "all",
-    assignedUser: "all",
-    paymentRisk: "all",
-    viewScope: "all"
-  });
+  const [filters, setFilters] = useState(() => ({ ...INITIAL_AGENT_FILTERS }));
 
   useEffect(() => {
     if (!user) return;
@@ -443,9 +509,7 @@ export default function TravelAgentDashboardPage() {
     if (!isManagement) {
       setFilters(prev => ({
         ...prev,
-        viewScope: "my",
-        assignedTeam: "all",
-        assignedUser: "all"
+        viewScope: "my"
       }));
     }
   }, [user, isManagement]);
@@ -453,12 +517,14 @@ export default function TravelAgentDashboardPage() {
   const loadDashboard = useCallback(async () => {
     try {
       setLoading(true);
+      setLoadError("");
 
-      const [agentSnap, leadSnap, destinationSnap, paymentSnapshots] =
+      const [agentSnap, leadSnap, destinationSnap, engagementSnap, paymentSnapshots] =
         await Promise.all([
           getDocs(collection(db, "travelAgents")),
           getDocs(collection(db, "leads")),
           getDocs(collection(db, "destinations")),
+          getDocs(collection(db, "engagements")),
           Promise.all(
             PAYMENT_COLLECTIONS.map(async collectionName => {
               try {
@@ -501,10 +567,19 @@ export default function TravelAgentDashboardPage() {
         }))
       );
 
+      setEngagements(
+        engagementSnap.docs.map(item => ({
+          id: item.id,
+          ...item.data()
+        }))
+      );
+
       setTransactions(paymentSnapshots.flat());
     } catch (error) {
       console.error(error);
-      alert(error?.message || "Unable to load travel agent dashboard.");
+      setLoadError(
+        error?.message || "Unable to load travel agent dashboard."
+      );
     } finally {
       setLoading(false);
     }
@@ -566,31 +641,16 @@ export default function TravelAgentDashboardPage() {
     [destinationMap]
   );
 
-  const assignedTeamOptions = useMemo(() => {
-    return [
-      ...new Set(
-        agents
-          .map(agent => getAssignedTeam(agent))
-          .filter(Boolean)
-      )
-    ].sort();
-  }, [agents]);
-
-  const assignedUserOptions = useMemo(() => {
-    return [
-      ...new Set(
-        agents
-          .map(agent => getAssignedName(agent))
-          .filter(Boolean)
-      )
-    ].sort();
-  }, [agents]);
-
   const filteredLeads = useMemo(() => {
     return leads.filter(lead =>
-      isWithinRange(getLeadCreatedAt(lead), filters.dateRange)
+      matchesAdminDateScope(
+        getLeadCreatedAt(lead),
+        scope.dateRange,
+        scope.dateFrom,
+        scope.dateTo
+      )
     );
-  }, [leads, filters.dateRange]);
+  }, [leads, scope.dateRange, scope.dateFrom, scope.dateTo]);
 
   const leadMapByAgent = useMemo(() => {
     const map = {};
@@ -672,6 +732,13 @@ export default function TravelAgentDashboardPage() {
         0
       );
 
+      const assignedIdentity = resolveIdentity({
+        uid: getAssignedUid(agent),
+        email: getAssignedEmail(agent),
+        name: getAssignedName(agent)
+      }, userLookup);
+      const creatorIdentity = getCreatorIdentity(agent, userLookup);
+
       return {
         ...agent,
         agentName: getAgentName(agent),
@@ -680,9 +747,14 @@ export default function TravelAgentDashboardPage() {
         paymentRisk: getPaymentRisk(agent),
         kycStatus: getKycStatus(agent),
         bankStatus: getBankStatus(agent),
-        assignedUid: getAssignedUid(agent),
-        assignedName: getAssignedName(agent),
-        assignedTeam: getAssignedTeam(agent),
+        assignedUid: assignedIdentity.uid || getAssignedUid(agent),
+        assignedKey: assignedIdentity.isUnmapped ? "" : assignedIdentity.key,
+        assignedName: assignedIdentity.isUnmapped ? getAssignedName(agent) : assignedIdentity.name,
+        assignedTeam: assignedIdentity.isUnmapped ? "" : assignedIdentity.team,
+        creatorKey: creatorIdentity.isUnmapped ? "" : creatorIdentity.key,
+        creatorName: creatorIdentity.isUnmapped ? "Legacy / Unmapped" : creatorIdentity.name,
+        creatorTeam: creatorIdentity.isUnmapped ? "" : creatorIdentity.team,
+        creatorIsUnmapped: creatorIdentity.isUnmapped === true,
         assignmentStatus: getAssignmentStatus(agent),
         assignmentPriority: getAssignmentPriority(agent),
         totalLeads: agentLeads.length,
@@ -707,7 +779,7 @@ export default function TravelAgentDashboardPage() {
           : "No Transaction"
       };
     });
-  }, [agents, leadMapByAgent, transactionMapByAgent]);
+  }, [agents, leadMapByAgent, transactionMapByAgent, userLookup]);
 
   const filteredAgents = useMemo(() => {
     const search = normalizeText(filters.search);
@@ -726,6 +798,10 @@ export default function TravelAgentDashboardPage() {
           (filters.viewScope === "my" && isAssignedToCurrentUser(agent, user))
         : isAssignedToCurrentUser(agent, user);
 
+      const matchesAgentStatus =
+        filters.agentStatus === "all" ||
+        agent.agentStatus === filters.agentStatus;
+
       const matchesCategory =
         filters.category === "all" ||
         agent.category === filters.category;
@@ -740,13 +816,7 @@ export default function TravelAgentDashboardPage() {
 
       const matchesTeam =
         !isManagement ||
-        filters.assignedTeam === "all" ||
-        agent.assignedTeam === filters.assignedTeam;
-
-      const matchesUser =
-        !isManagement ||
-        filters.assignedUser === "all" ||
-        agent.assignedName === filters.assignedUser;
+        teamMatchesScope(agent.creatorTeam, scope.team || "all");
 
       const matchesRisk =
         filters.paymentRisk === "all" ||
@@ -755,15 +825,36 @@ export default function TravelAgentDashboardPage() {
       return (
         matchesSearch &&
         matchesScope &&
+        matchesAgentStatus &&
         matchesCategory &&
         matchesAssignment &&
         matchesPriority &&
         matchesTeam &&
-        matchesUser &&
         matchesRisk
       );
     });
-  }, [enrichedAgents, filters, isManagement, user]);
+  }, [enrichedAgents, filters, isManagement, user, scope.team]);
+
+  const activeFilterCount = useMemo(() => {
+    const keys = [
+      filters.search.trim(),
+      filters.agentStatus !== "all",
+      filters.category !== "all",
+      filters.assignmentStatus !== "all",
+      filters.assignmentPriority !== "all",
+      filters.paymentRisk !== "all",
+      isManagement && filters.viewScope !== "all"
+    ];
+
+    return keys.filter(Boolean).length;
+  }, [filters, isManagement]);
+
+  const resetFilters = () => {
+    setFilters({
+      ...INITIAL_AGENT_FILTERS,
+      viewScope: isManagement ? "all" : "my"
+    });
+  };
 
   const selectedAgents = useMemo(() => {
     return enrichedAgents.filter(agent => selectedAgentIds.includes(agent.id));
@@ -807,6 +898,14 @@ export default function TravelAgentDashboardPage() {
 
     const activeAgents = filteredAgents.filter(
       agent => agent.agentStatus === "active"
+    ).length;
+
+    const invalidNumberAgents = filteredAgents.filter(
+      agent => agent.agentStatus === "invalid_number"
+    ).length;
+
+    const businessShutAgents = filteredAgents.filter(
+      agent => agent.agentStatus === "business_shut_down"
     ).length;
 
     const assignedAgents = filteredAgents.filter(
@@ -860,6 +959,8 @@ export default function TravelAgentDashboardPage() {
     return {
       totalAgents,
       activeAgents,
+      invalidNumberAgents,
+      businessShutAgents,
       assignedAgents,
       unassignedAgents,
       highValueAgents,
@@ -874,6 +975,208 @@ export default function TravelAgentDashboardPage() {
       conversion: percentage(wonLeads, totalLeads)
     };
   }, [filteredAgents]);
+
+  const periodAgents = useMemo(() => {
+    return filteredAgents.filter(agent =>
+      matchesAdminDateScope(
+        getAgentCreatedAt(agent),
+        scope.dateRange,
+        scope.dateFrom,
+        scope.dateTo
+      )
+    );
+  }, [filteredAgents, scope.dateRange, scope.dateFrom, scope.dateTo]);
+
+  const allPeriodEngagements = useMemo(() => {
+    return engagements.filter(item =>
+      matchesAdminDateScope(
+        getEngagementDate(item),
+        scope.dateRange,
+        scope.dateFrom,
+        scope.dateTo
+      )
+    );
+  }, [engagements, scope.dateRange, scope.dateFrom, scope.dateTo]);
+
+  const periodEngagements = useMemo(() => {
+    if (!isManagement || (scope.team || "all") === "all") return allPeriodEngagements;
+
+    return allPeriodEngagements.filter(item => {
+      const performer = getEngagementIdentity(item, userLookup);
+      return !performer.isUnmapped && teamMatchesScope(performer.team, scope.team);
+    });
+  }, [allPeriodEngagements, isManagement, scope.team, userLookup]);
+
+  const firstCallByNewAgent = useMemo(() => {
+    const newAgentIds = new Set(periodAgents.map(agent => agent.id).filter(Boolean));
+    const firstCallMap = new Map();
+
+    [...allPeriodEngagements]
+      .filter(item => {
+        const agentId = getEngagementAgentId(item);
+        return normalizeText(item.channel) === "call" && newAgentIds.has(agentId);
+      })
+      .sort((a, b) => {
+        const ad = toDate(getEngagementDate(a))?.getTime() || 0;
+        const bd = toDate(getEngagementDate(b))?.getTime() || 0;
+        return ad - bd;
+      })
+      .forEach(item => {
+        const agentId = getEngagementAgentId(item);
+        if (agentId && !firstCallMap.has(agentId)) firstCallMap.set(agentId, item);
+      });
+
+    return firstCallMap;
+  }, [periodAgents, allPeriodEngagements]);
+
+  const teamAcquisitionRows = useMemo(() => {
+    const rows = new Map();
+
+    const ensure = identity => {
+      const key = identity?.key || "legacy-unmapped";
+      if (!rows.has(key)) {
+        rows.set(key, {
+          key,
+          teamMember: identity?.name || "Legacy / Unmapped",
+          email: identity?.email || "",
+          isUnmapped: identity?.isUnmapped === true,
+          newAgents: 0,
+          contacted: 0,
+          pendingFirstCall: 0,
+          invalidNumber: 0,
+          businessShutDown: 0
+        });
+      }
+      return rows.get(key);
+    };
+
+    teamDirectory
+      .filter(member => teamMatchesScope(member.team, scope.team || "all"))
+      .forEach(member => ensure({
+        key: member.key,
+        name: member.name,
+        email: member.email,
+        isUnmapped: false
+      }));
+
+    periodAgents.forEach(agent => {
+      const row = ensure(getCreatorIdentity(agent, userLookup));
+      row.newAgents += 1;
+
+      if (firstCallByNewAgent.has(agent.id)) row.contacted += 1;
+      else row.pendingFirstCall += 1;
+
+      const operationalStatus = normalizeTravelAgentStatus(agent.status, agent.active);
+      if (operationalStatus === "invalid_number") row.invalidNumber += 1;
+      if (operationalStatus === "business_shut_down") row.businessShutDown += 1;
+    });
+
+    return Array.from(rows.values())
+      .map(row => ({
+        ...row,
+        contactRate: percentage(row.contacted, row.newAgents)
+      }))
+      .sort((a, b) => {
+        if (a.isUnmapped !== b.isUnmapped) return a.isUnmapped ? 1 : -1;
+        return b.newAgents - a.newAgents || b.contacted - a.contacted;
+      });
+  }, [periodAgents, firstCallByNewAgent, userLookup, teamDirectory, scope.team]);
+
+  const teamActivityRows = useMemo(() => {
+    const rows = new Map();
+
+    const ensure = identity => {
+      const key = identity?.key || "legacy-unmapped";
+      if (!rows.has(key)) {
+        rows.set(key, {
+          key,
+          teamMember: identity?.name || "Legacy / Unmapped",
+          email: identity?.email || "",
+          isUnmapped: identity?.isUnmapped === true,
+          firstCalls: 0,
+          calls: 0,
+          uniqueCalled: new Set(),
+          whatsapp: 0,
+          emails: 0,
+          meetings: 0,
+          totalTouches: 0,
+          invalidAgentIds: new Set(),
+          shutAgentIds: new Set(),
+          lastActivityAt: null
+        });
+      }
+      return rows.get(key);
+    };
+
+    teamDirectory
+      .filter(member => teamMatchesScope(member.team, scope.team || "all"))
+      .forEach(member => ensure({
+        key: member.key,
+        name: member.name,
+        email: member.email,
+        isUnmapped: false
+      }));
+
+    periodEngagements.forEach(item => {
+      const row = ensure(getEngagementIdentity(item, userLookup));
+      const agentId = getEngagementAgentId(item);
+      const channel = normalizeText(item.channel);
+      const outcome = normalizeText(item.outcomeCode || item.outcomeLabel || item.outcome);
+      const activityDate = toDate(getEngagementDate(item));
+
+      row.totalTouches += 1;
+      if (activityDate && (!row.lastActivityAt || activityDate > row.lastActivityAt)) {
+        row.lastActivityAt = activityDate;
+      }
+
+      if (channel === "call") {
+        row.calls += 1;
+        if (agentId) row.uniqueCalled.add(agentId);
+
+        const firstCall = agentId ? firstCallByNewAgent.get(agentId) : null;
+        if (firstCall && firstCall.id === item.id) row.firstCalls += 1;
+      } else if (channel === "whatsapp") row.whatsapp += 1;
+      else if (channel === "email") row.emails += 1;
+      else if (channel === "meeting") row.meetings += 1;
+
+      if (outcome === "invalid_number" && agentId) row.invalidAgentIds.add(agentId);
+      if (outcome === "business_shut_down" && agentId) row.shutAgentIds.add(agentId);
+    });
+
+    return Array.from(rows.values())
+      .map(row => ({
+        ...row,
+        followUpCalls: Math.max(row.calls - row.firstCalls, 0),
+        uniqueCalled: row.uniqueCalled.size,
+        invalidNumber: row.invalidAgentIds.size,
+        businessShutDown: row.shutAgentIds.size,
+        invalidAgentIds: undefined,
+        shutAgentIds: undefined
+      }))
+      .sort((a, b) => {
+        if (a.isUnmapped !== b.isUnmapped) return a.isUnmapped ? 1 : -1;
+        return b.firstCalls - a.firstCalls || b.calls - a.calls || b.totalTouches - a.totalTouches;
+      });
+  }, [periodEngagements, firstCallByNewAgent, userLookup, teamDirectory, scope.team]);
+
+  const teamAgentSummary = useMemo(() => {
+    const callRows = periodEngagements.filter(item => normalizeText(item.channel) === "call");
+    const uniqueCalled = new Set(callRows.map(getEngagementAgentId).filter(Boolean));
+    const firstCallsCompleted = firstCallByNewAgent.size;
+    const newAgents = periodAgents.length;
+
+    return {
+      newAgents,
+      firstCallsCompleted,
+      pendingFirstCalls: Math.max(newAgents - firstCallsCompleted, 0),
+      contactRate: percentage(firstCallsCompleted, newAgents),
+      totalCalls: callRows.length,
+      uniqueCalled: uniqueCalled.size,
+      unmappedAgents: teamAcquisitionRows
+        .filter(row => row.isUnmapped)
+        .reduce((sum, row) => sum + row.newAgents, 0)
+    };
+  }, [periodAgents, periodEngagements, firstCallByNewAgent, teamAcquisitionRows]);
 
   const revenueByAssignee = useMemo(() => {
     return groupSum(
@@ -1066,12 +1369,46 @@ export default function TravelAgentDashboardPage() {
   if (loading) {
     return (
       <AdminGuard>
-        <main className="min-h-screen bg-slate-50 p-6">
-          <div className="mx-auto max-w-7xl rounded-2xl border border-slate-200 bg-white p-8 text-center">
-            <Loader2 className="mx-auto h-7 w-7 animate-spin text-blue-600" />
-            <p className="mt-3 text-sm font-medium text-slate-600">
-              Loading travel agent dashboard...
+        <main className="min-h-screen bg-slate-50 p-4 sm:p-6">
+          <div className="mx-auto max-w-[1600px] space-y-4">
+            <div className="h-32 animate-pulse rounded-3xl border border-slate-200 bg-white" />
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+              {[1, 2, 3, 4, 5, 6].map(item => (
+                <div
+                  key={item}
+                  className="h-28 animate-pulse rounded-2xl border border-slate-200 bg-white"
+                />
+              ))}
+            </div>
+            <div className="h-80 animate-pulse rounded-3xl border border-slate-200 bg-white" />
+          </div>
+        </main>
+      </AdminGuard>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <AdminGuard>
+        <main className="min-h-screen bg-slate-50 p-4 sm:p-6">
+          <div className="mx-auto max-w-2xl rounded-3xl border border-rose-100 bg-white p-8 text-center shadow-sm">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-50 text-rose-600">
+              <AlertTriangle className="h-6 w-6" />
+            </div>
+            <h1 className="mt-4 text-lg font-semibold text-slate-900">
+              Unable to load travel agent dashboard
+            </h1>
+            <p className="mt-2 text-sm leading-6 text-slate-500">
+              {loadError}
             </p>
+            <button
+              type="button"
+              onClick={loadDashboard}
+              className="mt-5 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+            >
+              <RefreshCcw className="h-4 w-4" />
+              Try Again
+            </button>
           </div>
         </main>
       </AdminGuard>
@@ -1080,33 +1417,34 @@ export default function TravelAgentDashboardPage() {
 
   return (
     <AdminGuard>
-      <main className="min-h-screen p-4 md:p-6">
-        <div className="mx-auto max-w-9xl space-y-5">
+      <main className="min-h-screen bg-[linear-gradient(180deg,#f8fbff_0%,#f8fafc_34%,#f8fafc_100%)] p-4 md:p-6">
+        <div className="mx-auto max-w-[1600px] space-y-5">
           {/* HEADER */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 ">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="overflow-hidden rounded-3xl border border-blue-100 bg-white shadow-[0_12px_36px_rgba(37,99,235,0.07)]">
+            <div className="bg-gradient-to-r from-slate-950 via-blue-950 to-blue-800 p-5 text-white sm:p-6">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <Link
                   href="/admin/travel-agents"
-                  className="mb-3 inline-flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-blue-700"
+                  className="mb-3 inline-flex items-center gap-2 text-sm font-medium text-blue-100 hover:text-white"
                 >
                   <ArrowLeft size={16} />
                   Back to Travel Agents
                 </Link>
 
                 <div className="flex items-center gap-3">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-white">
                     <BarChart3 size={22} />
                   </div>
 
                   <div>
-                    <h1 className="text-xl font-semibold text-slate-900">
+                    <h1 className="text-xl font-semibold text-white">
                       {isManagement
                         ? "Travel Agent Management Dashboard"
                         : "My Travel Agent Dashboard"}
                     </h1>
 
-                    <p className="mt-1 text-sm text-slate-500">
+                    <p className="mt-1 max-w-3xl text-sm text-blue-100">
                       {isManagement
                         ? "Monitor assignment, city distribution, transactions, revenue, risk and agent performance."
                         : "Track your assigned agents, transactions, leads, revenue, risk and priorities."}
@@ -1119,7 +1457,7 @@ export default function TravelAgentDashboardPage() {
                 {isManagement && (
                   <Link
                     href="/admin/travel-agents/assigned"
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-xs font-semibold text-white hover:bg-white/15"
                   >
                     Assigned Agents
                   </Link>
@@ -1127,25 +1465,55 @@ export default function TravelAgentDashboardPage() {
 
                 <Link
                   href="/admin/travel-agents/my-assigned"
-                  className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
+                  className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-blue-800 hover:bg-blue-50"
                 >
                   My Assigned
                 </Link>
+
+                <button
+                  type="button"
+                  onClick={loadDashboard}
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-xs font-semibold text-white hover:bg-white/15"
+                >
+                  <RefreshCcw className="h-3.5 w-3.5" />
+                  Refresh
+                </button>
               </div>
+            </div>
             </div>
           </div>
 
           {/* FILTERS */}
           <div className="sticky top-20 z-30 rounded-2xl border border-slate-200 bg-white/95 p-4  backdrop-blur">
-            <div className="mb-3 flex items-center gap-2">
-              <Filter size={16} className="text-blue-600" />
-              <p className="text-sm font-semibold text-slate-900">
-                {isManagement ? "Dashboard Filters" : "My Dashboard Filters"}
-              </p>
+            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2">
+                <Filter size={16} className="text-blue-600" />
+                <p className="text-sm font-semibold text-slate-900">
+                  {isManagement ? "Travel Agent Portfolio Filters" : "My Travel Agent Filters"}
+                </p>
+                {activeFilterCount > 0 ? (
+                  <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
+                    {activeFilterCount} active
+                  </span>
+                ) : null}
+              </div>
+
+              {activeFilterCount > 0 ? (
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="inline-flex w-fit items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Reset Filters
+                </button>
+              ) : null}
             </div>
 
             <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-7">
               <input
+                type="search"
+                aria-label="Search travel agents"
                 value={filters.search}
                 onChange={e =>
                   setFilters(prev => ({
@@ -1162,19 +1530,20 @@ export default function TravelAgentDashboardPage() {
               />
 
               <Select
-                value={filters.dateRange}
+                value={filters.agentStatus}
                 onChange={value =>
                   setFilters(prev => ({
                     ...prev,
-                    dateRange: value
+                    agentStatus: value
                   }))
                 }
               >
-                <option value="all">All Time</option>
-                <option value="30d">Last 30 Days</option>
-                <option value="90d">Last 90 Days</option>
-                <option value="180d">Last 180 Days</option>
-                <option value="365d">Last 365 Days</option>
+                <option value="all">All Statuses</option>
+                {TRAVEL_AGENT_STATUS_OPTIONS.map(option => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </Select>
 
               {isManagement && (
@@ -1255,44 +1624,8 @@ export default function TravelAgentDashboardPage() {
                 <option value="High">High Risk</option>
               </Select>
 
-              {isManagement && (
-                <>
-                  <Select
-                    value={filters.assignedTeam}
-                    onChange={value =>
-                      setFilters(prev => ({
-                        ...prev,
-                        assignedTeam: value
-                      }))
-                    }
-                  >
-                    <option value="all">All Teams</option>
-                    {assignedTeamOptions.map(team => (
-                      <option key={team} value={team}>
-                        {team}
-                      </option>
-                    ))}
-                  </Select>
-
-                  <Select
-                    value={filters.assignedUser}
-                    onChange={value =>
-                      setFilters(prev => ({
-                        ...prev,
-                        assignedUser: value
-                      }))
-                    }
-                  >
-                    <option value="all">All Users</option>
-                    {assignedUserOptions.map(name => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                  </Select>
-                </>
-              )}
             </div>
+            <p className="mt-2 text-xs text-slate-400">Global Date + Team apply above. Agent acquisition is scoped by Agent Created By; engagement activity is scoped by Activity Performed By.</p>
           </div>
 
           {/* KPI ROW 1 */}
@@ -1349,7 +1682,7 @@ export default function TravelAgentDashboardPage() {
           </div>
 
           {/* KPI ROW 2 */}
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-2 xl:grid-cols-4">
             <KpiCard
               label={isManagement ? "Total Leads" : "My Leads"}
               value={summary.totalLeads}
@@ -1379,6 +1712,13 @@ export default function TravelAgentDashboardPage() {
             />
           </div>
 
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <KpiCard label="Active Agents" value={summary.activeAgents} icon={<CheckCircle2 size={18} />} tone="green" />
+            <KpiCard label="Invalid Number" value={summary.invalidNumberAgents} icon={<AlertTriangle size={18} />} tone={summary.invalidNumberAgents ? "red" : "green"} />
+            <KpiCard label="Business Shut Down" value={summary.businessShutAgents} icon={<Building2 size={18} />} tone={summary.businessShutAgents ? "amber" : "green"} />
+            <KpiCard label="Visible Records" value={summary.totalAgents} icon={<Users size={18} />} tone="blue" />
+          </div>
+
           {/* CITY + TRANSACTION PANELS */}
           <div className="grid gap-4 lg:grid-cols-2">
             <CityWiseAgentPanel
@@ -1392,6 +1732,14 @@ export default function TravelAgentDashboardPage() {
               actions={renderAgentActions}
             />
           </div>
+
+          {isManagement && (
+            <TeamAgentPerformancePanels
+              summary={teamAgentSummary}
+              acquisitionRows={teamAcquisitionRows}
+              activityRows={teamActivityRows}
+            />
+          )}
 
           {/* MANAGEMENT PANELS */}
           {isManagement && (
@@ -1426,7 +1774,7 @@ export default function TravelAgentDashboardPage() {
 
           {/* TOP + ATTENTION */}
           <div className="grid gap-4 lg:grid-cols-2">
-            <section className="rounded-2xl border border-slate-200 bg-white p-5 ">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
               <div className="mb-4">
                 <h2 className="text-sm font-semibold text-slate-900">
                   {isManagement ? "Top Performing Agents" : "My Top Agents"}
@@ -1454,7 +1802,7 @@ export default function TravelAgentDashboardPage() {
               </div>
             </section>
 
-            <section className="rounded-2xl border border-slate-200 bg-white p-5 ">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
               <div className="mb-4">
                 <h2 className="text-sm font-semibold text-slate-900">
                   {isManagement ? "Attention Required" : "My Attention Required"}
@@ -1533,7 +1881,7 @@ export default function TravelAgentDashboardPage() {
           )}
 
           {/* DEMOGRAPHIC / ASSIGNMENT TABLE */}
-          <section className="rounded-2xl border border-slate-200 bg-white ">
+          <section className="rounded-2xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
             <div className="border-b border-slate-100 p-5">
               <h2 className="text-sm font-semibold text-slate-900">
                 {isManagement
@@ -1549,7 +1897,7 @@ export default function TravelAgentDashboardPage() {
 
             <div className="overflow-x-auto">
               <table className="min-w-[1460px] w-full text-sm">
-                <thead className="bg-slate-50 text-xs text-slate-500">
+                <thead className="sticky top-0 z-10 bg-slate-50 text-xs text-slate-500 shadow-[inset_0_-1px_0_#e2e8f0]">
                   <tr>
                     {isManagement && (
                       <th className="w-10 px-4 py-3 text-left">
@@ -1577,6 +1925,35 @@ export default function TravelAgentDashboardPage() {
                 </thead>
 
                 <tbody>
+                  {filteredAgents.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={isManagement ? 10 : 9}
+                        className="px-6 py-14 text-center"
+                      >
+                        <div className="mx-auto max-w-sm">
+                          <Filter className="mx-auto h-8 w-8 text-slate-300" />
+                          <p className="mt-3 text-sm font-semibold text-slate-800">
+                            No travel agents match these filters
+                          </p>
+                          <p className="mt-1 text-xs leading-5 text-slate-500">
+                            Clear one or more filters to widen the dashboard view.
+                          </p>
+                          {activeFilterCount > 0 ? (
+                            <button
+                              type="button"
+                              onClick={resetFilters}
+                              className="mt-4 inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                            >
+                              <RotateCcw className="h-3.5 w-3.5" />
+                              Reset Filters
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+
                   {filteredAgents.map(agent => {
                     const agentDestinations = getAgentDestinations(agent);
 
@@ -1816,7 +2193,7 @@ function Select({ value, onChange, children }) {
     <select
       value={value}
       onChange={e => onChange(e.target.value)}
-      className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-100"
+      className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-100"
     >
       {children}
     </select>
@@ -1825,28 +2202,154 @@ function Select({ value, onChange, children }) {
 
 function KpiCard({ label, value, icon, tone = "slate" }) {
   const tones = {
-    slate: "bg-slate-50 text-slate-700",
-    green: "bg-emerald-50 text-emerald-700",
-    amber: "bg-amber-50 text-amber-700",
-    blue: "bg-blue-50 text-blue-700",
-    purple: "bg-purple-50 text-purple-700",
-    red: "bg-red-50 text-red-700"
+    slate: { card: "border-slate-200 bg-white", icon: "bg-slate-100 text-slate-700" },
+    green: { card: "border-emerald-100 bg-emerald-50/55", icon: "bg-emerald-100 text-emerald-700" },
+    amber: { card: "border-amber-100 bg-amber-50/60", icon: "bg-amber-100 text-amber-700" },
+    blue: { card: "border-blue-100 bg-blue-50/55", icon: "bg-blue-100 text-blue-700" },
+    purple: { card: "border-purple-100 bg-purple-50/55", icon: "bg-purple-100 text-purple-700" },
+    red: { card: "border-red-100 bg-red-50/60", icon: "bg-red-100 text-red-700" }
   };
 
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 ">
-      <div
-        className={`mb-3 flex h-9 w-9 items-center justify-center rounded-xl ${
-          tones[tone] || tones.slate
-        }`}
-      >
-        {icon}
-      </div>
+  const currentTone = tones[tone] || tones.slate;
 
-      <p className="text-xs font-medium text-slate-500">{label}</p>
-      <p className="mt-1 truncate text-xl font-bold text-slate-900">
-        {value}
-      </p>
+  return (
+    <div className={`min-h-[112px] rounded-2xl border p-4 shadow-[0_1px_2px_rgba(15,23,42,0.03)] ${currentTone.card}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+            {label}
+          </p>
+          <p className="mt-2 break-words text-xl font-bold tracking-tight text-slate-950">
+            {value}
+          </p>
+        </div>
+
+        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${currentTone.icon}`}>
+          {icon}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CompactMetric({ label, value, helper = "" }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.07em] text-slate-500">{label}</p>
+      <p className="mt-1 text-xl font-bold text-slate-950">{value}</p>
+      {helper ? <p className="mt-1 text-[11px] text-slate-400">{helper}</p> : null}
+    </div>
+  );
+}
+
+function TeamAgentPerformancePanels({ summary, acquisitionRows = [], activityRows = [] }) {
+  return (
+    <div className="space-y-4">
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+        <div className="flex flex-col gap-2 border-b border-slate-100 pb-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">New Agent Acquisition</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Acquisition credit follows the team member who created the travel-agent master record.
+            </p>
+          </div>
+          <p className="text-xs text-slate-400">Called = unique new agent with at least one call in the selected period</p>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <CompactMetric label="New Agents" value={summary.newAgents} />
+          <CompactMetric label="First Calls Done" value={summary.firstCallsCompleted} helper="One per new agent" />
+          <CompactMetric label="Pending First Call" value={summary.pendingFirstCalls} />
+          <CompactMetric label="Contact Rate" value={`${summary.contactRate}%`} />
+          <CompactMetric label="All Calls" value={summary.totalCalls} />
+          <CompactMetric label="Unique Agents Called" value={summary.uniqueCalled} />
+        </div>
+
+        {!acquisitionRows.length ? (
+          <EmptyPanel text="No new-agent acquisition data found for the selected filters." />
+        ) : (
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-[820px] w-full text-sm">
+              <thead className="bg-slate-50 text-xs text-slate-500">
+                <tr>
+                  {["Team Member", "New Agents", "Called", "Pending First Call", "Contact Rate", "Invalid No.", "Business Shut"].map((label, index) => (
+                    <th key={label} className={`px-3 py-3 font-semibold ${index === 0 ? "text-left" : "text-right"}`}>{label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {acquisitionRows.map(row => (
+                  <tr key={row.key} className={row.isUnmapped ? "bg-amber-50/60" : "hover:bg-slate-50/70"}>
+                    <td className="px-3 py-3 text-left">
+                      <div className="font-semibold text-slate-900">{row.teamMember}</div>
+                      {row.email ? <div className="mt-0.5 text-[11px] text-slate-400">{row.email}</div> : null}
+                      {row.isUnmapped ? <div className="mt-0.5 text-[11px] text-amber-700">Legacy records missing a resolvable creator</div> : null}
+                    </td>
+                    <td className="px-3 py-3 text-right font-semibold text-blue-700">{row.newAgents}</td>
+                    <td className="px-3 py-3 text-right font-semibold text-emerald-700">{row.contacted}</td>
+                    <td className="px-3 py-3 text-right font-semibold text-amber-700">{row.pendingFirstCall}</td>
+                    <td className="px-3 py-3 text-right">{row.contactRate}%</td>
+                    <td className="px-3 py-3 text-right text-rose-700">{row.invalidNumber}</td>
+                    <td className="px-3 py-3 text-right text-amber-700">{row.businessShutDown}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {summary.unmappedAgents > 0 ? (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+            {summary.unmappedAgents} legacy agent record{summary.unmappedAgents === 1 ? " is" : "s are"} missing a resolvable creator. These records are grouped separately and should not be used for individual performance scoring.
+          </div>
+        ) : null}
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+        <div className="flex flex-col gap-2 border-b border-slate-100 pb-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">Team Calling & Engagement</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Activity credit follows the person who logged the call or engagement.
+            </p>
+          </div>
+          <p className="text-xs text-slate-400">First Call = one credit per new agent; repeated calls never increase it</p>
+        </div>
+
+        {!activityRows.length ? (
+          <EmptyPanel text="No team engagement activity found for the selected filters." />
+        ) : (
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-[1040px] w-full text-sm">
+              <thead className="bg-slate-50 text-xs text-slate-500">
+                <tr>
+                  {["Team Member", "First Calls", "Other / Follow-up Calls", "Total Calls", "Unique Agents Called", "WhatsApp", "Meetings", "Total Touches", "Last Activity"].map((label, index) => (
+                    <th key={label} className={`px-3 py-3 font-semibold ${index === 0 ? "text-left" : "text-right"}`}>{label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {activityRows.map(row => (
+                  <tr key={row.key} className={row.isUnmapped ? "bg-amber-50/60" : "hover:bg-slate-50/70"}>
+                    <td className="px-3 py-3 text-left">
+                      <div className="font-semibold text-slate-900">{row.teamMember}</div>
+                      {row.email ? <div className="mt-0.5 text-[11px] text-slate-400">{row.email}</div> : null}
+                    </td>
+                    <td className="px-3 py-3 text-right font-semibold text-emerald-700">{row.firstCalls}</td>
+                    <td className="px-3 py-3 text-right">{row.followUpCalls}</td>
+                    <td className="px-3 py-3 text-right font-semibold text-blue-700">{row.calls}</td>
+                    <td className="px-3 py-3 text-right">{row.uniqueCalled}</td>
+                    <td className="px-3 py-3 text-right">{row.whatsapp}</td>
+                    <td className="px-3 py-3 text-right">{row.meetings}</td>
+                    <td className="px-3 py-3 text-right font-medium">{row.totalTouches}</td>
+                    <td className="px-3 py-3 text-right text-xs text-slate-500">{formatDateTime(row.lastActivityAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -1855,7 +2358,7 @@ function BarPanel({ title, subtitle, data, valueFormatter = value => value }) {
   const max = Math.max(...data.map(item => Number(item.value || 0)), 1);
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5 ">
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
       <div className="mb-4">
         <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
         <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
@@ -1897,7 +2400,7 @@ function BarPanel({ title, subtitle, data, valueFormatter = value => value }) {
 
 function CityWiseAgentPanel({ data, valueFormatter }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5 ">
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
       <div className="mb-4 flex items-center gap-2">
         <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
           <MapPin size={18} />
@@ -1974,7 +2477,7 @@ function CityWiseAgentPanel({ data, valueFormatter }) {
 
 function LastTransactionAgentPanel({ agents, valueFormatter, actions }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5 ">
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
       <div className="mb-4 flex items-center gap-2">
         <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700">
           <Clock size={18} />
@@ -2208,23 +2711,17 @@ function BankBadge({ value }) {
 }
 
 function StatusBadge({ value }) {
-  const style =
-    value === "active"
-      ? "bg-emerald-50 text-emerald-700"
-      : value === "blacklisted"
-      ? "bg-red-50 text-red-700"
-      : "bg-slate-100 text-slate-600";
-
-  const label =
-    value === "active"
-      ? "Active"
-      : value === "blacklisted"
-      ? "Blacklisted"
-      : "Inactive";
+  const meta = getTravelAgentStatusMeta(value);
+  const style = {
+    green: "bg-emerald-50 text-emerald-700",
+    amber: "bg-amber-50 text-amber-700",
+    red: "bg-rose-50 text-rose-700",
+    slate: "bg-slate-100 text-slate-600"
+  }[meta.tone] || "bg-slate-100 text-slate-600";
 
   return (
     <span className={`rounded-md px-2 py-[2px] text-[11px] font-medium ${style}`}>
-      {label}
+      {meta.label}
     </span>
   );
 }

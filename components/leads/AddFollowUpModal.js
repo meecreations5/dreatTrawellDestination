@@ -144,7 +144,7 @@ export default function AddFollowUpModal({ leadId, onClose }) {
     setSaving(true);
 
     try {
-      await logFollowUp({
+      const result = await logFollowUp({
         leadId,
         channel,
         outcome,
@@ -153,7 +153,13 @@ export default function AddFollowUpModal({ leadId, onClose }) {
         user
       });
 
-      setSuccess("Follow-up logged successfully.");
+      setSuccess(
+        result?.engagementSynced
+          ? "Follow-up logged and synced to the Travel Agent engagement timeline."
+          : result?.engagementSyncReason === "missing_travel_agent_id"
+            ? "Follow-up logged. This legacy lead is not linked to a Travel Agent ID, so engagement sync was skipped."
+            : "Follow-up logged successfully."
+      );
 
       setTimeout(() => {
         onClose?.(true);

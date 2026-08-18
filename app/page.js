@@ -21,7 +21,7 @@ export default function Home() {
         </h1>
 
         <p className="text-slate-500 max-w-sm mx-auto">
-          Manage leads, engagement, attendance, and operations in one place.
+          Manage leads, travel-agent engagement, and operations in one place.
         </p>
       </div>
 

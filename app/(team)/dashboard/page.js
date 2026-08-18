@@ -9,9 +9,7 @@ import { useAuth } from "@/hooks/useAuth";
 import {
   LogOut,
   Shield,
-  CalendarCheck,
   Sparkles,
-  UserRound,
   LayoutDashboard
 } from "lucide-react";
 
@@ -128,7 +126,7 @@ export default function DashboardPage() {
   if (loading || !user) {
     return (
       <main className="min-h-screen bg-slate-50 px-4 py-4 md:p-6">
-        <div className="w-full max-w-7xl mx-auto space-y-5">
+        <div className="w-full max-w-[1600px] mx-auto space-y-5">
           <div className="h-40 rounded-3xl bg-white border border-slate-200  animate-pulse" />
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -145,11 +143,11 @@ export default function DashboardPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[linear-gradient(180deg,#eff6ff_0%,#f8fafc_36%,#f8fafc_100%)] px-3 py-3 md:px-6 md:py-6">
-      <div className="w-full max-w-9xl mx-auto space-y-5">
+    <main className="min-h-screen bg-[linear-gradient(180deg,#eff6ff_0%,#f8fafc_34%,#f8fafc_100%)] px-3 py-3 sm:px-4 md:px-6 md:py-6">
+      <div className="w-full max-w-[1600px] mx-auto space-y-5">
 
         {/* ================= HEADER ================= */}
-        <section className="overflow-hidden rounded-3xl border border-blue-100 bg-white ">
+        <section className="overflow-hidden rounded-3xl border border-blue-100 bg-white shadow-[0_12px_36px_rgba(37,99,235,0.08)]">
 
           <div className="relative bg-gradient-to-r from-blue-700 via-indigo-700 to-sky-600 px-4 py-5 md:px-6 md:py-6">
             <div className="absolute inset-0 opacity-20 bg-[radial-gradient(circle_at_top_right,_white,_transparent_35%)]" />
@@ -183,7 +181,7 @@ export default function DashboardPage() {
                   </p>
 
                   <p className="hidden md:block mt-1 text-sm text-blue-100">
-                    Your daily command center for follow-ups, attendance, meetings and lead activity.
+                    Your daily command center for follow-ups, agent calls, meetings and lead activity.
                   </p>
                 </div>
               </div>
@@ -191,12 +189,6 @@ export default function DashboardPage() {
               {/* RIGHT */}
               <div className="flex items-center justify-between md:justify-end gap-2">
                 <div className="flex items-center gap-2">
-                  <HeaderAction
-                    icon={CalendarCheck}
-                    label="Mark Attendance"
-                    variant="primary"
-                    onClick={() => router.push("/attendance")}
-                  />
 
                   {isAdmin && (
                     <HeaderAction

@@ -1,28 +1,40 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import Image from "next/image";
 import { useAuth } from "@/hooks/useAuth";
 import { signOut } from "firebase/auth";
 import { APP_NAV } from "@/config/appNavigation";
+import { auth } from "@/lib/firebase";
+import { canAccess, getRequiredPermissionForPath } from "@/lib/rolePermissions";
 import { getTitleFromAppNav } from "@/lib/getTitleFromAppNav";
 import { LogOut, ArrowLeft } from "lucide-react";
 
 export default function AppLayout({ children }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const [scrolled, setScrolled] = useState(false);
   const [mounted, setMounted] = useState(false);
 
 
   // const mainRef = useRef(null);
 
+  const visibleNav = useMemo(() => {
+    if (!user) return [];
+    return APP_NAV.filter(module =>
+      module.showInNav && (!module.permission || canAccess(user, module.permission))
+    );
+  }, [user]);
+
   const activeModule = APP_NAV.find(m =>
     pathname?.startsWith(m.base)
   );
+
+  const requiredPermission = getRequiredPermissionForPath(pathname || "");
+  const hasRouteAccess = !requiredPermission || canAccess(user, requiredPermission);
 
   /* =========================
      BACK BUTTON LOGIC (FIXED)
@@ -43,6 +55,11 @@ export default function AppLayout({ children }) {
     if (!pageTitle) return;
     document.title = `${pageTitle} | DreamTrawell Destinations`;
   }, [pageTitle]);
+
+  useEffect(() => {
+    if (loading) return;
+    if (!user) router.replace("/login");
+  }, [user, loading, router]);
 
   const handleLogout = async () => {
     await signOut(auth);
@@ -105,6 +122,26 @@ export default function AppLayout({ children }) {
     return () => window.removeEventListener("scroll", onScroll);
   }, [mounted]);
 
+  if (loading || !user) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50">
+        <div className="rounded-2xl border border-slate-200 bg-white px-5 py-4 text-sm text-slate-500">Loading access...</div>
+      </main>
+    );
+  }
+
+  if (!hasRouteAccess) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
+        <div className="w-full max-w-md rounded-3xl border border-amber-100 bg-white p-8 text-center shadow-sm">
+          <h1 className="text-xl font-semibold text-slate-900">Permission Required</h1>
+          <p className="mt-2 text-sm leading-6 text-slate-500">Your Role & Access settings do not allow this page.</p>
+          <button type="button" onClick={() => router.replace("/profile")} className="mt-6 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white">Open Profile</button>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex">
 
@@ -118,7 +155,7 @@ export default function AppLayout({ children }) {
         "
       >
         <nav className="flex flex-col gap-4">
-          {APP_NAV.filter(n => n.showInNav).map(module => {
+          {visibleNav.map(module => {
             const Icon = module.icon;
             const active = pathname?.startsWith(module.base);
             const isOpen = openMenuId === module.id;
@@ -334,7 +371,7 @@ export default function AppLayout({ children }) {
                 <span className="w-8 h-1.5 rounded-full bg-blue-300" />
               </div>
 
-              {APP_NAV.find(n => n.id === openMobileMenuId)
+              {visibleNav.find(n => n.id === openMobileMenuId)
                 ?.children?.map(sub => {
                   const subActive = pathname === sub.href;
 
@@ -363,7 +400,7 @@ export default function AppLayout({ children }) {
         {/* BOTTOM BAR */}
         <div className="bg-white/95 backdrop-blur border-t border-gray-200">
           <div className="flex justify-around py-3">
-            {APP_NAV.filter(n => n.showInNav).map(module => {
+            {visibleNav.map(module => {
               const Icon = module.icon;
               const active = pathname?.startsWith(module.base);
               const hasChildren = module.children?.length > 0;

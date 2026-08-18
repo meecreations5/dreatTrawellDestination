@@ -11,6 +11,9 @@ import {
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { ENGAGEMENT_OUTCOME_OPTIONS, getOutcomeLabel } from "@/lib/engagementIntentMap";
+import { outcomeToTravelAgentStatus } from "@/lib/travelAgentStatus";
+import { syncTravelAgentStatusFromEngagement } from "@/lib/syncTravelAgentStatusFromEngagement";
 
 import EngagementChip from "@/components/engagement/EngagementChip";
 import AssetPickerModal from "@/components/documents/AssetPickerModal";
@@ -88,7 +91,7 @@ export default function EngagementForm({ agent }) {
     const spoc = agent.spocs[form.spocIndex];
     const assignee = team.find(t => t.uid === form.assignedToUid);
 
-    await addDoc(collection(db, "engagements"), {
+    const engagementRef = await addDoc(collection(db, "engagements"), {
       entityType: "travelAgent",
       agentId: agent.id,
       agentName: agent.agencyName,
@@ -113,7 +116,30 @@ export default function EngagementForm({ agent }) {
       updatedAt: serverTimestamp()
     });
 
-    alert("Engagement saved");
+    let statusSyncResult = null;
+
+    if (outcomeToTravelAgentStatus(form.outcomeCode)) {
+      try {
+        statusSyncResult = await syncTravelAgentStatusFromEngagement({
+          agentId: agent.id,
+          engagementId: engagementRef.id,
+          outcomeCode: form.outcomeCode,
+          outcomeLabel: getOutcomeLabel(form.outcomeCode),
+          user
+        });
+      } catch (error) {
+        console.error(
+          "Engagement saved, but Travel Agent status synchronization failed:",
+          error
+        );
+      }
+    }
+
+    alert(
+      statusSyncResult?.updated
+        ? `Engagement saved. Travel Agent status updated to ${statusSyncResult.statusLabel}.`
+        : "Engagement saved"
+    );
 
     setForm({
       ...form,
@@ -231,16 +257,25 @@ export default function EngagementForm({ agent }) {
           <select
             className="mui-input"
             value={form.outcomeCode}
-            onChange={e =>
-              setForm({ ...form, outcomeCode: e.target.value })
-            }
+            onChange={e => {
+              const nextOutcomeCode = e.target.value;
+              const closesAgent = Boolean(
+                outcomeToTravelAgentStatus(nextOutcomeCode)
+              );
+
+              setForm({
+                ...form,
+                outcomeCode: nextOutcomeCode,
+                scheduledAt: closesAgent ? "" : form.scheduledAt
+              });
+            }}
           >
             <option value="">Select Outcome</option>
-            <option value="call_not_picked">Call Not Picked</option>
-            <option value="intro_done">Introduction Done</option>
-            <option value="profile_shared">Company Profile Shared</option>
-            <option value="followup_required">Follow-up Required</option>
-            <option value="general_update">General Update</option>
+            {ENGAGEMENT_OUTCOME_OPTIONS.map(outcome => (
+              <option key={outcome.key} value={outcome.key}>
+                {outcome.label}
+              </option>
+            ))}
           </select>
         </Field>
 
@@ -254,16 +289,22 @@ export default function EngagementForm({ agent }) {
           />
         </Field>
 
-        <Field label="Schedule Follow-up">
-          <input
-            type="datetime-local"
-            className="mui-input"
-            value={form.scheduledAt}
-            onChange={e =>
-              setForm({ ...form, scheduledAt: e.target.value })
-            }
-          />
-        </Field>
+        {!outcomeToTravelAgentStatus(form.outcomeCode) ? (
+          <Field label="Schedule Follow-up">
+            <input
+              type="datetime-local"
+              className="mui-input"
+              value={form.scheduledAt}
+              onChange={e =>
+                setForm({ ...form, scheduledAt: e.target.value })
+              }
+            />
+          </Field>
+        ) : (
+          <p className="rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+            This outcome updates the Travel Agent master status and stops pending follow-ups.
+          </p>
+        )}
 
         <Field label="Assign To">
           <select

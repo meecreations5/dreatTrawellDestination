@@ -1,34 +1,26 @@
 // app/layout.js
 import "./globals.css";
-
-/* =========================
-   METADATA
-========================== */
+import PageTitleManager from "@/components/layout/PageTitleManager";
 
 export const metadata = {
-  title: "DreamTrawell Destinations",
-  description: "DreamTrawell Destinations App",
+  title: {
+    default: "Dream Trawell CRM",
+    template: "%s | Dream Trawell"
+  },
+  description: "Dream Trawell Destinations CRM for travel-agent engagement, leads, meetings and quotations.",
+  applicationName: "Dream Trawell CRM",
   manifest: "/manifest.json",
-  icons: {
-    icon: [
-      { url: "/favicon-16x16.png", sizes: "16x16", type: "image/png" },
-      { url: "/favicon-32x32.png", sizes: "32x32", type: "image/png" }
-    ],
-    apple: "/apple-touch-icon.png",
-    shortcut: "/favicon.ico"
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Dream Trawell CRM"
   }
 };
 
-/* =========================
-   VIEWPORT (THEME COLOR)
-========================== */
 export const viewport = {
   themeColor: "#2563EB"
 };
 
-/* =========================
-   SERVICE WORKER REGISTER
-========================== */
 function ServiceWorkerRegister() {
   return (
     <script
@@ -36,7 +28,12 @@ function ServiceWorkerRegister() {
         __html: `
           if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-              navigator.serviceWorker.register('/sw.js');
+              const register = () => navigator.serviceWorker.register('/sw.js');
+              if ('requestIdleCallback' in window) {
+                window.requestIdleCallback(register, { timeout: 3000 });
+              } else {
+                setTimeout(register, 750);
+              }
             });
           }
         `
@@ -45,29 +42,17 @@ function ServiceWorkerRegister() {
   );
 }
 
-
-
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <head>
-        {/* iOS PWA SUPPORT */}
-        <meta name="apple-mobile-web-app-capable" content="yes" />
-        <meta
-          name="apple-mobile-web-app-status-bar-style"
-          content="default"
-        />
-        <meta
-          name="apple-mobile-web-app-title"
-          content="Dashboard"
-        />
-        <link
-          rel="apple-touch-icon"
-          href="/icons/icon-192.png"
-        />
+        <link rel="preconnect" href="https://firestore.googleapis.com" />
+        <link rel="dns-prefetch" href="//firestore.googleapis.com" />
+        <link rel="dns-prefetch" href="//identitytoolkit.googleapis.com" />
       </head>
 
       <body className="bg-gray-900 min-h-screen">
+        <PageTitleManager />
         {children}
         <ServiceWorkerRegister />
       </body>

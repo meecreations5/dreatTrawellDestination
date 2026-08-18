@@ -28,6 +28,12 @@ import {
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import {
+  getLeadOwner,
+  isLeadAssignedToUser as isLeadCurrentlyAssignedToUser,
+  isLeadOwnedByUser
+} from "@/lib/leadOwnership";
+import { LEAD_STAGE_OPTIONS, normalizeLeadStage } from "@/lib/leadStages";
 
 import CardSkeleton from "@/components/ui/CardSkeleton";
 import EmptyState from "@/components/ui/EmptyState";
@@ -39,7 +45,7 @@ const DEFAULT_FILTERS = {
   search: "",
   ownership: "",
   stage: "",
-  health: "",
+  followUp: "",
   dateFrom: "",
   dateTo: ""
 };
@@ -113,6 +119,24 @@ const isSameDay = (a, b) => {
   );
 };
 
+const getLeadNextActionDate = lead =>
+  getValidDate(
+    lead?.nextActionDueAt ||
+    lead?.nextFollowUpAt ||
+    lead?.followUpAt ||
+    lead?.nextActionDate
+  );
+
+const getFollowUpBucket = lead => {
+  const due = getLeadNextActionDate(lead);
+  if (!due) return "none";
+
+  const now = new Date();
+  if (isSameDay(due, now)) return "today";
+  if (due < now) return "overdue";
+  return "upcoming";
+};
+
 const formatDate = value => {
   const date = getValidDate(value);
   if (!date) return "—";
@@ -165,28 +189,11 @@ const valueMatchesUser = (value, user) => {
 };
 
 const isLeadCreatedByUser = (lead, user) => {
-  return (
-    valueMatchesUser(lead.createdByUid, user) ||
-    valueMatchesUser(lead.createdBy, user) ||
-    valueMatchesUser(lead.createdByUser, user) ||
-    valueMatchesUser(lead.createdByUserId, user) ||
-    valueMatchesUser(lead.creatorUid, user) ||
-    normalizeEmail(lead.createdByEmail) === getUserEmail(user) ||
-    normalizeEmail(lead.creatorEmail) === getUserEmail(user)
-  );
+  return isLeadOwnedByUser(lead, user);
 };
 
 const isLeadAssignedToUser = (lead, user) => {
-  return (
-    valueMatchesUser(lead.assignedToUid, user) ||
-    valueMatchesUser(lead.assignedTo, user) ||
-    valueMatchesUser(lead.ownerUid, user) ||
-    valueMatchesUser(lead.assignedToUser, user) ||
-    valueMatchesUser(lead.accountManagerUid, user) ||
-    normalizeEmail(lead.assignedToEmail) === getUserEmail(user) ||
-    normalizeEmail(lead.assigneeEmail) === getUserEmail(user) ||
-    normalizeEmail(lead.teamMemberEmail) === getUserEmail(user)
-  );
+  return isLeadCurrentlyAssignedToUser(lead, user);
 };
 
 const isLeadAssignedByUser = (lead, user) => {
@@ -288,12 +295,7 @@ const isDealLostLead = lead => {
    LEAD HEALTH
 ========================= */
 function getLeadHealth(lead) {
-  const due = getValidDate(
-    lead?.nextActionDueAt ||
-      lead?.nextFollowUpAt ||
-      lead?.followUpAt ||
-      lead?.nextActionDate
-  );
+  const due = getLeadNextActionDate(lead);
 
   if (!due) return "healthy";
 
@@ -344,13 +346,10 @@ const getDestinationName = lead =>
   lead.primaryDestination ||
   "Not Set";
 
-const getOwnerName = lead =>
-  lead.assignedToName ||
-  lead.ownerName ||
-  lead.accountManagerName ||
-  lead.assignedToEmail ||
-  lead.assignedTo ||
-  "Unassigned";
+const getOwnerName = lead => {
+  const owner = getLeadOwner(lead);
+  return owner.name || owner.email || "Unknown creator";
+};
 
 /* =========================
    UI COMPONENTS
@@ -479,7 +478,7 @@ function OwnershipBadges({ lead, user }) {
     <>
       {createdByMe && (
         <span className="rounded-full bg-blue-50 border border-blue-100 px-2.5 py-1 text-xs font-medium text-blue-700">
-          Created by me
+          Owned by me
         </span>
       )}
 
@@ -756,12 +755,6 @@ export default function LeadDashboardPage() {
   /* =========================
      FILTER OPTIONS
   ========================== */
-  const stageOptions = useMemo(() => {
-    return Array.from(
-      new Set(leads.map(lead => lead.stage).filter(Boolean))
-    ).sort();
-  }, [leads]);
-
   const activeFilterCount = useMemo(() => {
     return Object.values(filters).filter(value =>
       Boolean(String(value || "").trim())
@@ -793,13 +786,11 @@ export default function LeadDashboardPage() {
 
     return leads.filter(lead => {
       const createdDate = getValidDate(lead.createdAt);
-      const health = getLeadHealth(lead);
+      const followUp = getFollowUpBucket(lead);
 
       const createdByMe = isLeadCreatedByUser(lead, user);
       const assignedToMe = isLeadAssignedToUser(lead, user);
       const assignedByMe = isLeadAssignedByUser(lead, user);
-      const dealWon = isDealWonLead(lead);
-      const dealLost = isDealLostLead(lead);
 
       if ((fromDate || toDate) && !createdDate) return false;
       if (fromDate && createdDate < fromDate) return false;
@@ -817,19 +808,11 @@ export default function LeadDashboardPage() {
         return false;
       }
 
-      if (filters.ownership === "deal_won" && !dealWon) {
+      if (filters.stage && normalizeLeadStage(lead.stage) !== filters.stage) {
         return false;
       }
 
-      if (filters.ownership === "deal_lost" && !dealLost) {
-        return false;
-      }
-
-      if (filters.stage && lead.stage !== filters.stage) {
-        return false;
-      }
-
-      if (filters.health && health !== filters.health) {
+      if (filters.followUp && followUp !== filters.followUp) {
         return false;
       }
 
@@ -1111,7 +1094,7 @@ export default function LeadDashboardPage() {
 
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                Ownership
+                Lead Scope
               </label>
 
               <select
@@ -1121,12 +1104,10 @@ export default function LeadDashboardPage() {
                 }
                 className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
               >
-                <option value="">All User Leads</option>
-                <option value="created_by_me">Created By Me</option>
-                <option value="assigned_to_me">Assigned To Me</option>
+                <option value="">All My Relevant Leads</option>
+                <option value="created_by_me">Owned By Me</option>
+                <option value="assigned_to_me">Assigned to Me</option>
                 <option value="assigned_by_me">Assigned By Me</option>
-                <option value="deal_won">Deal Won</option>
-                <option value="deal_lost">Deal Lost</option>
               </select>
             </div>
 
@@ -1144,9 +1125,9 @@ export default function LeadDashboardPage() {
               >
                 <option value="">All Stages</option>
 
-                {stageOptions.map(stage => (
-                  <option key={stage} value={stage}>
-                    {formatLabel(stage)}
+                {LEAD_STAGE_OPTIONS.map(option => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
                   </option>
                 ))}
               </select>
@@ -1154,26 +1135,27 @@ export default function LeadDashboardPage() {
 
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                Health
+                Follow-up
               </label>
 
               <select
-                value={filters.health}
+                value={filters.followUp}
                 onChange={e =>
-                  updateFilter("health", e.target.value)
+                  updateFilter("followUp", e.target.value)
                 }
                 className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
               >
-                <option value="">All Health</option>
-                <option value="healthy">Healthy</option>
-                <option value="at_risk">Needs Attention</option>
+                <option value="">All Follow-ups</option>
+                <option value="today">Due Today</option>
                 <option value="overdue">Overdue</option>
+                <option value="upcoming">Upcoming</option>
+                <option value="none">No Next Action</option>
               </select>
             </div>
 
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                From Date
+                Created From
               </label>
 
               <input
@@ -1188,7 +1170,7 @@ export default function LeadDashboardPage() {
 
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                To Date
+                Created To
               </label>
 
               <input
@@ -1274,23 +1256,23 @@ export default function LeadDashboardPage() {
             icon={Target}
             label="Total User Leads"
             value={summary.total}
-            helper="Created, assigned or assigned by you"
+            helper="Owned, assigned or delegated by you"
             tone="blue"
           />
 
           <KpiCard
             icon={UserPlus}
-            label="Created By Me"
+            label="Owned By Me"
             value={summary.createdByMe}
-            helper="Leads originally created by you"
+            helper="Permanent creator credit"
             tone="emerald"
           />
 
           <KpiCard
             icon={UserCheck}
-            label="Assigned To Me"
+            label="Assigned Workload"
             value={summary.assignedToMe}
-            helper="Leads currently assigned to you"
+            helper="Current follow-up responsibility"
             tone="purple"
           />
 
@@ -1431,7 +1413,7 @@ export default function LeadDashboardPage() {
           <div className="xl:col-span-4 space-y-5">
             <SectionCard
               title="Lead Owners"
-              subtitle="Assigned lead ownership"
+              subtitle="Permanent creator credit"
             >
               {summary.ownerRows.length === 0 ? (
                 <EmptyMiniState title="No owner data" />

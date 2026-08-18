@@ -4,35 +4,26 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Lock, ShieldAlert } from "lucide-react";
+import { canAccess, canEnterAdminArea } from "@/lib/rolePermissions";
 
 export default function AdminGuard({ children, permission }) {
   const { user, loading } = useAuth();
   const router = useRouter();
   const [ready, setReady] = useState(false);
 
-  const isSuperAdmin =
-    user?.role === "super_admin" || user?.isSuperAdmin === true;
-
-  const isAdmin =
-    isSuperAdmin ||
-    user?.role === "admin" ||
-    user?.isAdmin === true;
-
-  const hasPermission =
-    isSuperAdmin ||
-    !permission ||
-    user?.permissions?.[permission] === true;
+  const hasAdminAreaAccess = canEnterAdminArea(user);
+  const hasPermission = !permission || canAccess(user, permission);
 
   useEffect(() => {
     if (loading) return;
 
     if (!user) {
-      router.replace("/admin/login");
+      router.replace("/login");
       return;
     }
 
     if (user.active === false) {
-      router.replace("/admin/login");
+      router.replace("/login");
       return;
     }
 
@@ -64,22 +55,17 @@ export default function AdminGuard({ children, permission }) {
     );
   }
 
-  if (!isAdmin) {
+  if (!hasAdminAreaAccess) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-gray-50 p-6">
         <div className="w-full max-w-md rounded-3xl border border-red-100 bg-white p-8 text-center shadow-sm">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-red-50 text-red-600">
             <ShieldAlert className="h-7 w-7" />
           </div>
-
-          <h1 className="text-xl font-semibold text-gray-900">
-            Access Denied
-          </h1>
-
+          <h1 className="text-xl font-semibold text-gray-900">Access Denied</h1>
           <p className="mt-2 text-sm leading-6 text-gray-500">
-            You do not have admin access to view this page.
+            You do not have access to the admin workspace.
           </p>
-
           <button
             type="button"
             onClick={() => router.replace("/dashboard")}
@@ -100,15 +86,10 @@ export default function AdminGuard({ children, permission }) {
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
             <Lock className="h-7 w-7" />
           </div>
-
-          <h1 className="text-xl font-semibold text-gray-900">
-            Permission Required
-          </h1>
-
+          <h1 className="text-xl font-semibold text-gray-900">Permission Required</h1>
           <p className="mt-2 text-sm leading-6 text-gray-500">
-            Your role does not have permission to access this module.
+            Your effective access does not allow this module or action.
           </p>
-
           <button
             type="button"
             onClick={() => router.replace("/admin")}

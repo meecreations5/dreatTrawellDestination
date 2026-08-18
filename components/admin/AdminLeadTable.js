@@ -14,9 +14,13 @@ import {
 } from "lucide-react";
 
 import LeadStatusChip from "@/components/leads/LeadStatusChip";
+import { LeadPotentialBadge } from "@/components/leads/LeadPotentialControl";
 import AssignLeadModal from "@/components/leads/AssignLeadModal";
 import { reopenLead } from "@/lib/reopenLead";
 import { useAuth } from "@/hooks/useAuth";
+import { getLeadOwner as getLeadOwnerIdentity } from "@/lib/leadOwnership";
+import { formatLeadAge, getLeadAging } from "@/lib/leadAging";
+import { formatLeadTravelRange, getLeadTravelCountdown, getLeadTravelStartDate } from "@/lib/leadTravelDates";
 
 const normalizeRole = value =>
   String(value || "")
@@ -75,10 +79,16 @@ const getCustomerName = lead =>
   "Unnamed customer";
 
 const getAssignedName = lead =>
-  lead.assignedTo ||
   lead.assignedToName ||
+  lead.assignedTo ||
   lead.assignedUserName ||
+  lead.assignedToEmail ||
   "Unassigned";
+
+const getOwnerName = lead =>
+  getLeadOwnerIdentity(lead)?.name ||
+  getLeadOwnerIdentity(lead)?.email ||
+  "Legacy creator";
 
 const getLeadHealth = lead => {
   const status = getLeadStatus(lead);
@@ -182,14 +192,16 @@ export default function AdminLeadTable({
     <>
       <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
         <div className="overflow-x-auto">
-          <table className="min-w-[1120px] w-full text-sm">
+          <table className="min-w-[1360px] w-full text-sm">
             <thead className="bg-gray-50/80 text-xs text-gray-500">
               <tr className="border-b border-gray-100">
                 <th className="w-10 p-3 text-center" />
                 <th className="p-3 text-left">Lead</th>
                 <th className="p-3 text-left">Customer / Travel</th>
                 <th className="p-3 text-left">Stage</th>
-                <th className="p-3 text-left">Assigned</th>
+                <th className="p-3 text-left">Owner</th>
+                <th className="p-3 text-left">Assignee</th>
+                <th className="p-3 text-left">Travel Date</th>
                 <th className="p-3 text-left">Next Action</th>
                 <th className="p-3 text-left">Health</th>
                 <th className="p-3 text-left">Status</th>
@@ -199,14 +211,15 @@ export default function AdminLeadTable({
 
             <tbody>
               {leads.map(lead => {
-                const next = toDate(lead.nextActionAt);
+                const aging = getLeadAging(lead);
+                const next = aging.nextActionAt;
                 const status = getLeadStatus(lead);
                 const health = getLeadHealth(lead);
                 const HealthIcon = health.icon;
 
-                const isClosed =
-                  lead.stage === "closed_won" ||
-                  lead.stage === "closed_lost";
+                const isClosed = aging.terminal;
+                const travelStart = getLeadTravelStartDate(lead);
+                const travelCountdown = getLeadTravelCountdown(lead);
 
                 const checked = selected.includes(lead.id);
                 const inactive = status === "inactive";
@@ -255,11 +268,32 @@ export default function AdminLeadTable({
                     </td>
 
                     <td className="p-3">
-                      <LeadStatusChip stage={lead.stage} />
+                      <div className="space-y-1.5">
+                        <LeadStatusChip stage={lead.stage} />
+                        <LeadPotentialBadge lead={lead} />
+                        <p className="text-[10px] text-slate-400">Age {formatLeadAge(aging.ageDays)} · Stage {formatLeadAge(aging.stageAgeDays)}</p>
+                      </div>
                     </td>
 
-                    <td className="p-3 text-xs text-gray-700">
-                      {getAssignedName(lead)}
+                    <td className="p-3 text-xs">
+                      <p className="font-medium text-gray-700">{getOwnerName(lead)}</p>
+                      <p className="mt-0.5 text-[10px] text-gray-400">Permanent creator credit</p>
+                    </td>
+
+                    <td className="p-3 text-xs">
+                      <p className="font-medium text-gray-700">{getAssignedName(lead)}</p>
+                      <p className="mt-0.5 text-[10px] text-gray-400">Current workload</p>
+                    </td>
+
+                    <td className="p-3 text-xs">
+                      {travelStart ? (
+                        <>
+                          <p className="font-medium text-slate-700">{formatLeadTravelRange(lead, { short: true })}</p>
+                          <p className={`mt-0.5 text-[10px] ${travelCountdown.key === "past" ? "text-red-600" : travelCountdown.days != null && travelCountdown.days <= 7 ? "text-amber-700" : "text-slate-400"}`}>{travelCountdown.label}</p>
+                        </>
+                      ) : (
+                        <span className="text-[11px] font-medium text-amber-700">Missing</span>
+                      )}
                     </td>
 
                     <td className="p-3 text-xs">

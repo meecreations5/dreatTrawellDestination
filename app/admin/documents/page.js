@@ -20,6 +20,7 @@ import {
   uploadBytes
 } from "firebase/storage";
 import { useAuth } from "@/hooks/useAuth";
+import { canAccess } from "@/lib/rolePermissions";
 import CheckFiles from "./CheckFiles";
 import AssetCategoryManager from "./AssetCategoryManager";
 import {
@@ -488,6 +489,9 @@ function defaultFormState(categoryId = "") {
 
 export default function DocumentsPage() {
   const { user } = useAuth(true);
+  const canUploadDocuments = canAccess(user, "documents.upload");
+  const canEditDocuments = canAccess(user, "documents.edit");
+  const canDeleteDocuments = canAccess(user, "documents.delete");
 
   const [documents, setDocuments] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -724,6 +728,10 @@ export default function DocumentsPage() {
     category,
     versionNote
   }) => {
+    if (!canUploadDocuments) {
+      throw new Error("You do not have permission to upload documents.");
+    }
+
     const cleanedName = safeFileName(file.name);
     const categorySlug =
       category?.slug || createSlug(category?.name || "uncategorized");
@@ -768,6 +776,11 @@ export default function DocumentsPage() {
      CREATE ASSET
   ========================= */
   const createDocument = async () => {
+    if (!canUploadDocuments) {
+      setPageError("You do not have permission to upload documents.");
+      return;
+    }
+
     const nextErrors = {};
 
     const name = form.name.trim();
@@ -912,6 +925,10 @@ export default function DocumentsPage() {
      UPDATE META
   ========================= */
   const saveMeta = async (asset, updates) => {
+    if (!canEditDocuments) {
+      setPageError("You do not have permission to edit documents.");
+      return;
+    }
     setPageError("");
 
     try {
@@ -999,6 +1016,10 @@ export default function DocumentsPage() {
      Soft delete only
   ========================= */
   const deleteAsset = async asset => {
+    if (!canDeleteDocuments) {
+      setPageError("You do not have permission to delete documents.");
+      return;
+    }
     const assetName = asset.title || asset.name || "this asset";
 
     const confirmed = window.confirm(
@@ -1052,6 +1073,10 @@ export default function DocumentsPage() {
      NEW VERSION
   ========================= */
   const uploadNewVersion = async asset => {
+    if (!canUploadDocuments) {
+      setPageError("You do not have permission to upload documents.");
+      return;
+    }
     const file = versionFiles[asset.id];
     const fileError = validateFile(file, asset.assetType);
 
@@ -1594,7 +1619,7 @@ export default function DocumentsPage() {
 
               <button
                 onClick={createDocument}
-                disabled={saving || activeCategories.length === 0}
+                disabled={saving || !canUploadDocuments || activeCategories.length === 0}
                 className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
               >
                 <UploadCloud className="h-4 w-4" />
@@ -2283,6 +2308,7 @@ export default function DocumentsPage() {
 
                             <button
                               onClick={() => deleteAsset(asset)}
+                              disabled={!canDeleteDocuments}
                               disabled={isDeleting}
                               className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-60"
                             >
@@ -2331,6 +2357,7 @@ export default function DocumentsPage() {
 
                                 <button
                                   onClick={() => uploadNewVersion(asset)}
+                                  disabled={!canUploadDocuments}
                                   disabled={isUploading}
                                   className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-60"
                                 >

@@ -1,31 +1,45 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo } from "react";
+import { CalendarClock } from "lucide-react";
+
+function toDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value?.toDate === "function") return value.toDate();
+  if (typeof value?.seconds === "number") return new Date(value.seconds * 1000);
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
 
 export default function AgentEngagementOverviewTable({
   engagements = [],
-  leads = []
+  leads = [],
+  meetingBase = "/admin/meetings"
 }) {
   const rows = useMemo(() => {
     const map = {};
 
     /* ---------------- ENGAGEMENT SIDE ---------------- */
     engagements.forEach(e => {
-      if (!e.agentId) return;
+      const agentId = e.travelAgentId || e.agentId || e.travelAgentRefId || "";
+      if (!agentId) return;
 
-      if (!map[e.agentId]) {
-        map[e.agentId] = {
-          agentId: e.agentId,
+      if (!map[agentId]) {
+        map[agentId] = {
+          agentId,
           agentName: e.agentName || "—",
           engagementCount: 0,
           destinations: new Set(),
           channels: new Set(),
           lastEngagement: null,
+          lastEngagementId: "",
           leadsCount: 0
         };
       }
 
-      const row = map[e.agentId];
+      const row = map[agentId];
       row.engagementCount += 1;
 
       if (e.channel) row.channels.add(e.channel);
@@ -38,29 +52,32 @@ export default function AgentEngagementOverviewTable({
         row.destinations.add(e.destinationNames);
       }
 
-      const d = e.createdAt?.toDate?.();
-      if (d && (!row.lastEngagement || d > row.lastEngagement)) {
-        row.lastEngagement = d;
+      const d = toDate(e.engagedAt || e.createdAt || e.updatedAt);
+      if (!row.lastEngagementId || (d && (!row.lastEngagement || d > row.lastEngagement))) {
+        row.lastEngagement = d || row.lastEngagement;
+        row.lastEngagementId = e.id || row.lastEngagementId;
       }
     });
 
     /* ---------------- LEADS SIDE ---------------- */
     leads.forEach(l => {
-      if (!l.agentId) return;
+      const agentId = l.travelAgentId || l.agentId || "";
+      if (!agentId) return;
 
-      if (!map[l.agentId]) {
-        map[l.agentId] = {
-          agentId: l.agentId,
+      if (!map[agentId]) {
+        map[agentId] = {
+          agentId,
           agentName: l.agentName || "—",
           engagementCount: 0,
           destinations: new Set(),
           channels: new Set(),
           lastEngagement: null,
+          lastEngagementId: "",
           leadsCount: 0
         };
       }
 
-      map[l.agentId].leadsCount += 1;
+      map[agentId].leadsCount += 1;
     });
 
     return Object.values(map)
@@ -101,6 +118,7 @@ export default function AgentEngagementOverviewTable({
             <th className="px-3 py-2 text-left">Channels</th>
             <th className="px-3 py-2 text-left">Destinations</th>
             <th className="px-3 py-2 text-center">Last Engagement</th>
+            <th className="px-3 py-2 text-right">Action</th>
           </tr>
         </thead>
 
@@ -156,6 +174,16 @@ export default function AgentEngagementOverviewTable({
                 {r.lastEngagement
                   ? r.lastEngagement.toLocaleDateString()
                   : "—"}
+              </td>
+
+              <td className="px-3 py-2 text-right">
+                <Link
+                  href={`${meetingBase}?agentId=${encodeURIComponent(r.agentId)}${r.lastEngagementId ? `&engagementId=${encodeURIComponent(r.lastEngagementId)}` : ""}`}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-100"
+                >
+                  <CalendarClock size={13} />
+                  Meeting
+                </Link>
               </td>
             </tr>
           ))}
