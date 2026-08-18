@@ -1000,7 +1000,17 @@ export default function TravelAgentDetailPage() {
                 )}
                 {assigningToSelf ? "Assigning..." : "Assign to Me"}
               </button>
-            ) : null}
+            ) : (
+              <div
+                className="inline-flex min-w-0 items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700"
+                title={agent.assignedToName || agent.assignedTo || "Already Assigned"}
+              >
+                <UserCheck size={16} className="shrink-0" />
+                <span className="truncate">
+                  {agent.assignedToName ? `Already Assigned • ${agent.assignedToName}` : "Already Assigned"}
+                </span>
+              </div>
+            )}
 
             <Link
               href={`/engagements/travel-agent/${agentId}`}

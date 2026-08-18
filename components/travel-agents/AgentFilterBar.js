@@ -25,9 +25,18 @@ export default function AgentFilterBar({
 
   return (
     <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-      <div className="mb-3">
-        <p className="text-sm font-semibold text-gray-900">Travel Agent Filters</p>
-        <p className="mt-0.5 text-xs text-gray-500">Potential is commercial priority. Location cascades State → City → Sub Area.</p>
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-gray-900">Travel Agent Filters</p>
+          <p className="mt-0.5 text-xs text-gray-500">Potential is commercial priority. Location cascades State → City → Sub Area.</p>
+        </div>
+        <button
+          type="button"
+          onClick={onClear}
+          className="inline-flex h-9 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-gray-600 hover:bg-gray-50"
+        >
+          Clear Filters
+        </button>
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
@@ -91,9 +100,6 @@ export default function AgentFilterBar({
           </select>
         </div>
 
-        <div className="flex items-end">
-          <button type="button" onClick={onClear} className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50">Clear Filters</button>
-        </div>
       </div>
     </div>
   );

@@ -625,7 +625,17 @@ function AgentCard({ agent, lastEngagement, leadCount, city, onAssignToMe, assig
             {assigning ? <Loader2 size={15} className="animate-spin" /> : <UserCheck size={15} />}
             {assigning ? "Assigning..." : "Assign to Me"}
           </button>
-        ) : null}
+        ) : (
+          <div
+            className="inline-flex w-full min-w-0 items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm font-semibold text-emerald-700"
+            title={agent.assignedToName || agent.assignedTo || "Already Assigned"}
+          >
+            <UserCheck size={15} className="shrink-0" />
+            <span className="truncate">
+              {agent.assignedToName ? `Already Assigned • ${agent.assignedToName}` : "Already Assigned"}
+            </span>
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-2">
           <Link
@@ -872,7 +882,17 @@ function AgentTable({
                           )}
                           {assigningAgentId === agent.id ? "Assigning..." : "Assign to Me"}
                         </button>
-                      ) : null}
+                      ) : (
+                        <span
+                          className="inline-flex max-w-[190px] items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700"
+                          title={agent.assignedToName || agent.assignedTo || "Already Assigned"}
+                        >
+                          <UserCheck size={13} className="shrink-0" />
+                          <span className="truncate">
+                            {agent.assignedToName ? `Already Assigned • ${agent.assignedToName}` : "Already Assigned"}
+                          </span>
+                        </span>
+                      )}
 
                       <Link
                         href={`/travel-agents/${agent.id}`}
@@ -1581,8 +1601,8 @@ export default function UserTravelAgentsPage() {
           />
         </div>
 
-        {/* FILTER AREA */}
-        <div className="sticky top-0 z-20 space-y-3 bg-gray-50/95 py-3 backdrop-blur">
+        {/* FILTER AREA - normal document flow prevents large filter panel from covering cards on shorter screens */}
+        <div className="space-y-3 py-3">
           <AgentTabs
             filters={filters}
             setFilters={setFilters}

@@ -17,12 +17,15 @@ import {
   Building2,
   CheckCircle2,
   AlertTriangle,
-  ExternalLink
+  ExternalLink,
+  Loader2,
+  UserCheck
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { canAccessRecord } from "@/lib/rolePermissions";
+import { assignTravelAgent, isTravelAgentAssigned } from "@/lib/assignTravelAgent";
 
 const TRAVEL_AGENT_COLLECTIONS = [
   "travelAgents",
@@ -184,6 +187,7 @@ function getProfileCompletion(agent) {
 export default function EngagementDetailPage() {
   const { engagementId } = useParams();
   const router = useRouter();
+  const { user, loading: authLoading } = useAuth();
 
   const [engagement, setEngagement] = useState(null);
   const [travelAgent, setTravelAgent] = useState(null);
@@ -192,6 +196,8 @@ export default function EngagementDetailPage() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState("");
+  const [assigningToSelf, setAssigningToSelf] = useState(false);
+  const [assignmentMessage, setAssignmentMessage] = useState("");
 
   useEffect(() => {
     if (!engagementId) {
@@ -298,6 +304,52 @@ export default function EngagementDetailPage() {
       active = false;
     };
   }, [engagement]);
+
+  async function handleAssignToMe() {
+    if (!travelAgent?.id || !user || assigningToSelf || isTravelAgentAssigned(travelAgent)) {
+      return;
+    }
+
+    setAssigningToSelf(true);
+    setAssignmentMessage("");
+
+    try {
+      const result = await assignTravelAgent({
+        agent: travelAgent,
+        assignee: user,
+        currentUser: user,
+        assignedRole: "Account Manager",
+        assignedTeam:
+          user.teamName ||
+          user.team ||
+          user.departmentName ||
+          user.department ||
+          "",
+        assignmentPriority: travelAgent.assignmentPriority || "Medium",
+        assignmentReason: "Self assigned from Team Engagement Detail"
+      });
+
+      setTravelAgent(current => ({
+        ...current,
+        assignedToUid: result.assignedToUid,
+        assignedToName: result.assignedToName,
+        assignedToEmail: result.assignedToEmail,
+        assignedTeam: result.assignedTeam,
+        assignedRole: result.assignedRole,
+        assignmentPriority: result.assignmentPriority,
+        assignmentStatus: result.assignmentStatus,
+        assignedTo: result.assignedToEmail || result.assignedToName,
+        accountManagerUid: result.assignedToUid
+      }));
+
+      setAssignmentMessage("Travel Agent assigned to you.");
+    } catch (err) {
+      console.error("Travel Agent self-assignment failed:", err);
+      setAssignmentMessage(err?.message || "Unable to assign this Travel Agent to you.");
+    } finally {
+      setAssigningToSelf(false);
+    }
+  }
 
   if (loading || authLoading) {
     return (
@@ -456,6 +508,34 @@ export default function EngagementDetailPage() {
         </div>
 
         <div className="flex flex-wrap gap-2">
+          {travelAgent && !isTravelAgentAssigned(travelAgent) ? (
+            <button
+              type="button"
+              onClick={handleAssignToMe}
+              disabled={assigningToSelf}
+              className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {assigningToSelf ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <UserCheck size={14} />
+              )}
+              {assigningToSelf ? "Assigning..." : "Assign to Me"}
+            </button>
+          ) : travelAgent && isTravelAgentAssigned(travelAgent) ? (
+            <span
+              className="inline-flex max-w-full items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700"
+              title={travelAgent.assignedToName || travelAgent.assignedTo || "Already Assigned"}
+            >
+              <UserCheck size={14} className="shrink-0" />
+              <span className="truncate">
+                {travelAgent.assignedToName
+                  ? `Already Assigned • ${travelAgent.assignedToName}`
+                  : "Already Assigned"}
+              </span>
+            </span>
+          ) : null}
+
           {travelAgentId ? (
             <Link
               href={`/meetings?agentId=${encodeURIComponent(travelAgentId)}&engagementId=${encodeURIComponent(engagement.id)}`}
@@ -476,6 +556,12 @@ export default function EngagementDetailPage() {
           </span>
         </div>
       </div>
+
+      {assignmentMessage ? (
+        <div className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700 shadow-sm">
+          {assignmentMessage}
+        </div>
+      ) : null}
 
       {/* DETAIL CARD */}
       <section className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
