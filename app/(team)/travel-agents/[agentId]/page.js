@@ -1,0 +1,1394 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
+import {
+  doc,
+  getDoc,
+  serverTimestamp,
+  updateDoc
+} from "firebase/firestore";
+
+import { db } from "@/lib/firebase";
+import { useAuth } from "@/hooks/useAuth";
+import { canAccessRecord } from "@/lib/rolePermissions";
+import { assignTravelAgent, isTravelAgentAssigned } from "@/lib/assignTravelAgent";
+import { cancelPendingAgentTasks } from "@/lib/engagementTaskService";
+import {
+  TRAVEL_AGENT_STATUS_OPTIONS,
+  getTravelAgentStatusMeta,
+  normalizeTravelAgentStatus
+} from "@/lib/travelAgentStatus";
+import { TRAVEL_AGENT_POTENTIAL_OPTIONS, getTravelAgentPotentialMeta, normalizeTravelAgentPotential } from "@/lib/travelAgentPotential";
+
+import {
+  ArrowLeft,
+  BadgeCheck,
+  Briefcase,
+  Building2,
+  CheckCircle2,
+  ExternalLink,
+  Globe2,
+  Landmark,
+  Link2,
+  Loader2,
+  Mail,
+  MapPin,
+  MessageCircle,
+  Phone,
+  Route,
+  ShieldCheck,
+  UserCheck,
+  UserRound,
+  Users,
+  AlertTriangle,
+  CalendarClock
+} from "lucide-react";
+
+import TravelChip from "@/components/ui/TravelChip";
+import CardSkeleton from "@/components/ui/CardSkeleton";
+
+/* =========================
+   HELPERS
+========================= */
+function normalize(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function formatLabel(value) {
+  if (!value) return "Not added";
+
+  return String(value)
+    .replaceAll("_", " ")
+    .replaceAll("-", " ")
+    .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function formatCurrency(value) {
+  if (value === null || value === undefined || value === "") {
+    return "Not added";
+  }
+
+  const amount = Number(value);
+
+  if (Number.isNaN(amount)) {
+    return "Not added";
+  }
+
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 0
+  }).format(amount);
+}
+
+function getWebsiteHref(website) {
+  if (!website) return "";
+
+  const value = String(website).trim();
+
+  if (!value) return "";
+
+  if (value.startsWith("http://") || value.startsWith("https://")) {
+    return value;
+  }
+
+  return `https://${value}`;
+}
+
+function getPrimarySpoc(agent) {
+  if (!Array.isArray(agent?.spocs) || agent.spocs.length === 0) {
+    return null;
+  }
+
+  return (
+    agent.spocs.find(spoc => spoc?.isPrimary) ||
+    agent.spocs.find(spoc => normalize(spoc?.status) === "active") ||
+    agent.spocs[0]
+  );
+}
+
+function getAgentPhone(agent, primarySpoc) {
+  return (
+    agent?.genericContact?.phone ||
+    primarySpoc?.mobile ||
+    primarySpoc?.phone ||
+    agent?.phone ||
+    agent?.mobile ||
+    agent?.contactNumber ||
+    agent?.spocMobile ||
+    agent?.whatsappNumber ||
+    ""
+  );
+}
+
+function getAgentEmail(agent, primarySpoc) {
+  return (
+    agent?.genericContact?.email ||
+    primarySpoc?.email ||
+    agent?.email ||
+    agent?.contactEmail ||
+    agent?.spocEmail ||
+    agent?.primaryEmail ||
+    ""
+  );
+}
+
+function getAgentCity(agent) {
+  return (
+    agent?.address?.city ||
+    agent?.city ||
+    agent?.location?.city ||
+    ""
+  );
+}
+
+function getLocationLabel(agent) {
+  const address = agent?.address || {};
+
+  return [
+    address.subArea || address.area || agent?.subArea || agent?.area,
+    address.city || agent?.city,
+    address.state || agent?.state,
+    address.country || agent?.country
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
+function formatAddress(address) {
+  if (!address) return "";
+
+  return [
+    address.line1,
+    address.line2,
+    address.subArea || address.area,
+    [address.city, address.state].filter(Boolean).join(", "),
+    [address.country, address.pincode].filter(Boolean).join(" ")
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function getMapQuery(address) {
+  if (!address) return "";
+
+  return [
+    address.line1,
+    address.line2,
+    address.subArea || address.area,
+    address.city,
+    address.state,
+    address.country,
+    address.pincode
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
+function getDestinations(agent) {
+  if (Array.isArray(agent?.destinations)) {
+    return agent.destinations.filter(d => d?.id || d?.name);
+  }
+
+  if (Array.isArray(agent?.destinationNames)) {
+    return agent.destinationNames
+      .filter(Boolean)
+      .map((name, index) => ({
+        id: `${name}-${index}`,
+        name
+      }));
+  }
+
+  return [];
+}
+
+function getPreferredChannels(agent) {
+  return Object.entries(agent?.preferredCommunication || {}).filter(
+    ([, value]) => value
+  );
+}
+
+function getStatusColor(status) {
+  const value = normalize(status);
+
+  if (value === "active" || value === "approved") return "success";
+  if (value === "inactive" || value === "rejected") return "warning";
+
+  return "neutral";
+}
+
+function getKycColor(status) {
+  const value = normalize(status);
+
+  if (value === "approved" || value === "verified") return "success";
+  if (value === "rejected") return "warning";
+  if (value === "pending") return "warning";
+
+  return "neutral";
+}
+
+function getProfileCompletion(agent) {
+  if (!agent) {
+    return {
+      percent: 0,
+      label: "Profile unavailable",
+      tone: "gray",
+      complete: false,
+      missing: []
+    };
+  }
+
+  const directComplete =
+    agent.profileCompleted ??
+    agent.isProfileComplete ??
+    agent.profileComplete ??
+    agent.isComplete;
+
+  const status = normalize(
+    agent.profileStatus ||
+      agent.profileCompletionStatus ||
+      agent.profileCompleteStatus
+  );
+
+  const directPercent = Number(
+    agent.profileCompletionPercentage ??
+      agent.profileCompletionPercent ??
+      agent.completionPercentage ??
+      agent.profileCompletion ??
+      0
+  );
+
+  if (directComplete === true || ["complete", "completed"].includes(status)) {
+    return {
+      percent: 100,
+      label: "Profile Complete",
+      tone: "green",
+      complete: true,
+      missing: []
+    };
+  }
+
+  if (!Number.isNaN(directPercent) && directPercent >= 100) {
+    return {
+      percent: 100,
+      label: "Profile Complete",
+      tone: "green",
+      complete: true,
+      missing: []
+    };
+  }
+
+  if (!Number.isNaN(directPercent) && directPercent > 0) {
+    return {
+      percent: Math.round(directPercent),
+      label: `${Math.round(directPercent)}% Complete`,
+      tone: directPercent >= 80 ? "green" : directPercent >= 60 ? "amber" : "red",
+      complete: directPercent >= 100,
+      missing: []
+    };
+  }
+
+  const primarySpoc = getPrimarySpoc(agent);
+  const destinations = getDestinations(agent);
+  const preferredChannels = getPreferredChannels(agent);
+
+  const checks = [
+    {
+      label: "Agency name",
+      done: Boolean(agent.agencyName || agent.name)
+    },
+    {
+      label: "Agent code",
+      done: Boolean(agent.agentCode)
+    },
+    {
+      label: "Agency type",
+      done: Boolean(agent.agencyType)
+    },
+    {
+      label: "Relationship stage",
+      done: Boolean(agent.relationshipStage)
+    },
+    {
+      label: "KYC status",
+      done: Boolean(agent.kycStatus)
+    },
+    {
+      label: "City",
+      done: Boolean(agent.address?.city || agent.city)
+    },
+    {
+      label: "Country",
+      done: Boolean(agent.address?.country || agent.country)
+    },
+    {
+      label: "Primary SPOC",
+      done: Boolean(primarySpoc?.name)
+    },
+    {
+      label: "SPOC email",
+      done: Boolean(getAgentEmail(agent, primarySpoc))
+    },
+    {
+      label: "SPOC phone",
+      done: Boolean(getAgentPhone(agent, primarySpoc))
+    },
+    {
+      label: "Destinations",
+      done: destinations.length > 0
+    },
+    {
+      label: "Preferred communication",
+      done: preferredChannels.length > 0
+    }
+  ];
+
+  const completedCount = checks.filter(item => item.done).length;
+  const percent = Math.round((completedCount / checks.length) * 100);
+  const missing = checks
+    .filter(item => !item.done)
+    .map(item => item.label);
+
+  return {
+    percent,
+    label: percent >= 100 ? "Profile Complete" : `${percent}% Complete`,
+    tone: percent >= 80 ? "green" : percent >= 60 ? "amber" : "red",
+    complete: percent >= 100,
+    missing
+  };
+}
+
+/* =========================
+   SMALL UI COMPONENTS
+========================= */
+function SummaryCard({
+  icon: Icon,
+  label,
+  value,
+  helper,
+  tone = "blue"
+}) {
+  const toneMap = {
+    blue: "border-blue-100 bg-blue-50 text-blue-700",
+    emerald: "border-emerald-100 bg-emerald-50 text-emerald-700",
+    amber: "border-amber-100 bg-amber-50 text-amber-700",
+    violet: "border-violet-100 bg-violet-50 text-violet-700",
+    rose: "border-rose-100 bg-rose-50 text-rose-700",
+    green: "border-green-100 bg-green-50 text-green-700",
+    red: "border-red-100 bg-red-50 text-red-700",
+    gray: "border-gray-200 bg-gray-50 text-gray-600"
+  };
+
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white p-4  transition hover:border-blue-100 hover:shadow-md">
+      <div className="flex items-start gap-3">
+        <div
+          className={`rounded-2xl border p-2 ${
+            toneMap[tone] || toneMap.blue
+          }`}
+        >
+          <Icon size={18} />
+        </div>
+
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-gray-500">
+            {label}
+          </p>
+
+          <p className="mt-1 truncate text-sm font-semibold text-gray-950">
+            {value || "Not added"}
+          </p>
+
+          {helper && (
+            <p className="mt-1 text-xs text-gray-400">
+              {helper}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SectionCard({
+  title,
+  icon: Icon,
+  children,
+  tone = "blue"
+}) {
+  const toneMap = {
+    blue: "bg-blue-50 text-blue-700",
+    emerald: "bg-emerald-50 text-emerald-700",
+    amber: "bg-amber-50 text-amber-700",
+    violet: "bg-violet-50 text-violet-700",
+    rose: "bg-rose-50 text-rose-700",
+    slate: "bg-slate-50 text-slate-700",
+    green: "bg-green-50 text-green-700",
+    red: "bg-red-50 text-red-700",
+    gray: "bg-gray-50 text-gray-600"
+  };
+
+  return (
+    <section className="rounded-2xl border border-gray-200 bg-white p-5  transition hover:border-blue-100 hover:shadow-md">
+      <div className="mb-4 flex items-center gap-3">
+        <div
+          className={`rounded-2xl p-2 ${
+            toneMap[tone] || toneMap.blue
+          }`}
+        >
+          <Icon size={17} />
+        </div>
+
+        <div>
+          <h2 className="text-sm font-semibold text-gray-950">
+            {title}
+          </h2>
+        </div>
+      </div>
+
+      {children}
+    </section>
+  );
+}
+
+function InfoRow({ label, value }) {
+  return (
+    <div className="grid grid-cols-1 gap-1 border-b border-gray-100 py-3 last:border-b-0 sm:grid-cols-3 sm:gap-4">
+      <p className="text-xs font-medium uppercase tracking-wide text-gray-400">
+        {label}
+      </p>
+
+      <p className="text-sm text-gray-800 sm:col-span-2">
+        {value || "Not added"}
+      </p>
+    </div>
+  );
+}
+
+function EmptyCardText({ children }) {
+  return (
+    <p className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
+      {children}
+    </p>
+  );
+}
+
+function ProfileCompletionBadge({ completion }) {
+  const toneClasses = {
+    green: "border-green-200 bg-green-50 text-green-700",
+    amber: "border-amber-200 bg-amber-50 text-amber-700",
+    red: "border-red-200 bg-red-50 text-red-700",
+    gray: "border-gray-200 bg-gray-50 text-gray-600"
+  };
+
+  return (
+    <span
+      className={`
+        inline-flex items-center gap-1.5 rounded-full border px-3 py-1
+        text-xs font-semibold
+        ${toneClasses[completion.tone] || toneClasses.gray}
+      `}
+    >
+      {completion.complete ? (
+        <CheckCircle2 size={13} />
+      ) : (
+        <AlertTriangle size={13} />
+      )}
+      {completion.label}
+    </span>
+  );
+}
+
+function ProfileCompletionPanel({ completion }) {
+  const toneMap = {
+    green: {
+      bar: "bg-green-500",
+      text: "text-green-700",
+      bg: "bg-green-50",
+      border: "border-green-100"
+    },
+    amber: {
+      bar: "bg-amber-500",
+      text: "text-amber-700",
+      bg: "bg-amber-50",
+      border: "border-amber-100"
+    },
+    red: {
+      bar: "bg-red-500",
+      text: "text-red-700",
+      bg: "bg-red-50",
+      border: "border-red-100"
+    },
+    gray: {
+      bar: "bg-gray-400",
+      text: "text-gray-600",
+      bg: "bg-gray-50",
+      border: "border-gray-100"
+    }
+  };
+
+  const tone = toneMap[completion.tone] || toneMap.gray;
+
+  return (
+    <div className={`rounded-xl border ${tone.border} ${tone.bg} p-4`}>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-medium text-gray-500">
+            Profile Completion
+          </p>
+
+          <p className={`mt-1 text-lg font-bold ${tone.text}`}>
+            {completion.percent}%
+          </p>
+        </div>
+
+        <ProfileCompletionBadge completion={completion} />
+      </div>
+
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
+        <div
+          className={`h-full rounded-full ${tone.bar}`}
+          style={{
+            width: `${Math.min(Math.max(completion.percent, 0), 100)}%`
+          }}
+        />
+      </div>
+
+      {completion.missing?.length > 0 && (
+        <div className="mt-3">
+          <p className="text-xs font-medium text-gray-600">
+            Missing fields
+          </p>
+
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {completion.missing.slice(0, 5).map(item => (
+              <span
+                key={item}
+                className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-gray-600"
+              >
+                {item}
+              </span>
+            ))}
+
+            {completion.missing.length > 5 && (
+              <span className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-gray-600">
+                +{completion.missing.length - 5} more
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SpocCard({ spoc }) {
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-4  transition hover:border-blue-100 hover:shadow-md">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="truncate text-sm font-semibold text-gray-950">
+              {spoc.name || "Unnamed SPOC"}
+            </p>
+
+            {spoc.isPrimary && (
+              <span className="rounded-full bg-blue-600 px-2 py-0.5 text-[11px] font-medium text-white">
+                Primary
+              </span>
+            )}
+          </div>
+
+          <p className="mt-1 text-xs text-gray-500">
+            {spoc.designation || "Designation not added"}
+          </p>
+        </div>
+
+        {spoc.status && (
+          <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-medium text-gray-600">
+            {formatLabel(spoc.status)}
+          </span>
+        )}
+      </div>
+
+      <div className="mt-3 space-y-2 rounded-xl border border-gray-200 bg-slate-50 px-3 py-3">
+        {spoc.mobile || spoc.phone ? (
+          <a
+            href={`tel:${spoc.mobile || spoc.phone}`}
+            className="flex items-center gap-2 text-xs font-medium text-blue-700 hover:underline"
+          >
+            <Phone size={13} />
+            {spoc.mobile || spoc.phone}
+          </a>
+        ) : (
+          <p className="text-xs text-gray-400">
+            No phone added
+          </p>
+        )}
+
+        {spoc.email ? (
+          <a
+            href={`mailto:${spoc.email}`}
+            className="flex items-center gap-2 truncate text-xs font-medium text-blue-700 hover:underline"
+          >
+            <Mail size={13} />
+            <span className="truncate">{spoc.email}</span>
+          </a>
+        ) : (
+          <p className="text-xs text-gray-400">
+            No email added
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* =========================
+   PAGE
+========================= */
+export default function TravelAgentDetailPage() {
+  const { agentId } = useParams();
+  const router = useRouter();
+  const { user, loading } = useAuth();
+
+  const [agent, setAgent] = useState(null);
+  const [loadingAgent, setLoadingAgent] = useState(true);
+  const [profileCopied, setProfileCopied] = useState(false);
+  const [statusUpdating, setStatusUpdating] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
+  const [potentialUpdating, setPotentialUpdating] = useState(false);
+  const [potentialMessage, setPotentialMessage] = useState("");
+  const [assigningToSelf, setAssigningToSelf] = useState(false);
+  const [assignmentMessage, setAssignmentMessage] = useState("");
+
+  /* ================= LOAD ================= */
+  useEffect(() => {
+    if (loading) return;
+
+    if (!user || !agentId) {
+      setLoadingAgent(false);
+      return;
+    }
+
+    let active = true;
+
+    async function loadAgent() {
+      try {
+        setLoadingAgent(true);
+
+        const snap = await getDoc(doc(db, "travelAgents", agentId));
+
+        if (!active) return;
+
+        if (!snap.exists()) {
+          router.replace("/travel-agents");
+          return;
+        }
+
+        setAgent({
+          id: snap.id,
+          ...snap.data()
+        });
+      } catch (error) {
+        console.error("Travel agent load error:", error);
+        router.replace("/travel-agents");
+      } finally {
+        if (active) {
+          setLoadingAgent(false);
+        }
+      }
+    }
+
+    loadAgent();
+
+    return () => {
+      active = false;
+    };
+  }, [agentId, user, loading, router]);
+
+  /* ================= LOADING ================= */
+  if (loading || loadingAgent) {
+    return (
+      <main className="min-h-screen bg-gray-50">
+        <div className="mx-auto max-w-7xl space-y-4 px-4 py-6">
+          <CardSkeleton />
+          <CardSkeleton />
+          <CardSkeleton />
+        </div>
+      </main>
+    );
+  }
+
+  if (!agent) return null;
+
+  if (!canAccessRecord(user, "travel_agents.view", agent, "travel_agent")) {
+    return (
+      <main className="min-h-screen bg-gray-50 p-6">
+        <div className="mx-auto max-w-7xl rounded-xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-800">
+          This travel agent is outside your permitted data scope.
+        </div>
+      </main>
+    );
+  }
+
+  async function handleAssignToMe() {
+    if (!agent?.id || !user || assigningToSelf || isTravelAgentAssigned(agent)) return;
+
+    setAssigningToSelf(true);
+    setAssignmentMessage("");
+
+    try {
+      const result = await assignTravelAgent({
+        agent,
+        assignee: user,
+        currentUser: user,
+        assignedRole: "Account Manager",
+        assignedTeam:
+          user.teamName ||
+          user.team ||
+          user.departmentName ||
+          user.department ||
+          "",
+        assignmentPriority: agent.assignmentPriority || "Medium",
+        assignmentReason: "Self assigned from Team Travel Agent profile"
+      });
+
+      setAgent(current => ({
+        ...current,
+        assignedToUid: result.assignedToUid,
+        assignedToName: result.assignedToName,
+        assignedToEmail: result.assignedToEmail,
+        assignedTeam: result.assignedTeam,
+        assignedRole: result.assignedRole,
+        assignmentPriority: result.assignmentPriority,
+        assignmentStatus: result.assignmentStatus,
+        assignedTo: result.assignedToEmail || result.assignedToName,
+        accountManagerUid: result.assignedToUid
+      }));
+      setAssignmentMessage("This travel agent is now assigned to you.");
+    } catch (error) {
+      console.error("Travel agent self-assignment failed:", error);
+      setAssignmentMessage(error?.message || "Unable to assign this travel agent to you.");
+    } finally {
+      setAssigningToSelf(false);
+    }
+  }
+
+  async function handleStatusChange(nextStatus) {
+    if (!agent?.id || !user?.uid || statusUpdating) return;
+    if (!canAccessRecord(user, "travel_agents.change_status", agent, "travel_agent")) {
+      setStatusMessage("You do not have permission to change this travel agent status.");
+      return;
+    }
+
+    const meta = getTravelAgentStatusMeta(nextStatus);
+
+    setStatusUpdating(true);
+    setStatusMessage("");
+
+    try {
+      await updateDoc(doc(db, "travelAgents", agent.id), {
+        status: nextStatus,
+        active: nextStatus === "active",
+        statusReason: meta.label,
+        statusUpdatedAt: serverTimestamp(),
+        statusUpdatedByUid: user.uid,
+        statusUpdatedByName:
+          user.name || user.displayName || user.email || "Team member",
+        updatedAt: serverTimestamp()
+      });
+
+      if (meta.contactable === false) {
+        await cancelPendingAgentTasks({
+          agentId: agent.id,
+          user,
+          reason: `Travel agent status changed to ${meta.label}`
+        });
+      }
+
+      setAgent(current => ({
+        ...current,
+        status: nextStatus,
+        active: nextStatus === "active"
+      }));
+
+      setStatusMessage(
+        meta.contactable === false
+          ? `${meta.label} saved. Pending follow-up tasks were cancelled.`
+          : `${meta.label} saved.`
+      );
+    } catch (error) {
+      console.error("Travel agent status update error:", error);
+      setStatusMessage("Unable to update status. Please try again.");
+    } finally {
+      setStatusUpdating(false);
+    }
+  }
+
+  async function handlePotentialChange(nextPotential) {
+    if (!agent?.id || !user?.uid || potentialUpdating) return;
+    if (!canAccessRecord(user, "travel_agents.change_potential", agent, "travel_agent")) {
+      setPotentialMessage("You do not have permission to change this travel agent potential.");
+      return;
+    }
+    const meta = getTravelAgentPotentialMeta(nextPotential);
+    setPotentialUpdating(true);
+    setPotentialMessage("");
+    try {
+      await updateDoc(doc(db, "travelAgents", agent.id), {
+        potentialLevel: nextPotential,
+        travelAgentPotential: nextPotential,
+        potentialUpdatedAt: serverTimestamp(),
+        potentialUpdatedByUid: user.uid,
+        potentialUpdatedByName: user.name || user.displayName || user.email || "Team member",
+        updatedAt: serverTimestamp()
+      });
+      setAgent(current => ({ ...current, potentialLevel: nextPotential, travelAgentPotential: nextPotential }));
+      setPotentialMessage(`${meta.label} saved.`);
+    } catch (error) {
+      console.error("Travel agent potential update error:", error);
+      setPotentialMessage("Unable to update potential. Please try again.");
+    } finally {
+      setPotentialUpdating(false);
+    }
+  }
+
+  /* ================= DERIVED ================= */
+  const destinations = getDestinations(agent);
+  const primarySpoc = getPrimarySpoc(agent);
+  const preferredChannels = getPreferredChannels(agent);
+
+  const primaryPhone = getAgentPhone(agent, primarySpoc);
+  const primaryEmail = getAgentEmail(agent, primarySpoc);
+  const locationLabel = getLocationLabel(agent);
+  const city = getAgentCity(agent);
+  const fullAddress = formatAddress(agent.address);
+  const mapQuery = getMapQuery(agent.address);
+  const websiteHref = getWebsiteHref(agent.website);
+  const completion = getProfileCompletion(agent);
+  const normalizedAgentStatus = normalizeTravelAgentStatus(
+    agent.status,
+    agent.active
+  );
+  const agentStatusMeta = getTravelAgentStatusMeta(
+    normalizedAgentStatus,
+    agent.active
+  );
+  const normalizedAgentPotential = normalizeTravelAgentPotential(agent);
+  const agentPotentialMeta = getTravelAgentPotentialMeta(agent);
+
+  const allSpocs = Array.isArray(agent.spocs) ? agent.spocs : [];
+  const profilePath = `/travel-agents/${agentId}`;
+
+  async function copyProfileLink() {
+    try {
+      const origin =
+        typeof window !== "undefined" ? window.location.origin : "";
+
+      const fullUrl = `${origin}${profilePath}`;
+
+      await navigator.clipboard.writeText(fullUrl);
+
+      setProfileCopied(true);
+
+      window.setTimeout(() => {
+        setProfileCopied(false);
+      }, 1800);
+    } catch (error) {
+      console.error("Unable to copy profile link:", error);
+    }
+  }
+
+  return (
+  <main className="min-h-screen">
+    <div className="mx-auto max-w-9xl space-y-5 px-4 py-6">
+      {/* BACK */}
+      <Link
+        href="/travel-agents"
+        className="inline-flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-blue-700"
+      >
+        <ArrowLeft size={16} />
+        Back to Travel Agents
+      </Link>
+
+      {/* HEADER - SAME STYLE AS TRAVEL AGENT LISTING */}
+      <section className="rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 p-5 ">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+          <div className="min-w-0">
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white/90">
+              <Building2 size={14} />
+              Travel Agent Profile
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {agent.agentCode && (
+                <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white">
+                  {agent.agentCode}
+                </span>
+              )}
+
+              <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                agentStatusMeta.tone === "green"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : agentStatusMeta.tone === "amber"
+                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                    : agentStatusMeta.tone === "red"
+                      ? "border-rose-200 bg-rose-50 text-rose-700"
+                      : "border-slate-200 bg-slate-100 text-slate-700"
+              }`}>
+                Status: {agentStatusMeta.label}
+              </span>
+
+              {agent.kycStatus && (
+                <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white">
+                  KYC: {formatLabel(agent.kycStatus)}
+                </span>
+              )}
+
+              <ProfileCompletionBadge completion={completion} />
+            </div>
+
+            <h1 className="mt-4 text-2xl font-semibold tracking-tight text-white md:text-3xl">
+              {agent.agencyName || "Unnamed Travel Agent"}
+            </h1>
+
+            <p className="mt-1 max-w-5xl text-sm leading-6 text-blue-100">
+              Manage profile, SPOCs, business details, destinations,
+              communication preferences, and profile completion from one place.
+            </p>
+
+            <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-blue-50">
+              <span className="inline-flex items-center gap-1.5">
+                <MapPin size={15} />
+                {locationLabel || "Location not added"}
+              </span>
+
+              <span className="inline-flex items-center gap-1.5">
+                <UserRound size={15} />
+                {primarySpoc?.name || "Primary SPOC not added"}
+              </span>
+
+              {websiteHref && (
+                <a
+                  href={websiteHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-white hover:underline"
+                >
+                  <Globe2 size={15} />
+                  Website
+                </a>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:w-[900px] xl:grid-cols-5">
+            {!isTravelAgentAssigned(agent) ? (
+              <button
+                type="button"
+                onClick={handleAssignToMe}
+                disabled={assigningToSelf}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {assigningToSelf ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <UserCheck size={16} />
+                )}
+                {assigningToSelf ? "Assigning..." : "Assign to Me"}
+              </button>
+            ) : null}
+
+            <Link
+              href={`/engagements/travel-agent/${agentId}`}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-blue-700  hover:bg-blue-50"
+            >
+              <MessageCircle size={16} />
+              Engagements
+            </Link>
+
+            <Link
+              href={`/leads?agentId=${agentId}`}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/25 bg-white/10 px-4 py-2.5 text-sm font-medium text-white hover:bg-white/20"
+            >
+              <Users size={16} />
+              Leads
+            </Link>
+
+            <Link
+              href={`/meetings?agentId=${agentId}`}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/25 bg-white/10 px-4 py-2.5 text-sm font-medium text-white hover:bg-white/20"
+            >
+              <CalendarClock size={16} />
+              Schedule Meeting
+            </Link>
+
+            <button
+              type="button"
+              onClick={copyProfileLink}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/25 bg-white/10 px-4 py-2.5 text-sm font-medium text-white hover:bg-white/20"
+            >
+              {profileCopied ? <CheckCircle2 size={16} /> : <Link2 size={16} />}
+              {profileCopied ? "Copied" : "Copy Link"}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {assignmentMessage ? (
+        <div className={`rounded-xl border px-4 py-3 text-sm ${
+          assignmentMessage.includes("now assigned")
+            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+            : "border-rose-200 bg-rose-50 text-rose-700"
+        }`}>
+          {assignmentMessage}
+        </div>
+      ) : null}
+
+      {/* OPERATIONAL STATUS - PROMINENT FOR DAILY USE */}
+      <section className={`rounded-2xl border p-4 ${
+        agentStatusMeta.tone === "green"
+          ? "border-emerald-200 bg-emerald-50"
+          : agentStatusMeta.tone === "amber"
+            ? "border-amber-200 bg-amber-50"
+            : agentStatusMeta.tone === "red"
+              ? "border-rose-200 bg-rose-50"
+              : "border-slate-200 bg-slate-50"
+      }`}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <AlertTriangle size={16} className="text-gray-600" />
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Travel Agent Status
+              </p>
+            </div>
+            <p className="mt-1 text-lg font-semibold text-gray-950">
+              {agentStatusMeta.label}
+            </p>
+            <p className="mt-1 text-xs leading-5 text-gray-600">
+              Use this status for Invalid Number, Business Shut Down, Not Reachable,
+              Wrong Details and other operational outcomes. Non-contactable statuses
+              stop pending follow-up tasks.
+            </p>
+          </div>
+
+          <div className="grid w-full gap-3 lg:w-[590px] sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-gray-600">Change Status</label>
+              <select value={normalizedAgentStatus} onChange={event => handleStatusChange(event.target.value)} disabled={statusUpdating} className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-semibold text-gray-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-60">
+                {TRAVEL_AGENT_STATUS_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+              {statusMessage ? <p className="mt-1 text-[11px] font-medium text-gray-600">{statusMessage}</p> : null}
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-gray-600">Commercial Potential</label>
+              <select value={normalizedAgentPotential} onChange={event => handlePotentialChange(event.target.value)} disabled={potentialUpdating} className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-semibold text-gray-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-60">
+                {TRAVEL_AGENT_POTENTIAL_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+              {potentialMessage ? <p className="mt-1 text-[11px] font-medium text-gray-600">{potentialMessage}</p> : <p className="mt-1 text-[11px] text-gray-500">A-D potential is separate from operational status.</p>}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* SUMMARY CARDS */}
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <SummaryCard
+          icon={BadgeCheck}
+          label="Profile Completion"
+          value={completion.label}
+          helper={
+            completion.complete
+              ? "Ready for engagement"
+              : "Some fields are missing"
+          }
+          tone={completion.tone}
+        />
+
+        <SummaryCard
+          icon={Landmark}
+          label="Agency Type"
+          value={formatLabel(agent.agencyType)}
+          tone="blue"
+        />
+
+        <SummaryCard
+          icon={Briefcase}
+          label="Agent Potential"
+          value={agentPotentialMeta.label}
+          helper="Commercial relationship priority"
+          tone={agentPotentialMeta.tone === "emerald" ? "emerald" : agentPotentialMeta.tone === "amber" ? "amber" : "blue"}
+        />
+
+        <SummaryCard
+          icon={UserRound}
+          label="Primary SPOC"
+          value={primarySpoc?.name || "Not added"}
+          helper={primarySpoc?.designation}
+          tone="emerald"
+        />
+
+        <SummaryCard
+          icon={Route}
+          label="Destinations"
+          value={destinations.length}
+          helper={
+            destinations.length
+              ? "Mapped destinations"
+              : "No destinations"
+          }
+          tone="violet"
+        />
+      </section>
+
+      {/* MAIN FULL WIDTH GRID */}
+      <section className="grid grid-cols-1 gap-5 xl:grid-cols-12">
+        {/* LEFT MAIN AREA */}
+        <div className="space-y-5 xl:col-span-8 2xl:col-span-9">
+          <div className="grid grid-cols-1 gap-5 2xl:grid-cols-2">
+            {/* BUSINESS OVERVIEW */}
+            <SectionCard
+              title="Business Overview"
+              icon={Briefcase}
+              tone="blue"
+            >
+              <div className="divide-y divide-gray-100">
+                <InfoRow
+                  label="Agency Type"
+                  value={formatLabel(agent.agencyType)}
+                />
+
+                <InfoRow
+                  label="Relationship Stage"
+                  value={formatLabel(agent.relationshipStage)}
+                />
+
+                <InfoRow
+                  label="Commercial Potential"
+                  value={agentPotentialMeta.label}
+                />
+
+                <InfoRow label="Team" value={agent.team} />
+
+                <InfoRow
+                  label="Average Ticket Size"
+                  value={formatCurrency(agent.avgTicketSize)}
+                />
+
+                <InfoRow label="USP" value={agent.usp} />
+              </div>
+            </SectionCard>
+
+            {/* ADDRESS */}
+            <SectionCard title="Address" icon={MapPin} tone="emerald">
+              {fullAddress ? (
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-gray-200 bg-slate-50 p-4">
+                    <p className="whitespace-pre-line text-sm leading-6 text-gray-700">
+                      {fullAddress}
+                    </p>
+                  </div>
+
+                  {mapQuery && (
+                    <a
+                      href={`https://www.google.com/maps?q=${encodeURIComponent(
+                        mapQuery
+                      )}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-2 text-sm font-medium text-blue-700 hover:underline"
+                    >
+                      <ExternalLink size={14} />
+                      View on Google Maps
+                    </a>
+                  )}
+                </div>
+              ) : (
+                <EmptyCardText>
+                  Address details are not available for this travel agent.
+                </EmptyCardText>
+              )}
+            </SectionCard>
+          </div>
+
+          {/* DESTINATIONS */}
+          <SectionCard title="Destinations" icon={MapPin} tone="violet">
+            {destinations.length ? (
+              <div className="flex flex-wrap gap-2">
+                {destinations.map((destination, index) => (
+                  <TravelChip
+                    key={destination.id || destination.name || index}
+                    label={
+                      destination.name ||
+                      destination.destinationName ||
+                      "Unnamed Destination"
+                    }
+                    icon="destination"
+                    color="primary"
+                  />
+                ))}
+              </div>
+            ) : (
+              <EmptyCardText>
+                No destinations have been mapped to this travel agent yet.
+              </EmptyCardText>
+            )}
+          </SectionCard>
+
+          {/* ALL SPOCS */}
+          <SectionCard title="All SPOCs" icon={Users} tone="amber">
+            {allSpocs.length ? (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-3">
+                {allSpocs.map((spoc, index) => (
+                  <SpocCard
+                    key={
+                      spoc.email ||
+                      spoc.mobile ||
+                      spoc.phone ||
+                      spoc.name ||
+                      index
+                    }
+                    spoc={spoc}
+                  />
+                ))}
+              </div>
+            ) : (
+              <EmptyCardText>
+                No SPOC details have been added yet.
+              </EmptyCardText>
+            )}
+          </SectionCard>
+        </div>
+
+        {/* RIGHT INSIGHT AREA */}
+        <aside className="space-y-5 xl:col-span-4 2xl:col-span-3">
+          <SectionCard title="Primary Contact" icon={UserRound} tone="emerald">
+            {primarySpoc ? (
+              <div className="space-y-4">
+                <div>
+                  <p className="text-base font-semibold text-gray-950">
+                    {primarySpoc.name || "Unnamed SPOC"}
+                  </p>
+
+                  <p className="mt-1 text-sm text-gray-500">
+                    {primarySpoc.designation || "Designation not added"}
+                  </p>
+                </div>
+
+                <div className="space-y-2 rounded-xl border border-gray-200 bg-slate-50 p-4">
+                  {primaryPhone ? (
+                    <a
+                      href={`tel:${primaryPhone}`}
+                      className="flex items-center gap-2 text-sm font-medium text-blue-700 hover:underline"
+                    >
+                      <Phone size={15} />
+                      {primaryPhone}
+                    </a>
+                  ) : (
+                    <p className="text-sm text-gray-400">
+                      Phone not added
+                    </p>
+                  )}
+
+                  {primaryEmail ? (
+                    <a
+                      href={`mailto:${primaryEmail}`}
+                      className="flex items-center gap-2 truncate text-sm font-medium text-blue-700 hover:underline"
+                    >
+                      <Mail size={15} />
+                      <span className="truncate">{primaryEmail}</span>
+                    </a>
+                  ) : (
+                    <p className="text-sm text-gray-400">
+                      Email not added
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <EmptyCardText>
+                Primary contact is not available.
+              </EmptyCardText>
+            )}
+          </SectionCard>
+
+          <SectionCard
+            title="Preferred Communication"
+            icon={MessageCircle}
+            tone="violet"
+          >
+            {preferredChannels.length ? (
+              <div className="flex flex-wrap gap-2">
+                {preferredChannels.map(([key]) => (
+                  <TravelChip
+                    key={key}
+                    label={formatLabel(key)}
+                    icon={key}
+                    color="neutral"
+                  />
+                ))}
+              </div>
+            ) : (
+              <EmptyCardText>
+                Preferred communication channels are not configured.
+              </EmptyCardText>
+            )}
+          </SectionCard>
+
+          <SectionCard
+            title="Profile Status"
+            icon={ShieldCheck}
+            tone={completion.tone}
+          >
+            <div className="space-y-3">
+              <ProfileCompletionPanel completion={completion} />
+
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-slate-50 px-3 py-2">
+                <span className="text-xs font-medium text-gray-600">
+                  Status
+                </span>
+
+                <TravelChip
+                  label={agentStatusMeta.label}
+                  icon="date"
+                  color={getStatusColor(normalizedAgentStatus)}
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-slate-50 px-3 py-2">
+                <span className="text-xs font-medium text-gray-600">
+                  KYC
+                </span>
+
+                <TravelChip
+                  label={formatLabel(agent.kycStatus || "Pending")}
+                  icon={
+                    normalize(agent.kycStatus) === "approved"
+                      ? "engaged"
+                      : "warning"
+                  }
+                  color={getKycColor(agent.kycStatus || "pending")}
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-slate-50 px-3 py-2">
+                <span className="text-xs font-medium text-gray-600">
+                  City
+                </span>
+
+                <span className="text-xs font-semibold text-gray-800">
+                  {city || "Not added"}
+                </span>
+              </div>
+            </div>
+          </SectionCard>
+        </aside>
+      </section>
+    </div>
+  </main>
+);
+}
