@@ -14,8 +14,10 @@ This release supersedes the configurable per-user Allow / Deny / Default / Scope
 - Super Admin: all Admin modules.
 - Admin: all normal Admin modules; Role Management itself is reserved for Super Admin.
 - Manager: Dashboard, Travel Agents, Engagements, Meetings and Leads Admin modules.
+- Operation Executive: Travel Agents, Engagements, Meetings and Leads Admin modules.
+- Employee / Sales / Operations Executive: Travel Agents Admin module plus the full Team/User workspace.
 - Finance: Dashboard, Leads and Vendors Admin modules, plus finance-related operational permissions.
-- Employee / Associate / Partner: Team/User workspace only.
+- Associate / Partner: Team/User workspace only.
 
 ## Team/User assignment rules
 

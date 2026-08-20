@@ -42,6 +42,7 @@ const roleIcons = {
   admin: ShieldCheck,
   manager: Users,
   employee: Users,
+  operation_executive: Briefcase,
   associate: Handshake,
   partner: Building2,
   finance: Briefcase

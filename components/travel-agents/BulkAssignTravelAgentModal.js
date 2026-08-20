@@ -90,7 +90,7 @@ export default function BulkAssignTravelAgentModal({
   onAssigned
 }) {
   const { user } = useAuth();
-  const canManageAssignments = ["super_admin", "admin", "manager"].includes(
+  const canManageAssignments = ["super_admin", "admin", "manager", "employee", "operation_executive"].includes(
     normalizeRole(user?.role)
   );
 
@@ -159,7 +159,7 @@ export default function BulkAssignTravelAgentModal({
 
   const handleBulkAssign = async () => {
     if (!canManageAssignments) {
-      alert("Only Manager, Admin or Super Admin can assign travel agents to other team members.");
+      alert("Your role does not allow Admin Travel Agent assignment to other team members.");
       return;
     }
 

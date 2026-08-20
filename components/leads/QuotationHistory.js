@@ -13,6 +13,7 @@ import {
   BadgeIndianRupee,
   CalendarClock,
   Copy,
+  Download,
   Eye,
   Mail,
   MessageCircle,
@@ -36,6 +37,7 @@ import { canDeleteQuotationDraft, deleteQuotationDraft, isDraftQuotation } from 
 import { canResendQuotation, resendQuotation } from "@/lib/resendQuotation";
 import Card from "@/components/ui/Card";
 import QuotationAssetSummary from "@/components/leads/QuotationAssetSummary";
+import { generateQuotationPdf } from "@/lib/quotationPdf";
 
 /* =========================
    HELPERS
@@ -646,6 +648,7 @@ function QuotationDetailsModal({
   onClose,
   onDeleteDraft,
   onResend,
+  onGeneratePdf,
   canDeleteDraft = false,
   canResend = false,
   deleting = false,
@@ -703,6 +706,15 @@ function QuotationDetailsModal({
           </div>
 
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => onGeneratePdf?.(quotation)}
+              className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
+            >
+              <Download size={14} />
+              Generate PDF
+            </button>
+
             {canResend && (
               <button
                 type="button"
@@ -887,6 +899,7 @@ function QuotationCard({
   onCreateRevision,
   onDeleteDraft,
   onResend,
+  onGeneratePdf,
   canDeleteDraft = false,
   canResend = false,
   deleting = false,
@@ -958,6 +971,15 @@ function QuotationCard({
           </div>
 
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => onGeneratePdf?.(quotation)}
+              className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
+            >
+              <Download size={14} />
+              PDF
+            </button>
+
             <button
               type="button"
               onClick={() => onView?.(quotation)}
@@ -1135,6 +1157,13 @@ export default function QuotationHistory({
 
     return () => unsub();
   }, [leadId]);
+
+  const handleGeneratePdf = async quotation => {
+    const result = await generateQuotationPdf({ quotation, lead });
+    if (!result?.ok && result?.reason === "popup_blocked") {
+      alert("Please allow pop-ups for this CRM to generate the quotation PDF.");
+    }
+  };
 
   const handleDeleteDraft = async () => {
     if (!deleteTarget || !leadId || !user) return;
@@ -1328,6 +1357,7 @@ export default function QuotationHistory({
               onCreateRevision={onCreateRevision}
               onDeleteDraft={setDeleteTarget}
               onResend={openResend}
+              onGeneratePdf={handleGeneratePdf}
               canDeleteDraft={canDeleteQuotationDraft(quotation, user)}
               canResend={canResendQuotation(quotation)}
               deleting={deletingId === (quotation.id || quotation.quotationId)}
@@ -1461,6 +1491,7 @@ export default function QuotationHistory({
         onClose={() => setSelectedQuotation(null)}
         onDeleteDraft={setDeleteTarget}
         onResend={openResend}
+        onGeneratePdf={handleGeneratePdf}
         canDeleteDraft={canDeleteQuotationDraft(selectedQuotation || {}, user)}
         canResend={canResendQuotation(selectedQuotation || {})}
         deleting={Boolean(selectedQuotation && deletingId === (selectedQuotation.id || selectedQuotation.quotationId))}

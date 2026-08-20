@@ -76,7 +76,9 @@ const MANAGEMENT_ROLES = [
   "manager",
   "team_lead",
   "sales_head",
-  "sales_manager"
+  "sales_manager",
+  "employee",
+  "operation_executive"
 ];
 
 const normalizeRole = value =>

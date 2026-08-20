@@ -36,7 +36,7 @@ export default function CreateLeadModal({ engagement, onClose }) {
         query(
           collection(db, "users"),
           where("active", "==", true),
-          where("role", "in", ["team", "admin"])
+          where("role", "in", ["team", "admin", "operation_executive"])
         )
       );
 

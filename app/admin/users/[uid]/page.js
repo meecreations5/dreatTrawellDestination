@@ -47,6 +47,7 @@ const roleIcons = {
   admin: ShieldCheck,
   manager: Users,
   employee: Users,
+  operation_executive: Briefcase,
   associate: Handshake,
   partner: Building2,
   finance: Briefcase
@@ -55,7 +56,7 @@ const roleIcons = {
 function normalizeRole(data = {}) {
   if (data.role === "super_admin" || data.isSuperAdmin === true) return "super_admin";
   if (data.role === "admin" || data.isAdmin === true) return "admin";
-  if (["manager", "associate", "partner", "finance"].includes(data.role)) return data.role;
+  if (["manager", "operation_executive", "associate", "partner", "finance"].includes(data.role)) return data.role;
   return "employee";
 }
 

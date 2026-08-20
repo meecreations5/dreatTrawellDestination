@@ -67,7 +67,7 @@ export default function AssignTravelAgentModal({
   onAssigned
 }) {
   const { user } = useAuth("admin");
-  const canManageAssignments = ["super_admin", "admin", "manager"].includes(
+  const canManageAssignments = ["super_admin", "admin", "manager", "employee", "operation_executive"].includes(
     normalizeRole(user?.role)
   );
 
@@ -169,7 +169,7 @@ export default function AssignTravelAgentModal({
   ========================= */
   const handleAssign = async () => {
     if (!canManageAssignments) {
-      alert("Only Manager, Admin or Super Admin can assign or reassign another team member.");
+      alert("Your role does not allow Admin Travel Agent reassignment.");
       return;
     }
 
@@ -276,7 +276,7 @@ export default function AssignTravelAgentModal({
   ========================= */
   const handleUnassign = async () => {
     if (!canManageAssignments) {
-      alert("Only Manager, Admin or Super Admin can unassign a travel agent.");
+      alert("Your role does not allow Admin Travel Agent unassignment.");
       return;
     }
 

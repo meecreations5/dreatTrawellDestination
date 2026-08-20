@@ -228,7 +228,7 @@ async function loadTeamUsers() {
       query(
         collection(db, "users"),
         where("active", "==", true),
-        where("role", "in", ["employee", "admin", "manager"])
+        where("role", "in", ["employee", "operation_executive", "admin", "manager"])
       )
     );
 

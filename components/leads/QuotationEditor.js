@@ -28,8 +28,9 @@ import { getCommunicationSettings } from "@/lib/communicationSettings";
 import { getBrandingSettings } from "@/lib/brandingSettings";
 import { getUserProfileByUid } from "@/lib/userProfileRef";
 import { buildTravelAgentQuotationEmailTemplate } from "@/lib/emailTemplates";
-import { Eye, Package, Trash2 } from "lucide-react";
+import { Download, Eye, Package, Trash2 } from "lucide-react";
 import AssetPickerModal from "@/components/documents/AssetPickerModal";
+import { generateQuotationPdf } from "@/lib/quotationPdf";
 
 import {
   buildStructuredQuotationHtml
@@ -4199,6 +4200,26 @@ export default function QuotationEditor({
     quotationAssetLinksText
   ].filter(Boolean).join("\n\n");
 
+  const handleGenerateCurrentPdf = async () => {
+    const result = await generateQuotationPdf({
+      quotation: {
+        leadCode: lead?.leadCode || "",
+        revision: draftRevision || initialQuotation?.revision || "",
+        itineraryHtml: isLegacyQuotation ? (legacyHtml || "") : previewItineraryHtml,
+        quotationData: isLegacyQuotation ? (initialQuotation?.quotationData || null) : cleanPreviewQuotationData,
+        customerQuoteAmount: customerAmountNumber,
+        customerQuoteCurrency: customerQuoteCurrency || "INR",
+        createdAt: initialQuotation?.createdAt || new Date(),
+        signatureUser: previewSignature || {}
+      },
+      lead
+    });
+
+    if (!result?.ok && result?.reason === "popup_blocked") {
+      alert("Please allow pop-ups for this CRM to generate the quotation PDF.");
+    }
+  };
+
   const autoSaveSnapshot = useMemo(() => {
     if (isLegacyQuotation) return "";
 
@@ -4408,12 +4429,21 @@ export default function QuotationEditor({
               </p>
             </div>
 
-            <div className="hidden md:flex items-center gap-2 text-xs">
-              <span className="bg-green-50 text-green-700 border border-green-100 px-2 py-1 rounded-full">
+            <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
+              <button
+                type="button"
+                onClick={handleGenerateCurrentPdf}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 font-semibold text-emerald-700 hover:bg-emerald-50"
+              >
+                <Download size={14} />
+                Generate PDF
+              </button>
+
+              <span className="hidden md:inline-flex bg-green-50 text-green-700 border border-green-100 px-2 py-1 rounded-full">
                 Structured quotation
               </span>
 
-              <span className="bg-orange-50 text-orange-700 border border-orange-100 px-2 py-1 rounded-full">
+              <span className="hidden md:inline-flex bg-orange-50 text-orange-700 border border-orange-100 px-2 py-1 rounded-full">
                 Internal pricing hidden
               </span>
             </div>

@@ -76,7 +76,7 @@ function normalizeRole(data = {}) {
   if (data.role === "super_admin" || data.isSuperAdmin === true) return "super_admin";
   if (data.role === "admin" || data.isAdmin === true) return "admin";
   const role = String(data.role || "employee").trim().toLowerCase().replace(/[\s-]+/g, "_");
-  if (["manager", "employee", "associate", "partner", "finance"].includes(role)) return role;
+  if (["manager", "employee", "operation_executive", "associate", "partner", "finance"].includes(role)) return role;
   if (["team", "sales", "operations_executive"].includes(role)) return "employee";
   return "employee";
 }
@@ -124,6 +124,14 @@ function getRoleActionDefaults(role) {
   allowPrefix(defaults, "quotations", "own_assigned");
   allowActions(defaults, ["payments.view", "payments.create", "payments.edit"], "own_assigned");
   allowActions(defaults, ["communications.send"], "all");
+
+  if (normalizedRole === "operation_executive") {
+    ["travel_agents", "engagements", "meetings", "leads"].forEach(prefix => allowPrefix(defaults, prefix, "all"));
+  }
+
+  if (normalizedRole === "employee") {
+    allowPrefix(defaults, "travel_agents", "all");
+  }
 
   if (normalizedRole === "manager") {
     ["travel_agents", "engagements", "meetings", "leads", "quotations"].forEach(prefix => allowPrefix(defaults, prefix, "team"));
@@ -255,6 +263,11 @@ async function generateEmployeeId(role, associateType) {
     prefix = "DT-EMP";
   }
 
+  if (role === "operation_executive") {
+    counterKey = "operation_executive";
+    prefix = "DT-OPE";
+  }
+
   if (role === "associate") {
     const map = {
       freelancer: "FRL",
@@ -335,6 +348,7 @@ exports.createTeamUser = onCall(async (request) => {
     "admin",
     "manager",
     "employee",
+    "operation_executive",
     "associate",
     "partner",
     "finance"
