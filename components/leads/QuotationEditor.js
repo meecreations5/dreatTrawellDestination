@@ -256,8 +256,8 @@ function buildQuotationAssetLinksHtml(assets = []) {
             </div>
           </td>
           <td style="padding:10px 0;border-bottom:1px solid #e5e7eb;text-align:right;">
-            <a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#1d4e89;text-decoration:underline;font-size:12px;font-weight:600;">
-              Open reference
+            <a href="${url}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-size:12px;font-weight:600;padding:8px 12px;border-radius:8px;">
+              View Asset
             </a>
           </td>
         </tr>
@@ -353,32 +353,6 @@ function buildItineraryRowsForNightCount(nightsValue, existingRows = []) {
 
 function cleanString(value = "") {
   return String(value || "").trim();
-}
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function isValidEmail(value = "") {
-  return EMAIL_RE.test(cleanString(value).toLowerCase());
-}
-
-function getQuotationDestinationName(lead = {}, quotationData = null) {
-  return cleanString(
-    quotationData?.travelDetails?.destinationName ||
-    quotationData?.destinationName ||
-    lead?.destinationName ||
-    lead?.destination?.name ||
-    lead?.destination ||
-    lead?.travelDetails?.destinationName
-  );
-}
-
-function buildQuotationEmailSubject({ lead = {}, quotationData = null, revision = "" }) {
-  return [
-    "Quotation",
-    getQuotationDestinationName(lead, quotationData),
-    cleanString(lead?.leadCode),
-    revision ? `Rev ${revision}` : ""
-  ].filter(Boolean).join(" | ").slice(0, 180);
 }
 
 function safeArray(value) {
@@ -582,24 +556,11 @@ function buildQuotationTravelAgentEmailHtml({
 }
 
 function stripHtml(html = "") {
-  return String(html || "")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<br\s*\/?\s*>/gi, "\n")
-    .replace(/<\/p>/gi, "\n\n")
-    .replace(/<\/div>/gi, "\n")
-    .replace(/<\/li>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '\"')
-    .replace(/&#39;|&#039;/gi, "'")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n[ \t]+/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/[ \t]{2,}/g, " ")
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/g, "")
     .trim();
 }
 
@@ -1449,168 +1410,38 @@ async function updateQuotationSentStatus({
   leadId,
   quotationId,
   channel,
-  user,
-  providerMessageId = "",
-  recipientEmail = "",
-  subject = ""
+  user
 }) {
   if (!leadId || !quotationId || !channel) return;
 
   try {
-    const payload = {
-      sentVia: arrayUnion(channel),
-      updatedAt: serverTimestamp()
-    };
-
-    if (channel === "email") {
-      payload.emailSentAt = serverTimestamp();
-      payload.emailAcceptedAt = serverTimestamp();
-      payload.emailSentByUid = user?.uid || "";
-      payload.emailSentByName =
-        user?.displayName || user?.name || user?.email || "";
-      payload.emailStatus = "accepted";
-      payload.emailDeliveryStatus = "accepted";
-      payload.emailLastEvent = "accepted";
-      payload.emailLastEventAt = serverTimestamp();
-      payload.emailProvider = "brevo";
-      payload.emailRecipient = recipientEmail || "";
-      payload.emailSubject = subject || "";
-      payload.emailError = "";
-      payload.emailDeliveryReason = "";
-
-      if (providerMessageId) {
-        payload.emailProviderMessageId = providerMessageId;
-        payload.emailProviderMessageIds = arrayUnion(providerMessageId);
-      }
-    }
-
-    if (channel === "whatsapp") {
-      payload.whatsappSentAt = serverTimestamp();
-      payload.whatsappSentByUid = user?.uid || "";
-      payload.whatsappSentByName =
-        user?.displayName || user?.name || user?.email || "";
-    }
-
     await updateDoc(
       doc(db, "leads", leadId, "quotations", quotationId),
-      payload
+      {
+        sentVia: arrayUnion(channel),
+        updatedAt: serverTimestamp(),
+
+        ...(channel === "email"
+          ? {
+            emailSentAt: serverTimestamp(),
+            emailSentByUid: user?.uid || "",
+            emailSentByName:
+              user?.displayName || user?.name || user?.email || ""
+          }
+          : {}),
+
+        ...(channel === "whatsapp"
+          ? {
+            whatsappSentAt: serverTimestamp(),
+            whatsappSentByUid: user?.uid || "",
+            whatsappSentByName:
+              user?.displayName || user?.name || user?.email || ""
+          }
+          : {})
+      }
     );
   } catch (error) {
     console.warn("Quotation sent status update skipped:", error);
-  }
-}
-
-async function finalizeQuotationDispatch({
-  leadId,
-  quotationId,
-  channels = [],
-  user,
-  isFinalQuotation = false
-}) {
-  const completedChannels = Array.from(
-    new Set((Array.isArray(channels) ? channels : []).filter(Boolean))
-  );
-
-  if (!leadId || !quotationId || !completedChannels.length) return false;
-
-  try {
-    await updateDoc(
-      doc(db, "leads", leadId, "quotations", quotationId),
-      {
-        status: isFinalQuotation ? "final" : "sent",
-        isDraft: false,
-        sentVia: arrayUnion(...completedChannels),
-        sentAt: serverTimestamp(),
-        sentByUid: user?.uid || "",
-        sentByName: user?.displayName || user?.name || user?.email || "",
-        sentByEmail: user?.email || "",
-        updatedAt: serverTimestamp()
-      }
-    );
-
-    await updateDoc(doc(db, "leads", leadId), {
-      latestQuotationStatus: isFinalQuotation ? "final" : "sent",
-      latestQuotationSentAt: serverTimestamp(),
-      latestQuotationSentByUid: user?.uid || "",
-      latestQuotationSentByName:
-        user?.displayName || user?.name || user?.email || "",
-      stage: "quote_sent",
-      stageLabel: "Quote sent",
-      lastActivityAt: serverTimestamp(),
-      lastActivityType: "quotation_dispatched",
-      updatedAt: serverTimestamp()
-    });
-
-    return true;
-  } catch (error) {
-    // The provider may already have accepted the email. Do not throw and
-    // encourage a duplicate resend merely because CRM status persistence failed.
-    console.error("Quotation dispatch was accepted but CRM final status sync failed:", error);
-    return false;
-  }
-}
-
-async function updateQuotationEmailFailure({
-  leadId,
-  quotationId,
-  recipientEmail = "",
-  subject = "",
-  error,
-  isFinalQuotation = false,
-  previousLeadStage = "",
-  previousLeadStageLabel = ""
-}) {
-  if (!leadId || !quotationId) return;
-
-  try {
-    const failureMessage =
-      error?.message || "Brevo did not accept this email.";
-
-    await updateDoc(
-      doc(db, "leads", leadId, "quotations", quotationId),
-      {
-        ...(isFinalQuotation ? {} : { status: "send_failed" }),
-        emailStatus: "submission_failed",
-        emailDeliveryStatus: "submission_failed",
-        emailLastEvent: "submission_failed",
-        emailLastEventAt: serverTimestamp(),
-        emailProvider: "brevo",
-        emailRecipient: recipientEmail || "",
-        emailSubject: subject || "",
-        emailError: failureMessage,
-        emailDeliveryReason: failureMessage,
-        sentVia: [],
-        sentAt: null,
-        sentByUid: "",
-        sentByName: "",
-        sendFailedAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      }
-    );
-
-    const leadUpdate = {
-      latestQuotationStatus: isFinalQuotation ? "final" : "send_failed",
-      lastActivityAt: serverTimestamp(),
-      lastActivityType: "quotation_email_send_failed",
-      lastActivitySummary: `Quotation email failed: ${failureMessage}`,
-      lastQuotationEmailDeliveryStatus: "submission_failed",
-      lastQuotationEmailDeliveryReason: failureMessage,
-      latestQuotationSentAt: null,
-      latestQuotationSentByUid: "",
-      latestQuotationSentByName: "",
-      updatedAt: serverTimestamp()
-    };
-
-    if (previousLeadStage) {
-      leadUpdate.stage = previousLeadStage;
-      if (previousLeadStageLabel) {
-        leadUpdate.stageLabel = previousLeadStageLabel;
-      }
-    }
-
-    await updateDoc(doc(db, "leads", leadId), leadUpdate);
-  } catch (statusError) {
-    console.warn("Quotation email failure status update skipped:", statusError);
   }
 }
 
@@ -2563,7 +2394,7 @@ export default function QuotationEditor({
   }, [selectedDestinationName, isLegacyQuotation]);
 
 
-  const hasEmail = isValidEmail(recipient.email);
+  const hasEmail = Boolean(recipient.email);
   const hasWhatsApp = Boolean(recipient.mobile);
 
   const customerAmountNumber = Number(customerQuotedAmount || 0);
@@ -3410,7 +3241,7 @@ export default function QuotationEditor({
         getFinalQuotationDataAndHtml();
 
       const emailSignatureHtml =
-        buildEmailSignatureHtml(signatureUserWithBranding, { includeLogo: false, includeSocial: false });
+        buildEmailSignatureHtml(signatureUserWithBranding);
 
       const whatsappSignatureText =
         buildWhatsAppSignatureText(signatureUserWithBranding);
@@ -3574,7 +3405,7 @@ export default function QuotationEditor({
         getFinalQuotationDataAndHtml();
 
       const emailSignatureHtml =
-        buildEmailSignatureHtml(signatureUserWithBranding, { includeLogo: false, includeSocial: false });
+        buildEmailSignatureHtml(signatureUserWithBranding);
 
       const whatsappSignatureText =
         buildWhatsAppSignatureText(signatureUserWithBranding);
@@ -3692,7 +3523,7 @@ export default function QuotationEditor({
     const safeRevision =
       revision || draftRevision || initialQuotation?.revision || "";
 
-    const finalStatus = isFinalQuotation ? "final" : "sending";
+    const finalStatus = isFinalQuotation ? "final" : "sent";
 
     const safeVendorCost = hasVendorCost ? vendorCostNumber : null;
 
@@ -3821,14 +3652,13 @@ export default function QuotationEditor({
 
         note,
         sendVia,
-        requestedVia: sendVia,
-        sentVia: [],
+        sentVia: sendVia,
 
         signatureUser: signaturePayload,
 
-        sendRequestedAt: serverTimestamp(),
-        sendRequestedByUid: user?.uid || "",
-        sendRequestedByName: user?.displayName || user?.name || user?.email || "",
+        sentAt: serverTimestamp(),
+        sentByUid: user?.uid || "",
+        sentByName: user?.displayName || user?.name || user?.email || "",
 
         updatedAt: serverTimestamp()
       }
@@ -3869,13 +3699,15 @@ export default function QuotationEditor({
       latestGrossProfit: grossProfit,
       latestMarginPercent: safeMarginPercent,
 
-      latestQuotationSendRequestedAt: serverTimestamp(),
-      latestQuotationSendRequestedByUid: user?.uid || "",
-      latestQuotationSendRequestedByName:
+      latestQuotationSentAt: serverTimestamp(),
+      latestQuotationSentByUid: user?.uid || "",
+      latestQuotationSentByName:
         user?.displayName || user?.name || user?.email || "",
 
       ...leadTravelPayload,
 
+      stage: "quote_sent",
+      stageLabel: "Quote sent",
       updatedAt: serverTimestamp(),
 
       ...(isFinalQuotation
@@ -4023,7 +3855,7 @@ export default function QuotationEditor({
         getFinalQuotationDataAndHtml();
 
       const emailSignatureHtml =
-        buildEmailSignatureHtml(signatureUserWithBranding, { includeLogo: false, includeSocial: false });
+        buildEmailSignatureHtml(signatureUserWithBranding);
 
       const whatsappSignatureText =
         buildWhatsAppSignatureText(signatureUserWithBranding);
@@ -4083,7 +3915,6 @@ export default function QuotationEditor({
           note,
           sendVia,
           isFinalQuotation,
-          deferSentStatus: true,
 
           sharedAssets: selectedQuotationAssets,
           sharedAssetIds: selectedQuotationAssets
@@ -4139,11 +3970,8 @@ export default function QuotationEditor({
           ? quotationResult?.quotationId || quotationResult?.id || ""
           : "";
 
-      const subject = buildQuotationEmailSubject({
-        lead,
-        quotationData: finalQuotationData,
-        revision
-      });
+      const subject = `Your Travel Quotation Is Ready - ${lead.leadCode || ""
+        }${revision ? ` / Rev ${revision}` : ""}`;
 
       const itineraryAlreadyHasGreeting =
         htmlContainsGreeting(finalItineraryHtml);
@@ -4165,7 +3993,7 @@ export default function QuotationEditor({
 
       let communicationSettings = {
         quotationManagementBcc: [],
-        quotationCcSelectedTeamMember: false,
+        quotationCcSelectedTeamMember: true,
         quotationBccManagement: false
       };
 
@@ -4202,55 +4030,29 @@ export default function QuotationEditor({
       let whatsappSent = false;
 
       if (sendEmail && hasEmail) {
-        try {
-          const emailResponse = await sendEmailViaBrevo({
-            toEmail: recipient.email,
-            toName: recipient.name || "Guest",
-            subject,
-            html: emailHtml,
-            text: stripHtml(emailHtml),
-            cc,
-            bcc,
-            tags: [
-              "dreamtrawell_crm",
-              "quotation",
-              `lead_${lead.id}`,
-              `quotation_${quotationId}`
-            ],
-            replyTo: selectedTeamEmail
-              ? {
-                email: selectedTeamEmail,
-                name: selectedTeamName
-              }
-              : null,
-            emailType: "transactional"
-          });
+        await sendEmailViaBrevo({
+          toEmail: recipient.email,
+          toName: recipient.name || "Guest",
+          subject,
+          html: emailHtml,
+          cc,
+          bcc,
+          replyTo: selectedTeamEmail
+            ? {
+              email: selectedTeamEmail,
+              name: selectedTeamName
+            }
+            : null
+        });
 
-          emailSent = true;
+        emailSent = true;
 
-          await updateQuotationSentStatus({
-            leadId: lead.id,
-            quotationId,
-            channel: "email",
-            user,
-            providerMessageId:
-              emailResponse?.messageId || emailResponse?.result?.messageId || "",
-            recipientEmail: recipient.email,
-            subject
-          });
-        } catch (emailError) {
-          await updateQuotationEmailFailure({
-            leadId: lead.id,
-            quotationId,
-            recipientEmail: recipient.email,
-            subject,
-            error: emailError,
-            isFinalQuotation,
-            previousLeadStage: lead?.stage || "",
-            previousLeadStageLabel: lead?.stageLabel || ""
-          });
-          throw emailError;
-        }
+        await updateQuotationSentStatus({
+          leadId: lead.id,
+          quotationId,
+          channel: "email",
+          user
+        });
       }
 
       if (sendWhatsApp && hasWhatsApp) {
@@ -4289,19 +4091,6 @@ export default function QuotationEditor({
       }
 
       if (emailSent || whatsappSent) {
-        const completedChannels = [
-          emailSent ? "email" : null,
-          whatsappSent ? "whatsapp" : null
-        ].filter(Boolean);
-
-        await finalizeQuotationDispatch({
-          leadId: lead.id,
-          quotationId,
-          channels: completedChannels,
-          user,
-          isFinalQuotation
-        });
-
         const sentChannel =
           emailSent && whatsappSent
             ? "email_whatsapp"
@@ -4370,7 +4159,7 @@ export default function QuotationEditor({
     previewSignatureUser || selectedSignatureUser || currentUserOption;
 
   const previewEmailSignatureHtml = previewSignature
-    ? buildEmailSignatureHtml(previewSignature, { includeLogo: false, includeSocial: false })
+    ? buildEmailSignatureHtml(previewSignature)
     : "";
 
   const previewWhatsappSignatureText = previewSignature
