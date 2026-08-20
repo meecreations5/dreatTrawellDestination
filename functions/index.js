@@ -728,7 +728,8 @@ exports.updateUserAccess = onCall(async (request) => {
     userId,
     role: requestedRole,
     active: payload.active,
-    accessVersion: nextAccessVersion
+    accessVersion: nextAccessVersion,
+    roleModelVersion: "2.7.5.8"
   };
 });
 
