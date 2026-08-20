@@ -119,6 +119,7 @@ function getStatusLabel(status = "") {
 
   const labels = {
     draft: "Draft",
+    send_failed: "Send Failed",
     sent: "Sent",
     follow_up_pending: "Follow-up Pending",
     quote_received: "Quote Received",
@@ -150,7 +151,7 @@ function getStatusTone(status = "") {
     return "border-amber-200 bg-amber-50 text-amber-700";
   }
 
-  if (value === "rejected" || value === "cancelled") {
+  if (value === "send_failed" || value === "rejected" || value === "cancelled") {
     return "border-red-200 bg-red-50 text-red-700";
   }
 
@@ -158,16 +159,20 @@ function getStatusTone(status = "") {
 }
 
 function getEmailTone(status) {
-  if (status === "sent") {
+  if (status === "delivered" || status === "sent") {
     return "text-green-700 bg-green-50 border-green-100";
   }
 
-  if (status === "failed") {
+  if (["failed", "submission_failed", "hard_bounce", "blocked", "invalid_email", "spam"].includes(status)) {
     return "text-red-700 bg-red-50 border-red-100";
   }
 
-  if (status === "missing_email") {
+  if (["deferred", "soft_bounce", "missing_email"].includes(status)) {
     return "text-amber-700 bg-amber-50 border-amber-100";
+  }
+
+  if (status === "accepted") {
+    return "text-blue-700 bg-blue-50 border-blue-100";
   }
 
   return "text-gray-600 bg-gray-50 border-gray-100";
@@ -235,22 +240,30 @@ function ChannelBadge({ type, status }) {
     ? getEmailTone(status)
     : getWhatsappTone(status);
 
-  const label =
-    status === "sent"
-      ? "Email sent"
-      : status === "failed"
-        ? "Email failed"
-        : status === "missing_email"
-          ? "Email missing"
-          : status === "opened"
-            ? "WhatsApp opened"
-            : status === "prepared"
-              ? "WhatsApp prepared"
-              : status === "missing_number"
-                ? "Number missing"
-                : isEmail
-                  ? "Email not sent"
-                  : "WhatsApp not sent";
+  const emailLabels = {
+    sent: "Email sent",
+    accepted: "Email accepted",
+    delivered: "Email delivered",
+    deferred: "Email deferred",
+    soft_bounce: "Email soft bounce",
+    hard_bounce: "Email hard bounce",
+    blocked: "Email blocked",
+    invalid_email: "Invalid email",
+    spam: "Marked spam",
+    failed: "Email failed",
+    submission_failed: "Email send failed",
+    missing_email: "Email missing"
+  };
+
+  const label = isEmail
+    ? emailLabels[status] || "Email not sent"
+    : status === "opened"
+      ? "WhatsApp opened"
+      : status === "prepared"
+        ? "WhatsApp prepared"
+        : status === "missing_number"
+          ? "Number missing"
+          : "WhatsApp not sent";
 
   return (
     <span
@@ -341,7 +354,7 @@ function VendorRequestCard({
             <div className="mt-4 flex flex-wrap gap-2">
               <ChannelBadge
                 type="email"
-                status={request?.emailStatus}
+                status={request?.emailDeliveryStatus || request?.emailStatus}
               />
 
               <ChannelBadge
@@ -350,9 +363,16 @@ function VendorRequestCard({
               />
             </div>
 
-            {request?.emailError && (
-              <div className="mt-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
-                {request.emailError}
+            {(request?.emailDeliveryReason || request?.emailError) && (
+              <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Email: {request.emailDeliveryReason || request.emailError}
+              </div>
+            )}
+
+            {(request?.emailProviderMessageId || request?.emailSendingIp) && (
+              <div className="mt-2 text-[10px] leading-5 text-gray-500">
+                {request?.emailProviderMessageId ? <span className="mr-3 break-all">Brevo ID: {request.emailProviderMessageId}</span> : null}
+                {request?.emailSendingIp ? <span>Sending IP: {request.emailSendingIp}</span> : null}
               </div>
             )}
 

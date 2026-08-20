@@ -1,5 +1,6 @@
-const { HttpsError, onCall } = require("firebase-functions/v2/https");
+const { HttpsError, onCall, onRequest } = require("firebase-functions/v2/https");
 const { setGlobalOptions } = require("firebase-functions/v2");
+const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const { getStorage } = require("firebase-admin/storage");
 const crypto = require("crypto");
@@ -7,6 +8,8 @@ const crypto = require("crypto");
 setGlobalOptions({ maxInstances: 10 });
 
 admin.initializeApp();
+
+const BREVO_WEBHOOK_SECRET = defineSecret("BREVO_WEBHOOK_SECRET");
 
 function pad(num, size = 3) {
   return String(num).padStart(size, "0");
@@ -1031,3 +1034,316 @@ exports.uploadLeadPaymentReceipt = onCall(
     };
   }
 );
+
+
+/* =====================================================
+   BREVO TRANSACTIONAL EMAIL DELIVERY WEBHOOK
+   ===================================================== */
+
+function cleanWebhookText(value) {
+  return String(value === undefined || value === null ? "" : value).trim();
+}
+
+function normalizeBrevoTags(payload = {}) {
+  const tags = [];
+  const direct = payload.tags;
+
+  if (Array.isArray(direct)) {
+    direct.forEach(tag => tags.push(cleanWebhookText(tag)));
+  } else if (direct) {
+    tags.push(cleanWebhookText(direct));
+  }
+
+  const legacyTag = payload.tag;
+  if (Array.isArray(legacyTag)) {
+    legacyTag.forEach(tag => tags.push(cleanWebhookText(tag)));
+  } else if (legacyTag) {
+    const raw = cleanWebhookText(legacyTag);
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) parsed.forEach(tag => tags.push(cleanWebhookText(tag)));
+      else tags.push(raw);
+    } catch {
+      tags.push(raw);
+    }
+  }
+
+  return Array.from(new Set(tags.filter(Boolean)));
+}
+
+function getBrevoTagValue(tags, prefix) {
+  const match = tags.find(tag => tag.startsWith(prefix));
+  return match ? match.slice(prefix.length) : "";
+}
+
+function getBrevoEventTime(payload = {}) {
+  const millis = Number(payload.ts_epoch || 0);
+  if (Number.isFinite(millis) && millis > 0) {
+    return admin.firestore.Timestamp.fromMillis(millis);
+  }
+
+  const seconds = Number(payload.ts_event || payload.ts || 0);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return admin.firestore.Timestamp.fromMillis(seconds * 1000);
+  }
+
+  return admin.firestore.Timestamp.now();
+}
+
+function getBrevoDeliveryStatus(eventName = "") {
+  const event = cleanWebhookText(eventName).toLowerCase();
+
+  if (["request", "sent"].includes(event)) return "accepted";
+  if (event === "delivered") return "delivered";
+  if (event === "deferred") return "deferred";
+  if (event === "soft_bounce") return "soft_bounce";
+  if (event === "hard_bounce") return "hard_bounce";
+  if (event === "blocked") return "blocked";
+  if (event === "invalid_email") return "invalid_email";
+  if (["spam", "complaint"].includes(event)) return "spam";
+  if (event === "unsubscribed") return "unsubscribed";
+  if (event === "error") return "failed";
+
+  return "";
+}
+
+function getEmailDeliveryRank(status = "") {
+  const ranks = {
+    submission_failed: 5,
+    accepted: 10,
+    deferred: 20,
+    soft_bounce: 30,
+    delivered: 40,
+    failed: 50,
+    hard_bounce: 60,
+    blocked: 60,
+    invalid_email: 60,
+    spam: 70,
+    unsubscribed: 70
+  };
+
+  return ranks[cleanWebhookText(status).toLowerCase()] || 0;
+}
+
+function getBrevoFailureReason(payload = {}) {
+  return cleanWebhookText(
+    payload.reason ||
+    payload.response ||
+    payload.message ||
+    payload.error ||
+    payload.description
+  );
+}
+
+function isWebhookTokenValid(req) {
+  const configured = cleanWebhookText(BREVO_WEBHOOK_SECRET.value());
+  if (!configured) return false;
+
+  const supplied = cleanWebhookText(
+    req.query?.token ||
+    req.get?.("x-dreamtrawell-webhook-token")
+  );
+
+  if (!supplied) return false;
+
+  const expectedBuffer = Buffer.from(configured);
+  const suppliedBuffer = Buffer.from(supplied);
+  if (expectedBuffer.length !== suppliedBuffer.length) return false;
+
+  return crypto.timingSafeEqual(expectedBuffer, suppliedBuffer);
+}
+
+async function recordBrevoEventOnDocument({ docRef, payload, eventName, messageId, tags }) {
+  if (!docRef) return;
+
+  const eventTime = getBrevoEventTime(payload);
+  const deliveryStatus = getBrevoDeliveryStatus(eventName);
+  const reason = getBrevoFailureReason(payload);
+  const recipient = cleanWebhookText(payload.email);
+  const subject = cleanWebhookText(payload.subject);
+  const mirrorLink = cleanWebhookText(payload.mirror_link);
+  const sendingIp = cleanWebhookText(payload.sending_ip);
+  const currentSnap = await docRef.get();
+  const currentData = currentSnap.exists ? currentSnap.data() : {};
+  const currentStatus = cleanWebhookText(currentData?.emailDeliveryStatus || currentData?.emailStatus);
+  const currentMessageId = cleanWebhookText(currentData?.emailProviderMessageId);
+  const isCurrentMessage = !currentMessageId || !messageId || currentMessageId === messageId;
+  const shouldPromoteDeliveryStatus =
+    isCurrentMessage &&
+    deliveryStatus &&
+    getEmailDeliveryRank(deliveryStatus) >= getEmailDeliveryRank(currentStatus);
+
+  const update = {
+    emailProvider: "brevo",
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  };
+
+  if (messageId) {
+    update.emailProviderMessageIds = admin.firestore.FieldValue.arrayUnion(messageId);
+  }
+
+  // A quotation/request can be resent. Keep old-message webhook events in the
+  // event history without allowing them to overwrite the latest attempt.
+  if (isCurrentMessage) {
+    update.emailLastEvent = eventName;
+    update.emailLastEventAt = eventTime;
+    update.emailRecipient = recipient;
+    if (subject) update.emailSubject = subject;
+    if (messageId) update.emailProviderMessageId = messageId;
+    if (mirrorLink) update.emailBrevoPreviewUrl = mirrorLink;
+    if (sendingIp) update.emailSendingIp = sendingIp;
+
+    if (shouldPromoteDeliveryStatus) {
+      update.emailStatus = deliveryStatus;
+      update.emailDeliveryStatus = deliveryStatus;
+    }
+
+    if (reason && shouldPromoteDeliveryStatus) {
+      update.emailError = reason;
+      update.emailDeliveryReason = reason;
+    } else if (shouldPromoteDeliveryStatus && ["accepted", "delivered"].includes(deliveryStatus)) {
+      update.emailError = "";
+      update.emailDeliveryReason = "";
+    }
+
+    if (eventName === "delivered") update.emailDeliveredAt = eventTime;
+    if (eventName === "deferred") update.emailDeferredAt = eventTime;
+    if (eventName === "soft_bounce") update.emailSoftBounceAt = eventTime;
+    if (eventName === "hard_bounce") update.emailHardBounceAt = eventTime;
+    if (eventName === "blocked") update.emailBlockedAt = eventTime;
+    if (eventName === "invalid_email") update.emailInvalidAt = eventTime;
+    if (["spam", "complaint"].includes(eventName)) update.emailSpamAt = eventTime;
+    if (["opened", "unique_opened", "proxy_open"].includes(eventName)) {
+      update.emailOpenedAt = eventTime;
+    }
+    if (["click", "clicked"].includes(eventName)) {
+      update.emailClickedAt = eventTime;
+    }
+  }
+
+  await docRef.set(update, { merge: true });
+
+  await docRef.collection("emailEvents").add({
+    provider: "brevo",
+    event: eventName,
+    deliveryStatus: deliveryStatus || null,
+    email: recipient,
+    subject,
+    messageId,
+    reason,
+    mirrorLink,
+    sendingIp,
+    tags,
+    providerEventId: payload.id || null,
+    providerTimestamp: eventTime,
+    receivedAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+}
+
+exports.brevoEmailWebhook = onRequest(
+  { secrets: [BREVO_WEBHOOK_SECRET] },
+  async (req, res) => {
+  if (req.method !== "POST") {
+    res.status(405).send("Method Not Allowed");
+    return;
+  }
+
+  if (!isWebhookTokenValid(req)) {
+    console.warn("Rejected Brevo webhook: invalid or missing BREVO_WEBHOOK_SECRET/token");
+    res.status(401).send("Unauthorized");
+    return;
+  }
+
+  let payload = req.body || {};
+  if (typeof payload === "string") {
+    try {
+      payload = JSON.parse(payload);
+    } catch {
+      res.status(400).send("Invalid JSON");
+      return;
+    }
+  }
+
+  const eventName = cleanWebhookText(payload.event).toLowerCase();
+  const messageId = cleanWebhookText(payload["message-id"] || payload.messageId);
+  const tags = normalizeBrevoTags(payload);
+
+  const leadId = getBrevoTagValue(tags, "lead_");
+  const quotationId = getBrevoTagValue(tags, "quotation_");
+  const vendorRequestId = getBrevoTagValue(tags, "vendorrequest_");
+
+  if (!eventName) {
+    res.status(400).send("Missing event");
+    return;
+  }
+
+  try {
+    const db = admin.firestore();
+    let targetRef = null;
+    let targetType = "";
+
+    if (leadId && quotationId) {
+      targetRef = db.collection("leads").doc(leadId).collection("quotations").doc(quotationId);
+      targetType = "quotation";
+    } else if (leadId && vendorRequestId) {
+      targetRef = db.collection("leads").doc(leadId).collection("vendorRequests").doc(vendorRequestId);
+      targetType = "vendor_request";
+    }
+
+    if (!targetRef) {
+      console.warn("Brevo webhook could not identify CRM document", {
+        eventName,
+        messageId,
+        tags,
+        email: payload.email
+      });
+      res.status(202).json({ success: true, matched: false });
+      return;
+    }
+
+    await recordBrevoEventOnDocument({
+      docRef: targetRef,
+      payload,
+      eventName,
+      messageId,
+      tags
+    });
+
+    const leadRef = db.collection("leads").doc(leadId);
+    const leadEventUpdate = {
+      lastEmailDeliveryType: targetType,
+      lastEmailDeliveryStatus: getBrevoDeliveryStatus(eventName) || eventName,
+      lastEmailDeliveryEvent: eventName,
+      lastEmailDeliveryAt: getBrevoEventTime(payload),
+      lastEmailDeliveryRecipient: cleanWebhookText(payload.email),
+      lastEmailDeliveryReason: getBrevoFailureReason(payload),
+      lastEmailProviderMessageId: messageId,
+      lastEmailSendingIp: cleanWebhookText(payload.sending_ip),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    if (targetType === "quotation") {
+      leadEventUpdate.lastQuotationEmailDeliveryStatus =
+        getBrevoDeliveryStatus(eventName) || eventName;
+      leadEventUpdate.lastQuotationEmailEventAt = getBrevoEventTime(payload);
+      leadEventUpdate.lastQuotationEmailQuotationId = quotationId;
+    } else {
+      leadEventUpdate.lastVendorEmailDeliveryStatus =
+        getBrevoDeliveryStatus(eventName) || eventName;
+      leadEventUpdate.lastVendorEmailEventAt = getBrevoEventTime(payload);
+      leadEventUpdate.lastVendorEmailRequestId = vendorRequestId;
+    }
+
+    await leadRef.set(leadEventUpdate, { merge: true });
+
+    res.status(200).json({ success: true, matched: true, targetType });
+  } catch (error) {
+    console.error("Brevo webhook processing failed", {
+      message: error?.message,
+      eventName,
+      messageId,
+      tags
+    });
+    res.status(500).send("Webhook processing failed");
+  }
+  });

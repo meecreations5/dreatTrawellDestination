@@ -2895,7 +2895,15 @@ ${
             "Communication",
 
           html:
-            finalMessage
+            finalMessage,
+
+          emailType:
+            "engagement",
+
+          tags: [
+            "dreamtrawell_crm",
+            "travel_agent_engagement"
+          ]
         });
 
         outboundStatus =
