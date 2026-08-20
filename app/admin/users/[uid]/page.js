@@ -27,7 +27,8 @@ import {
   ROLE_OPTIONS,
   canAccess,
   getAdminModulesForRole,
-  isSuperAdmin as isSuperAdminUser
+  isSuperAdmin as isSuperAdminUser,
+  resolveUserRole
 } from "@/lib/rolePermissions";
 import { updateUserAccess } from "@/lib/updateUserAccess";
 
@@ -54,14 +55,7 @@ const roleIcons = {
 };
 
 function normalizeRole(data = {}) {
-  const rawRole = String(data.role || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
-  if (["super_admin", "admin", "manager", "employee", "operation_executive", "associate", "partner", "finance"].includes(rawRole)) {
-    return rawRole;
-  }
-  if (rawRole === "team" || rawRole === "sales" || rawRole === "operations_executive") return "employee";
-  if (data.isSuperAdmin === true) return "super_admin";
-  if (data.isAdmin === true) return "admin";
-  return "employee";
+  return resolveUserRole(data);
 }
 
 function getTeamAccessText() {
@@ -81,6 +75,7 @@ export default function EditUserPage() {
   const [pageLoading, setPageLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [savedRoleModelVersion, setSavedRoleModelVersion] = useState("");
 
   const isSelf = useMemo(() => {
     if (!user || !form || !uid) return false;
@@ -227,6 +222,7 @@ export default function EditUserPage() {
     try {
       setSaving(true);
       setSaved(false);
+      setSavedRoleModelVersion("");
 
       const result = await updateUserAccess({
         userId: uid,
@@ -267,6 +263,7 @@ export default function EditUserPage() {
       };
       setForm(nextOriginal);
       setOriginalUser(nextOriginal);
+      setSavedRoleModelVersion(result?.roleModelVersion || "");
       setSaved(true);
     } catch (error) {
       setErrors({ form: error?.message || "Failed to save user" });
@@ -336,7 +333,10 @@ export default function EditUserPage() {
           {saved ? (
             <div className="mb-5 flex items-start gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm text-emerald-700">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-              <p>User updated successfully.</p>
+              <p>
+                User updated successfully.
+                {savedRoleModelVersion ? ` Role system ${savedRoleModelVersion}.` : ""}
+              </p>
             </div>
           ) : null}
 

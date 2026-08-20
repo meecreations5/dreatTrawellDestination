@@ -73,6 +73,12 @@ const SCOPE_ACTION_KEYS = new Set([
 ]);
 
 function normalizeRole(data = {}) {
+  const rawAccessRole = String(data.accessRole || data.roleProfile || "").trim();
+  if (rawAccessRole) {
+    const accessRole = rawAccessRole.toLowerCase().replace(/[\s-]+/g, "_");
+    if (accessRole === "operation_executive") return "operation_executive";
+  }
+
   const rawRole = String(data.role || "").trim();
   if (rawRole) {
     const role = rawRole.toLowerCase().replace(/[\s-]+/g, "_");
@@ -83,6 +89,10 @@ function normalizeRole(data = {}) {
   if (data.isSuperAdmin === true) return "super_admin";
   if (data.isAdmin === true) return "admin";
   return "employee";
+}
+
+function getStoredBaseRole(effectiveRole) {
+  return effectiveRole === "operation_executive" ? "employee" : effectiveRole;
 }
 
 function createDeniedActionDefaults() {
@@ -212,13 +222,33 @@ function canAccessLeadByScope(user, permissionKey, lead = {}) {
   return false;
 }
 
+function accessTimestampMillis(value) {
+  if (!value) return 0;
+  if (typeof value.toMillis === "function") return value.toMillis();
+  if (typeof value.toDate === "function") return value.toDate().getTime();
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function pickCanonicalUserSnapshot(docs = []) {
+  return [...docs].sort((a, b) => {
+    const aData = a.data() || {};
+    const bData = b.data() || {};
+    const versionDelta = Number(bData.accessVersion || 0) - Number(aData.accessVersion || 0);
+    if (versionDelta !== 0) return versionDelta;
+    return Math.max(accessTimestampMillis(bData.accessUpdatedAt), accessTimestampMillis(bData.updatedAt)) -
+      Math.max(accessTimestampMillis(aData.accessUpdatedAt), accessTimestampMillis(aData.updatedAt));
+  })[0] || null;
+}
+
 async function getLoggedInUser(auth) {
   if (!auth) throw new HttpsError("unauthenticated", "Login required");
 
-  const snap = await admin.firestore().collection("users").where("uid", "==", auth.uid).limit(1).get();
+  const snap = await admin.firestore().collection("users").where("uid", "==", auth.uid).get();
   if (snap.empty) throw new HttpsError("permission-denied", "CRM user profile not found");
 
-  const doc = snap.docs[0];
+  const doc = pickCanonicalUserSnapshot(snap.docs);
+  if (!doc) throw new HttpsError("permission-denied", "CRM user profile not found");
   const data = doc.data();
   const role = normalizeRole(data);
   return {
@@ -395,13 +425,16 @@ exports.createTeamUser = onCall(async (request) => {
   const userRef = admin.firestore().collection("users").doc();
   const employeeId = await generateEmployeeId(role, associateType);
 
+  const storedRole = getStoredBaseRole(role);
   const payload = {
     uid: null,
     email,
+    emailLower: email,
     name,
     mobile,
     teamName,
-    role,
+    role: storedRole,
+    accessRole: role === "operation_executive" ? "operation_executive" : "",
     employeeId,
 
     isAdmin,
@@ -649,36 +682,31 @@ exports.updateUserAccess = onCall(async (request) => {
     throw new HttpsError("invalid-argument", "Associate type is required");
   }
 
-  // Some older CRM builds created duplicate user documents for the same person.
-  // Keep role/status identity fields synchronized only when the duplicate is safe:
-  // exact same email and no conflicting non-empty Auth UID, or exact same UID.
-  const duplicateRefs = [];
-  const duplicateIds = new Set([userId]);
+  // Older CRM builds can contain more than one users document for the same
+  // person (random document id, email-as-document-id, or a later UID-linked
+  // profile). Role changes must be identity-wide or the auth loader can read a
+  // stale duplicate after refresh and make the role appear to roll back.
   const previousEmail = cleanAccessString(previous.email).toLowerCase();
   const previousUid = cleanAccessString(previous.uid);
+  const usersSnap = await admin.firestore().collection("users").get();
+  const identityDocs = usersSnap.docs.filter(docSnap => {
+    if (docSnap.id === userId) return true;
+    const candidate = docSnap.data() || {};
+    const candidateEmail = cleanAccessString(candidate.email).toLowerCase();
+    const candidateUid = cleanAccessString(candidate.uid);
+    if (previousUid && candidateUid && candidateUid === previousUid) return true;
+    if (previousEmail && candidateEmail && candidateEmail === previousEmail) return true;
+    return false;
+  });
 
-  if (previousEmail) {
-    const emailSnap = await admin.firestore().collection("users").where("email", "==", previous.email).get();
-    emailSnap.docs.forEach(docSnap => {
-      if (duplicateIds.has(docSnap.id)) return;
-      const candidate = docSnap.data() || {};
-      const candidateUid = cleanAccessString(candidate.uid);
-      if (previousUid && candidateUid && candidateUid !== previousUid) return;
-      duplicateIds.add(docSnap.id);
-      duplicateRefs.push(docSnap.ref);
-    });
-  }
-
-  if (previousUid) {
-    const uidSnap = await admin.firestore().collection("users").where("uid", "==", previousUid).get();
-    uidSnap.docs.forEach(docSnap => {
-      if (duplicateIds.has(docSnap.id)) return;
-      duplicateIds.add(docSnap.id);
-      duplicateRefs.push(docSnap.ref);
-    });
-  }
-
-  const nextAccessVersion = Number(previous.accessVersion || 0) + 1;
+  const identityRefs = identityDocs
+    .filter(docSnap => docSnap.id !== userId)
+    .map(docSnap => docSnap.ref);
+  const highestAccessVersion = identityDocs.reduce(
+    (maxVersion, docSnap) => Math.max(maxVersion, Number(docSnap.data()?.accessVersion || 0)),
+    Number(previous.accessVersion || 0)
+  );
+  const nextAccessVersion = highestAccessVersion + 1;
   const payload = {
     name: cleanAccessString(
       Object.prototype.hasOwnProperty.call(data, "name") ? data.name : previous.name
@@ -691,7 +719,8 @@ exports.updateUserAccess = onCall(async (request) => {
         ? data.teamName
         : (previous.teamName || previous.team || previous.departmentName)
     ),
-    role: requestedRole,
+    role: getStoredBaseRole(requestedRole),
+    accessRole: requestedRole === "operation_executive" ? "operation_executive" : "",
     isAdmin: requestedRole === "super_admin" || requestedRole === "admin",
     isSuperAdmin: requestedRole === "super_admin",
     permissions: getPermissionsByRole(requestedRole),
@@ -699,6 +728,7 @@ exports.updateUserAccess = onCall(async (request) => {
     accessOverrides: {},
     permissionOverrides: {},
     accessVersion: nextAccessVersion,
+    emailLower: previousEmail || cleanAccessString(previous.email).toLowerCase(),
     associateType,
     active: requestedActive,
     authProvider,
@@ -712,9 +742,10 @@ exports.updateUserAccess = onCall(async (request) => {
     await admin.firestore().runTransaction(async tx => {
       tx.update(targetRef, payload);
 
-      duplicateRefs.forEach(ref => {
+      identityRefs.forEach(ref => {
         tx.update(ref, {
-          role: requestedRole,
+          role: payload.role,
+          accessRole: payload.accessRole,
           isAdmin: payload.isAdmin,
           isSuperAdmin: payload.isSuperAdmin,
           permissions: payload.permissions,
@@ -722,6 +753,7 @@ exports.updateUserAccess = onCall(async (request) => {
           permissionOverrides: {},
           active: requestedActive,
           accessVersion: nextAccessVersion,
+          emailLower: previousEmail || cleanAccessString(previous.email).toLowerCase(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           accessUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
           accessUpdatedByUid: actor.uid || "",
@@ -791,14 +823,37 @@ exports.updateUserAccess = onCall(async (request) => {
     throw new HttpsError("failed-precondition", "Role save verification failed. The user record was changed by another legacy path.");
   }
 
+  const verifySnaps = await Promise.all(identityRefs.map(ref => ref.get()));
+  const inconsistentIdentityDoc = verifySnaps.find(docSnap => {
+    if (!docSnap.exists) return false;
+    const item = docSnap.data() || {};
+    return normalizeRole(item) !== requestedRole ||
+      item.isAdmin !== expectedIsAdmin ||
+      item.isSuperAdmin !== expectedIsSuperAdmin ||
+      Number(item.accessVersion || 0) !== nextAccessVersion;
+  });
+  if (inconsistentIdentityDoc) {
+    console.error("updateUserAccess identity synchronization verification failed", {
+      userId,
+      inconsistentUserId: inconsistentIdentityDoc.id,
+      requestedRole,
+      storedRole: normalizeRole(inconsistentIdentityDoc.data() || {})
+    });
+    throw new HttpsError(
+      "failed-precondition",
+      "A duplicate user record still contains an older role. The role change was not accepted."
+    );
+  }
+
   return {
     success: true,
     userId,
     role: persistedRole,
     active: persisted.active !== false,
     accessVersion: nextAccessVersion,
-    syncedDuplicateUserDocs: duplicateRefs.length,
-    roleModelVersion: "2.7.5.8.1"
+    syncedDuplicateUserDocs: identityRefs.length,
+    canonicalAccessVersion: nextAccessVersion,
+    roleModelVersion: "2.7.5.8.3"
   };
 });
 

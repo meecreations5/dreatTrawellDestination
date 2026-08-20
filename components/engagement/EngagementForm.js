@@ -51,7 +51,7 @@ export default function EngagementForm({ agent }) {
       query(
         collection(db, "users"),
         where("active", "==", true),
-        where("role", "in", ["team", "admin", "operation_executive"])
+        where("role", "in", ["team", "employee", "admin", "manager", "operation_executive"])
       )
     ).then(snap =>
       setTeam(

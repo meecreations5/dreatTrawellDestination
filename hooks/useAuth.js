@@ -14,7 +14,7 @@ import { useSyncExternalStore } from "react";
 import {
   getEffectiveAccessMap,
   getEffectiveLegacyPermissions,
-  normalizeRole
+  resolveUserRole
 } from "@/lib/rolePermissions";
 
 /*
@@ -54,11 +54,33 @@ function getFirebaseUserEmail(firebaseUser) {
 }
 
 function resolveStoredRole(data = {}) {
-  const rawRole = String(data.role || "").trim();
-  if (rawRole) return normalizeRole(rawRole);
-  if (data.isSuperAdmin === true) return "super_admin";
-  if (data.isAdmin === true) return "admin";
-  return "employee";
+  return resolveUserRole(data);
+}
+
+
+function toMillis(value) {
+  if (!value) return 0;
+  if (typeof value.toMillis === "function") return value.toMillis();
+  if (typeof value.toDate === "function") return value.toDate().getTime();
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function pickCanonicalUserDoc(docs = [], firebaseUid = "") {
+  return [...docs].sort((a, b) => {
+    const aData = a.data() || {};
+    const bData = b.data() || {};
+    const versionDelta = Number(bData.accessVersion || 0) - Number(aData.accessVersion || 0);
+    if (versionDelta !== 0) return versionDelta;
+
+    const timeDelta = Math.max(toMillis(bData.accessUpdatedAt), toMillis(bData.updatedAt)) -
+      Math.max(toMillis(aData.accessUpdatedAt), toMillis(aData.updatedAt));
+    if (timeDelta !== 0) return timeDelta;
+
+    const aUidMatch = firebaseUid && aData.uid === firebaseUid ? 1 : 0;
+    const bUidMatch = firebaseUid && bData.uid === firebaseUid ? 1 : 0;
+    return bUidMatch - aUidMatch;
+  })[0] || null;
 }
 
 function buildEffectiveUser(baseUser) {
@@ -127,9 +149,11 @@ function startAuthStore() {
             return;
           }
 
-          const userDoc =
-            snap.docs.find(item => item.data()?.uid === currentUser.uid) ||
-            snap.docs[0];
+          const userDoc = pickCanonicalUserDoc(snap.docs, currentUser.uid);
+          if (!userDoc) {
+            emitUser(null);
+            return;
+          }
           const data = userDoc.data();
           const role = resolveStoredRole(data);
           const isSuperAdmin = role === "super_admin";
@@ -150,10 +174,11 @@ function startAuthStore() {
 
           // Keep legacy identity flags normalized without changing the login flow.
           const updates = {};
+          // Authentication/profile reads must never rewrite authorization fields.
+          // Older CRM builds used to normalize unknown roles here and could
+          // overwrite Operation Executive back to Employee. Only identity
+          // linking/default-active maintenance remains client-side.
           if (data.uid !== currentUser.uid) updates.uid = currentUser.uid;
-          if (data.role !== role) updates.role = role;
-          if (data.isAdmin !== isAdmin) updates.isAdmin = isAdmin;
-          if (data.isSuperAdmin !== isSuperAdmin) updates.isSuperAdmin = isSuperAdmin;
           if (data.active === undefined) updates.active = true;
 
           if (Object.keys(updates).length > 0) {

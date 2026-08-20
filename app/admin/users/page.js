@@ -13,7 +13,7 @@ import PageSkeleton from "@/components/ui/PageSkeleton";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { getDirectoryUserEmail, getDirectoryUserName } from "@/lib/teamDirectory";
 import { useAuth } from "@/hooks/useAuth";
-import { canAccess, isSuperAdmin } from "@/lib/rolePermissions";
+import { canAccess, isSuperAdmin, resolveUserRole } from "@/lib/rolePermissions";
 import { updateUserAccess } from "@/lib/updateUserAccess";
 /* =========================
    UI ATOMS
@@ -139,10 +139,15 @@ export default function AdminUsersPage() {
   useEffect(() => {
     getDocs(collection(db, "users")).then(snap => {
       setUsers(
-        snap.docs.map(d => ({
-          id: d.id,
-          ...d.data()
-        }))
+        snap.docs.map(d => {
+          const data = d.data();
+          return {
+            id: d.id,
+            ...data,
+            storedRole: data.role || "",
+            role: resolveUserRole(data)
+          };
+        })
       );
       setLoading(false);
     });
