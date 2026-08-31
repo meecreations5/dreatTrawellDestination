@@ -35,6 +35,11 @@ import { db, storage } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { useRouter } from "next/navigation";
 import { createLeadFromEngagement } from "@/lib/createLeadFromEngagement";
+import {
+  cleanOfficeClipboardText,
+  richTextHtmlToText,
+  sanitizeRichTextHtml
+} from "@/lib/richTextSanitizer";
 
 import EngagementChip from "@/components/engagement/EngagementChip";
 
@@ -126,20 +131,11 @@ function formatFileSize(size = 0) {
 }
 
 function stripHtml(html = "") {
-  return String(html || "")
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return richTextHtmlToText(html);
 }
 
 function cleanRichHtml(html = "") {
-  return String(html || "")
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "")
-    .trim();
+  return sanitizeRichTextHtml(html);
 }
 
 function getAttachmentType(file) {
@@ -699,7 +695,7 @@ export default function CreateLeadModal({ engagement, onClose }) {
     if (html) {
       document.execCommand("insertHTML", false, cleanRichHtml(html));
     } else {
-      document.execCommand("insertText", false, text);
+      document.execCommand("insertText", false, cleanOfficeClipboardText(text));
     }
 
     syncEditorHtml();

@@ -23,6 +23,7 @@ import {
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { markQuotationFinal } from "@/lib/markQuotationFinal";
+import { cleanOfficeClipboardText, sanitizeRichTextHtml } from "@/lib/richTextSanitizer";
 
 const STAGE_LABELS = {
   new: "New",
@@ -335,22 +336,21 @@ function isClientReferenceActivity(activity) {
 }
 
 function getActivityRemark(activity) {
-  return getFirstValue(
-    activity?.metadata?.remark,
-    activity?.metadata?.closingRemark,
-    activity?.metadata?.closeRemark,
-    activity?.metadata?.closedReason,
-    activity?.metadata?.reason,
-    activity?.remark,
-    activity?.description
+  return cleanOfficeClipboardText(
+    getFirstValue(
+      activity?.metadata?.remark,
+      activity?.metadata?.closingRemark,
+      activity?.metadata?.closeRemark,
+      activity?.metadata?.closedReason,
+      activity?.metadata?.reason,
+      activity?.remark,
+      activity?.description
+    )
   );
 }
 
 function cleanHtml(html = "") {
-  return String(html || "")
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "")
-    .trim();
+  return sanitizeRichTextHtml(html);
 }
 
 function DetailRow({ label, value }) {
@@ -796,7 +796,7 @@ function AssignmentActivityCard({ activity }) {
 
           {clientReference.notes && (
             <p className="text-sm text-gray-800 whitespace-pre-wrap mt-2">
-              {clientReference.notes}
+              {cleanOfficeClipboardText(clientReference.notes)}
             </p>
           )}
 
@@ -825,10 +825,12 @@ function ClientReferenceActivityCard({ activity }) {
     metadata.clientReferenceNotesHtml
   );
 
-  const notes = getFirstValue(
-    metadata.notes,
-    metadata.clientReferenceNotes,
-    activity?.description
+  const notes = cleanOfficeClipboardText(
+    getFirstValue(
+      metadata.notes,
+      metadata.clientReferenceNotes,
+      activity?.description
+    )
   );
 
   const attachments = Array.isArray(metadata.attachments)

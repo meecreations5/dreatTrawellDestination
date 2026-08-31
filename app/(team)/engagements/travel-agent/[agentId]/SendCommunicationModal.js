@@ -186,7 +186,9 @@ Thank you,
           toName: spoc.name,
           subject:
             selectedTemplate?.emailSubject || "Communication",
-          html: finalMessage
+          html: finalMessage,
+          emailType: "engagement",
+          tags: ["dreamtrawell_crm", "travel_agent_engagement"]
         });
       }
 

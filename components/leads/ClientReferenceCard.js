@@ -7,11 +7,13 @@ import {
   Paperclip
 } from "lucide-react";
 
+import {
+  cleanOfficeClipboardText,
+  sanitizeRichTextHtml
+} from "@/lib/richTextSanitizer";
+
 function cleanHtml(html = "") {
-  return String(html || "")
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "")
-    .trim();
+  return sanitizeRichTextHtml(html);
 }
 
 function formatSource(source = "") {
@@ -46,10 +48,11 @@ export default function ClientReferenceCard({ lead }) {
     lead?.clientReferenceNotesHtml ||
     "";
 
-  const notes =
+  const notes = cleanOfficeClipboardText(
     reference.notes ||
     lead?.clientReferenceNotes ||
-    "";
+    ""
+  );
 
   const attachments = Array.isArray(reference.attachments)
     ? reference.attachments

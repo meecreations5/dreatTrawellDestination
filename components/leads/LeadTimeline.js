@@ -11,6 +11,7 @@ import {
 } from "firebase/firestore";
 
 import { db } from "@/lib/firebase";
+import { cleanOfficeClipboardText } from "@/lib/richTextSanitizer";
 
 import {
   AlertTriangle,
@@ -1232,18 +1233,23 @@ function normalizeFollowUpEventForModal(event) {
 function normalizeEventForModal(event) {
   if (!event) return event;
 
+  const cleanEvent = {
+    ...event,
+    description: cleanOfficeClipboardText(event?.description || "")
+  };
+
   if (
-    event.type === "follow_up" ||
-    event.type === "followup" ||
-    event.metadata?.action === "follow_up_logged"
+    cleanEvent.type === "follow_up" ||
+    cleanEvent.type === "followup" ||
+    cleanEvent.metadata?.action === "follow_up_logged"
   ) {
-    return normalizeFollowUpEventForModal(event);
+    return normalizeFollowUpEventForModal(cleanEvent);
   }
 
-  if (event.type !== "quotation") return event;
+  if (cleanEvent.type !== "quotation") return cleanEvent;
 
-  const metadata = event.metadata || {};
-  const action = getQuotationAction(event);
+  const metadata = cleanEvent.metadata || {};
+  const action = getQuotationAction(cleanEvent);
   const ui = QUOTATION_UI[action] || UI.quotation;
 
   const revision =
@@ -1252,12 +1258,12 @@ function normalizeEventForModal(event) {
     metadata.version ??
     "";
 
-  const totalAmount = getTotalAmountValue(event);
-  const sentVia = getSentViaValue(event);
-  const status = getActionStatus(event);
+  const totalAmount = getTotalAmountValue(cleanEvent);
+  const sentVia = getSentViaValue(cleanEvent);
+  const status = getActionStatus(cleanEvent);
 
   const leadId =
-    event.leadId ||
+    cleanEvent.leadId ||
     metadata.leadId ||
     "";
 
@@ -1268,7 +1274,7 @@ function normalizeEventForModal(event) {
     metadata.amount;
 
   return {
-    ...event,
+    ...cleanEvent,
     leadId,
     actionLabel: ui.label,
     metadata: {

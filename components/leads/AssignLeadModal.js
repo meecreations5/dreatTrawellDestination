@@ -25,6 +25,11 @@ import { useAuth } from "@/hooks/useAuth";
 import { getLeadAssignee } from "@/lib/leadOwnership";
 import { canAccessRecord } from "@/lib/rolePermissions";
 import {
+  cleanOfficeClipboardText,
+  richTextHtmlToText,
+  sanitizeRichTextHtml
+} from "@/lib/richTextSanitizer";
+import {
   logLeadAction,
   LEAD_TIMELINE_TYPES
 } from "@/lib/logLeadAction";
@@ -86,13 +91,7 @@ function formatSource(source = "") {
 }
 
 function stripHtml(html = "") {
-  return String(html || "")
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return richTextHtmlToText(html);
 }
 
 function buildClientReferenceSnapshot(lead) {
@@ -107,15 +106,17 @@ function buildClientReferenceSnapshot(lead) {
     lead?.clientReferenceSource ||
     "";
 
-  const notesHtml =
+  const notesHtml = sanitizeRichTextHtml(
     reference.notesHtml ||
     lead?.clientReferenceNotesHtml ||
-    "";
+    ""
+  );
 
-  const notes =
+  const notes = cleanOfficeClipboardText(
     reference.notes ||
     lead?.clientReferenceNotes ||
-    stripHtml(notesHtml);
+    stripHtml(notesHtml)
+  );
 
   const attachmentCount =
     attachments.length ||

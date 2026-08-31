@@ -18,18 +18,35 @@ function formatDate(value) {
 }
 
 function StatusPill({ value }) {
-  const label = value || "not_requested";
+  const status = value || "not_requested";
+  const labels = {
+    accepted: "Accepted by Brevo",
+    delivered: "Delivered to mail server",
+    deferred: "Delivery deferred",
+    soft_bounce: "Email soft bounce",
+    hard_bounce: "Email hard bounce",
+    blocked: "Email blocked",
+    invalid_email: "Invalid email",
+    spam: "Spam complaint",
+    submission_failed: "Email send failed",
+    failed: "Email failed"
+  };
+  const label = labels[status] || status.replaceAll("_", " ");
 
   const style =
-    label === "sent" || label === "prepared"
+    status === "delivered" || status === "sent" || status === "prepared"
       ? "bg-emerald-50 text-emerald-700 border-emerald-100"
-      : label === "failed" || label === "missing_email" || label === "missing_number"
+      : ["failed", "send_failed", "submission_failed", "hard_bounce", "blocked", "invalid_email", "spam"].includes(status)
         ? "bg-rose-50 text-rose-700 border-rose-100"
-        : "bg-gray-50 text-gray-600 border-gray-100";
+        : ["deferred", "soft_bounce", "missing_email", "missing_number"].includes(status)
+          ? "bg-amber-50 text-amber-700 border-amber-100"
+          : status === "accepted"
+            ? "bg-blue-50 text-blue-700 border-blue-100"
+            : "bg-gray-50 text-gray-600 border-gray-100";
 
   return (
     <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${style}`}>
-      {label.replaceAll("_", " ")}
+      {label}
     </span>
   );
 }
@@ -63,10 +80,29 @@ export default function VendorRequestStatusCard({
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <StatusPill value={request.emailStatus} />
+          <StatusPill value={request.emailDeliveryStatus || request.emailStatus} />
           <StatusPill value={request.whatsappStatus} />
         </div>
       </div>
+
+      {(request.emailDeliveryReason || request.emailError) && (
+        <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Email: {request.emailDeliveryReason || request.emailError}
+        </div>
+      )}
+
+      {(request.emailProviderMessageId || request.emailSendingIp) && (
+        <div className="mt-2 text-[10px] leading-5 text-gray-500">
+          {request.emailProviderMessageId ? <span className="mr-3 break-all">Brevo ID: {request.emailProviderMessageId}</span> : null}
+          {request.emailSendingIp ? <span>Sending IP: {request.emailSendingIp}</span> : null}
+        </div>
+      )}
+
+      {(request.emailDeliveryStatus === "delivered" || request.emailStatus === "delivered") && (
+        <p className="mt-2 text-[11px] leading-5 text-gray-500">
+          Delivered means the recipient mail server accepted the message; inbox/spam placement is decided by that mail provider.
+        </p>
+      )}
 
       <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
         <div className="rounded-xl bg-gray-50 p-3">

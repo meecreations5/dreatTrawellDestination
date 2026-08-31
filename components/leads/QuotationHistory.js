@@ -437,7 +437,9 @@ function StatusBadge({ status, isDraft, isFinalQuotation }) {
         ? "bg-blue-100 text-blue-700 border-blue-200"
         : label === "Draft"
           ? "bg-amber-100 text-amber-700 border-amber-200"
-          : "bg-gray-100 text-gray-700 border-gray-200";
+          : label.toLowerCase() === "send failed"
+            ? "bg-red-100 text-red-700 border-red-200"
+            : "bg-gray-100 text-gray-700 border-gray-200";
 
   return (
     <span
@@ -485,10 +487,61 @@ function PricingModeBadge({ mode, vendorQuoteFinalized, vendorCostingMode }) {
   );
 }
 
-function ChannelBadges({ sentVia }) {
+function getEmailDeliveryMeta(status = "") {
+  const value = cleanString(status).toLowerCase();
+  const map = {
+    accepted: {
+      label: "Accepted by Brevo",
+      tone: "bg-blue-50 text-blue-700 border-blue-100"
+    },
+    delivered: {
+      label: "Delivered to mail server",
+      tone: "bg-green-50 text-green-700 border-green-100"
+    },
+    deferred: {
+      label: "Delivery deferred",
+      tone: "bg-amber-50 text-amber-700 border-amber-100"
+    },
+    soft_bounce: {
+      label: "Soft bounce",
+      tone: "bg-amber-50 text-amber-700 border-amber-100"
+    },
+    hard_bounce: {
+      label: "Hard bounce",
+      tone: "bg-red-50 text-red-700 border-red-100"
+    },
+    blocked: {
+      label: "Email blocked",
+      tone: "bg-red-50 text-red-700 border-red-100"
+    },
+    invalid_email: {
+      label: "Invalid email",
+      tone: "bg-red-50 text-red-700 border-red-100"
+    },
+    spam: {
+      label: "Spam complaint",
+      tone: "bg-red-50 text-red-700 border-red-100"
+    },
+    failed: {
+      label: "Email failed",
+      tone: "bg-red-50 text-red-700 border-red-100"
+    },
+    submission_failed: {
+      label: "Email send failed",
+      tone: "bg-red-50 text-red-700 border-red-100"
+    }
+  };
+
+  return map[value] || {
+    label: value ? `Email ${value.replace(/_/g, " ")}` : "Email",
+    tone: "bg-blue-50 text-blue-700 border-blue-100"
+  };
+}
+
+function ChannelBadges({ sentVia, emailDeliveryStatus = "" }) {
   const channels = normalizeSentVia(sentVia);
 
-  if (!channels.length) {
+  if (!channels.length && !emailDeliveryStatus) {
     return (
       <span className="text-xs text-gray-400">
         Not sent yet
@@ -496,12 +549,14 @@ function ChannelBadges({ sentVia }) {
     );
   }
 
+  const emailMeta = getEmailDeliveryMeta(emailDeliveryStatus);
+
   return (
     <div className="flex flex-wrap gap-1.5">
-      {channels.includes("email") && (
-        <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
+      {(channels.includes("email") || emailDeliveryStatus) && (
+        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${emailMeta.tone}`}>
           <Mail size={11} />
-          Email
+          {emailDeliveryStatus ? emailMeta.label : "Email"}
         </span>
       )}
 
@@ -784,6 +839,45 @@ function QuotationDetailsModal({
               tone={profit !== null && profit < 0 ? "red" : "green"}
             />
           </div>
+
+          {(quotation.emailDeliveryStatus || quotation.emailStatus || quotation.emailProviderMessageId) && (
+            <div className="mb-5 rounded-2xl border border-blue-100 bg-blue-50 p-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-blue-950">Email Delivery</p>
+                  <div className="mt-2">
+                    <ChannelBadges
+                      sentVia={quotation.sentVia || quotation.sendVia}
+                      emailDeliveryStatus={quotation.emailDeliveryStatus || quotation.emailStatus}
+                    />
+                  </div>
+                </div>
+                <div className="text-xs text-blue-800 sm:text-right">
+                  <p>{quotation.emailRecipient || ""}</p>
+                  {quotation.emailProviderMessageId && (
+                    <p className="mt-1 max-w-sm break-all text-[10px] text-blue-600">
+                      Brevo ID: {quotation.emailProviderMessageId}
+                    </p>
+                  )}
+                  {quotation.emailSendingIp && (
+                    <p className="mt-1 text-[10px] text-blue-600">
+                      Sending IP: {quotation.emailSendingIp}
+                    </p>
+                  )}
+                </div>
+              </div>
+              {(quotation.emailDeliveryReason || quotation.emailError) && (
+                <p className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  {quotation.emailDeliveryReason || quotation.emailError}
+                </p>
+              )}
+              {(quotation.emailDeliveryStatus === "delivered" || quotation.emailStatus === "delivered") && (
+                <p className="mt-2 text-[11px] leading-5 text-blue-700">
+                  Delivered means the recipient mail server accepted the message. Inbox, Promotions, Spam or later filtering is controlled by the recipient mail provider.
+                </p>
+              )}
+            </div>
+          )}
 
           {(quotation.selectedVendorName ||
             quotation.selectedVendorQuoteId ||
@@ -1080,7 +1174,17 @@ function QuotationCard({
 
       <div className="border-t border-gray-100 bg-gray-50 px-4 py-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <ChannelBadges sentVia={quotation.sentVia || quotation.sendVia} />
+          <div className="space-y-1">
+            <ChannelBadges
+              sentVia={quotation.sentVia || quotation.sendVia}
+              emailDeliveryStatus={quotation.emailDeliveryStatus || quotation.emailStatus}
+            />
+            {(quotation.emailDeliveryReason || quotation.emailError) && (
+              <p className="max-w-xl text-[11px] text-amber-700">
+                Email: {quotation.emailDeliveryReason || quotation.emailError}
+              </p>
+            )}
+          </div>
 
           <div className="flex items-center gap-2 text-xs text-gray-500">
             <CalendarClock size={13} />

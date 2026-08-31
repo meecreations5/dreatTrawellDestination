@@ -34,3 +34,13 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## V2.7.5.11
+Quotation email now follows the Lead email visual template. Quotation sending generates a shareable customer PDF and places the same PDF link in Email and WhatsApp. Email + WhatsApp default ON when both contact details are available. Requires the `uploadQuotationPdf` Firebase Function and the new `html2pdf.js` frontend dependency.
+
+## V2.7.5.11.1
+Restores the earlier quotation emailer layout and full Branding Settings signature, keeps quotation PDF links in Email/WhatsApp, and removes Microsoft Word/Outlook clipboard metadata such as `Normal 0 false false false EN-IN X-NONE X-NONE` from Client Reference, Activity Log and WhatsApp notifications.
+
+
+## V2.7.5.11.2
+Quotation PDF Storage bucket resolution fix for generic `internal` failures. See `V2_7_5_11_2_QUOTATION_PDF_STORAGE_FIX.md`.

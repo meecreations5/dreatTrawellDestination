@@ -31,6 +31,7 @@ import { buildTravelAgentQuotationEmailTemplate } from "@/lib/emailTemplates";
 import { Download, Eye, Package, Trash2 } from "lucide-react";
 import AssetPickerModal from "@/components/documents/AssetPickerModal";
 import { generateQuotationPdf } from "@/lib/quotationPdf";
+import { createShareableQuotationPdf } from "@/lib/quotationPdfShare";
 
 import {
   buildStructuredQuotationHtml
@@ -256,8 +257,8 @@ function buildQuotationAssetLinksHtml(assets = []) {
             </div>
           </td>
           <td style="padding:10px 0;border-bottom:1px solid #e5e7eb;text-align:right;">
-            <a href="${url}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-size:12px;font-weight:600;padding:8px 12px;border-radius:8px;">
-              View Asset
+            <a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#1d4e89;text-decoration:underline;font-size:12px;font-weight:600;">
+              Open reference
             </a>
           </td>
         </tr>
@@ -353,6 +354,32 @@ function buildItineraryRowsForNightCount(nightsValue, existingRows = []) {
 
 function cleanString(value = "") {
   return String(value || "").trim();
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isValidEmail(value = "") {
+  return EMAIL_RE.test(cleanString(value).toLowerCase());
+}
+
+function getQuotationDestinationName(lead = {}, quotationData = null) {
+  return cleanString(
+    quotationData?.travelDetails?.destinationName ||
+    quotationData?.destinationName ||
+    lead?.destinationName ||
+    lead?.destination?.name ||
+    lead?.destination ||
+    lead?.travelDetails?.destinationName
+  );
+}
+
+function buildQuotationEmailSubject({ lead = {}, quotationData = null, revision = "" }) {
+  return [
+    "Quotation",
+    getQuotationDestinationName(lead, quotationData),
+    cleanString(lead?.leadCode),
+    revision ? `Rev ${revision}` : ""
+  ].filter(Boolean).join(" | ").slice(0, 180);
 }
 
 function safeArray(value) {
@@ -531,7 +558,8 @@ function buildQuotationTravelAgentEmailHtml({
   itineraryHtml,
   branding,
   emailSignatureHtml,
-  itineraryAlreadyHasGreeting
+  itineraryAlreadyHasGreeting,
+  pdfUrl = ""
 }) {
   const destinationName = getFirstValue(
     lead?.destinationName,
@@ -549,6 +577,7 @@ function buildQuotationTravelAgentEmailHtml({
 
     itineraryHtml,
     quotationClosingLine: branding?.quotationClosingLine || "",
+    pdfUrl,
 
     emailSignatureHtml,
     itineraryAlreadyHasGreeting
@@ -556,11 +585,24 @@ function buildQuotationTravelAgentEmailHtml({
 }
 
 function stripHtml(html = "") {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<[^>]*>/g, "")
-    .replace(/&nbsp;/g, "")
+  return String(html || "")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<br\s*\/?\s*>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<\/li>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '\"')
+    .replace(/&#39;|&#039;/gi, "'")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
     .trim();
 }
 
@@ -602,7 +644,8 @@ function buildQuotationWhatsAppMessage({
   customerQuoteCurrency,
   whatsappSignatureText,
   isFinalQuotation,
-  emailAlsoSent = false
+  emailAlsoSent = false,
+  pdfUrl = ""
 }) {
   const travelDetails = quotationData?.travelDetails || {};
 
@@ -658,11 +701,14 @@ function buildQuotationWhatsAppMessage({
     "*Quotation Snapshot*",
     travelRows.join("\n"),
     "",
-    recipientEmail
-      ? `Please check the detailed quotation with itinerary on ${recipientEmail}.`
+    pdfUrl ? `*Quotation PDF*\n${pdfUrl}` : "",
+    emailAlsoSent && recipientEmail
+      ? `A copy of the quotation has also been sent to ${recipientEmail}.`
       : emailAlsoSent
-        ? "The detailed quotation with itinerary has also been shared on email for your review."
-        : "Please review the shared quotation and itinerary details.",
+        ? "A copy of the quotation has also been sent by email."
+        : !pdfUrl && recipientEmail
+          ? `Please check the detailed quotation with itinerary on ${recipientEmail}.`
+          : "",
     "",
     "*Recommended Next Step*",
     "Kindly review the package details and share your feedback. If required, we can refine the hotel options, itinerary flow, inclusions, travel dates, or budget alignment.",
@@ -1410,38 +1456,168 @@ async function updateQuotationSentStatus({
   leadId,
   quotationId,
   channel,
-  user
+  user,
+  providerMessageId = "",
+  recipientEmail = "",
+  subject = ""
 }) {
   if (!leadId || !quotationId || !channel) return;
+
+  try {
+    const payload = {
+      sentVia: arrayUnion(channel),
+      updatedAt: serverTimestamp()
+    };
+
+    if (channel === "email") {
+      payload.emailSentAt = serverTimestamp();
+      payload.emailAcceptedAt = serverTimestamp();
+      payload.emailSentByUid = user?.uid || "";
+      payload.emailSentByName =
+        user?.displayName || user?.name || user?.email || "";
+      payload.emailStatus = "accepted";
+      payload.emailDeliveryStatus = "accepted";
+      payload.emailLastEvent = "accepted";
+      payload.emailLastEventAt = serverTimestamp();
+      payload.emailProvider = "brevo";
+      payload.emailRecipient = recipientEmail || "";
+      payload.emailSubject = subject || "";
+      payload.emailError = "";
+      payload.emailDeliveryReason = "";
+
+      if (providerMessageId) {
+        payload.emailProviderMessageId = providerMessageId;
+        payload.emailProviderMessageIds = arrayUnion(providerMessageId);
+      }
+    }
+
+    if (channel === "whatsapp") {
+      payload.whatsappSentAt = serverTimestamp();
+      payload.whatsappSentByUid = user?.uid || "";
+      payload.whatsappSentByName =
+        user?.displayName || user?.name || user?.email || "";
+    }
+
+    await updateDoc(
+      doc(db, "leads", leadId, "quotations", quotationId),
+      payload
+    );
+  } catch (error) {
+    console.warn("Quotation sent status update skipped:", error);
+  }
+}
+
+async function finalizeQuotationDispatch({
+  leadId,
+  quotationId,
+  channels = [],
+  user,
+  isFinalQuotation = false
+}) {
+  const completedChannels = Array.from(
+    new Set((Array.isArray(channels) ? channels : []).filter(Boolean))
+  );
+
+  if (!leadId || !quotationId || !completedChannels.length) return false;
 
   try {
     await updateDoc(
       doc(db, "leads", leadId, "quotations", quotationId),
       {
-        sentVia: arrayUnion(channel),
-        updatedAt: serverTimestamp(),
-
-        ...(channel === "email"
-          ? {
-            emailSentAt: serverTimestamp(),
-            emailSentByUid: user?.uid || "",
-            emailSentByName:
-              user?.displayName || user?.name || user?.email || ""
-          }
-          : {}),
-
-        ...(channel === "whatsapp"
-          ? {
-            whatsappSentAt: serverTimestamp(),
-            whatsappSentByUid: user?.uid || "",
-            whatsappSentByName:
-              user?.displayName || user?.name || user?.email || ""
-          }
-          : {})
+        status: isFinalQuotation ? "final" : "sent",
+        isDraft: false,
+        sentVia: arrayUnion(...completedChannels),
+        sentAt: serverTimestamp(),
+        sentByUid: user?.uid || "",
+        sentByName: user?.displayName || user?.name || user?.email || "",
+        sentByEmail: user?.email || "",
+        updatedAt: serverTimestamp()
       }
     );
+
+    await updateDoc(doc(db, "leads", leadId), {
+      latestQuotationStatus: isFinalQuotation ? "final" : "sent",
+      latestQuotationSentAt: serverTimestamp(),
+      latestQuotationSentByUid: user?.uid || "",
+      latestQuotationSentByName:
+        user?.displayName || user?.name || user?.email || "",
+      stage: "quote_sent",
+      stageLabel: "Quote sent",
+      lastActivityAt: serverTimestamp(),
+      lastActivityType: "quotation_dispatched",
+      updatedAt: serverTimestamp()
+    });
+
+    return true;
   } catch (error) {
-    console.warn("Quotation sent status update skipped:", error);
+    // The provider may already have accepted the email. Do not throw and
+    // encourage a duplicate resend merely because CRM status persistence failed.
+    console.error("Quotation dispatch was accepted but CRM final status sync failed:", error);
+    return false;
+  }
+}
+
+async function updateQuotationEmailFailure({
+  leadId,
+  quotationId,
+  recipientEmail = "",
+  subject = "",
+  error,
+  isFinalQuotation = false,
+  previousLeadStage = "",
+  previousLeadStageLabel = ""
+}) {
+  if (!leadId || !quotationId) return;
+
+  try {
+    const failureMessage =
+      error?.message || "Brevo did not accept this email.";
+
+    await updateDoc(
+      doc(db, "leads", leadId, "quotations", quotationId),
+      {
+        ...(isFinalQuotation ? {} : { status: "send_failed" }),
+        emailStatus: "submission_failed",
+        emailDeliveryStatus: "submission_failed",
+        emailLastEvent: "submission_failed",
+        emailLastEventAt: serverTimestamp(),
+        emailProvider: "brevo",
+        emailRecipient: recipientEmail || "",
+        emailSubject: subject || "",
+        emailError: failureMessage,
+        emailDeliveryReason: failureMessage,
+        sentVia: [],
+        sentAt: null,
+        sentByUid: "",
+        sentByName: "",
+        sendFailedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      }
+    );
+
+    const leadUpdate = {
+      latestQuotationStatus: isFinalQuotation ? "final" : "send_failed",
+      lastActivityAt: serverTimestamp(),
+      lastActivityType: "quotation_email_send_failed",
+      lastActivitySummary: `Quotation email failed: ${failureMessage}`,
+      lastQuotationEmailDeliveryStatus: "submission_failed",
+      lastQuotationEmailDeliveryReason: failureMessage,
+      latestQuotationSentAt: null,
+      latestQuotationSentByUid: "",
+      latestQuotationSentByName: "",
+      updatedAt: serverTimestamp()
+    };
+
+    if (previousLeadStage) {
+      leadUpdate.stage = previousLeadStage;
+      if (previousLeadStageLabel) {
+        leadUpdate.stageLabel = previousLeadStageLabel;
+      }
+    }
+
+    await updateDoc(doc(db, "leads", leadId), leadUpdate);
+  } catch (statusError) {
+    console.warn("Quotation email failure status update skipped:", statusError);
   }
 }
 
@@ -1477,7 +1653,8 @@ async function logQuotationCommunication({
 
   selectedQuotationAssets = [],
   quotationAssetLinksText = "",
-  quotationAssetLinksHtml = ""
+  quotationAssetLinksHtml = "",
+  quotationPdfUrl = ""
 }) {
   if (!leadId || !channel) return;
 
@@ -1532,6 +1709,7 @@ async function logQuotationCommunication({
         hasSharedAssets: selectedQuotationAssets.length > 0,
         assetLinksText: quotationAssetLinksText || "",
         assetLinksHtml: quotationAssetLinksHtml || "",
+        quotationPdfUrl: quotationPdfUrl || "",
 
         revision: revision || "",
 
@@ -1937,13 +2115,13 @@ export default function QuotationEditor({
   }, [lead]);
 
   const [sendEmail, setSendEmail] = useState(Boolean(recipient.email));
-  const [sendWhatsApp, setSendWhatsApp] = useState(
-    !recipient.email && Boolean(recipient.mobile)
-  );
+  const [sendWhatsApp, setSendWhatsApp] = useState(Boolean(recipient.mobile));
 
   useEffect(() => {
+    // Quotation communication defaults to every available direct channel.
+    // Email + WhatsApp therefore stay ON together when both details exist.
     setSendEmail(Boolean(recipient.email));
-    setSendWhatsApp(!recipient.email && Boolean(recipient.mobile));
+    setSendWhatsApp(Boolean(recipient.mobile));
   }, [recipient.email, recipient.mobile]);
 
   const isLegacyQuotation = Boolean(
@@ -2394,7 +2572,7 @@ export default function QuotationEditor({
   }, [selectedDestinationName, isLegacyQuotation]);
 
 
-  const hasEmail = Boolean(recipient.email);
+  const hasEmail = isValidEmail(recipient.email);
   const hasWhatsApp = Boolean(recipient.mobile);
 
   const customerAmountNumber = Number(customerQuotedAmount || 0);
@@ -3523,7 +3701,7 @@ export default function QuotationEditor({
     const safeRevision =
       revision || draftRevision || initialQuotation?.revision || "";
 
-    const finalStatus = isFinalQuotation ? "final" : "sent";
+    const finalStatus = isFinalQuotation ? "final" : "sending";
 
     const safeVendorCost = hasVendorCost ? vendorCostNumber : null;
 
@@ -3652,13 +3830,14 @@ export default function QuotationEditor({
 
         note,
         sendVia,
-        sentVia: sendVia,
+        requestedVia: sendVia,
+        sentVia: [],
 
         signatureUser: signaturePayload,
 
-        sentAt: serverTimestamp(),
-        sentByUid: user?.uid || "",
-        sentByName: user?.displayName || user?.name || user?.email || "",
+        sendRequestedAt: serverTimestamp(),
+        sendRequestedByUid: user?.uid || "",
+        sendRequestedByName: user?.displayName || user?.name || user?.email || "",
 
         updatedAt: serverTimestamp()
       }
@@ -3699,15 +3878,13 @@ export default function QuotationEditor({
       latestGrossProfit: grossProfit,
       latestMarginPercent: safeMarginPercent,
 
-      latestQuotationSentAt: serverTimestamp(),
-      latestQuotationSentByUid: user?.uid || "",
-      latestQuotationSentByName:
+      latestQuotationSendRequestedAt: serverTimestamp(),
+      latestQuotationSendRequestedByUid: user?.uid || "",
+      latestQuotationSendRequestedByName:
         user?.displayName || user?.name || user?.email || "",
 
       ...leadTravelPayload,
 
-      stage: "quote_sent",
-      stageLabel: "Quote sent",
       updatedAt: serverTimestamp(),
 
       ...(isFinalQuotation
@@ -3813,6 +3990,13 @@ export default function QuotationEditor({
       return;
     }
 
+    let whatsappWindow = null;
+    if (sendWhatsApp && hasWhatsApp && typeof window !== "undefined") {
+      // Open synchronously from the user's click so browsers do not block the
+      // WhatsApp tab after PDF/email async work finishes.
+      whatsappWindow = window.open("about:blank", "_blank");
+    }
+
     setSaving(true);
 
     try {
@@ -3915,6 +4099,7 @@ export default function QuotationEditor({
           note,
           sendVia,
           isFinalQuotation,
+          deferSentStatus: true,
 
           sharedAssets: selectedQuotationAssets,
           sharedAssetIds: selectedQuotationAssets
@@ -3970,16 +4155,95 @@ export default function QuotationEditor({
           ? quotationResult?.quotationId || quotationResult?.id || ""
           : "";
 
-      const subject = `Your Travel Quotation Is Ready - ${lead.leadCode || ""
-        }${revision ? ` / Rev ${revision}` : ""}`;
-
-      const itineraryAlreadyHasGreeting =
-        htmlContainsGreeting(finalItineraryHtml);
+      if (!quotationId) {
+        throw new Error("Quotation was saved but no quotation ID was returned.");
+      }
 
       const finalItineraryHtmlWithAssets = [
         finalItineraryHtml,
         quotationAssetLinksHtml
       ].filter(Boolean).join("");
+
+      // Generate and upload one customer-safe PDF before dispatch so the same
+      // link is used in Email and WhatsApp. If PDF creation fails, nothing is
+      // sent and the quotation is returned to Draft for a safe retry.
+      let quotationPdfUrl = "";
+      let quotationPdfStoragePath = "";
+      try {
+        const pdfShare = await createShareableQuotationPdf({
+          leadId: lead.id,
+          quotationId,
+          revision,
+          quotation: {
+            leadCode: lead?.leadCode || "",
+            revision,
+            itineraryHtml: finalItineraryHtmlWithAssets,
+            quotationData: finalQuotationData,
+            customerQuoteAmount: customerAmountNumber,
+            customerQuoteCurrency: customerQuoteCurrency || "INR",
+            createdAt: new Date(),
+            createdByName: user?.displayName || user?.name || user?.email || "",
+            signatureUser: {
+              ...signatureUser,
+              ...branding,
+              signatureHtml: emailSignatureHtml,
+              quotationClosingLine: branding?.quotationClosingLine || ""
+            }
+          },
+          lead
+        });
+
+        quotationPdfUrl = pdfShare?.url || "";
+        quotationPdfStoragePath = pdfShare?.storagePath || "";
+
+        if (!quotationPdfUrl) {
+          throw new Error("Quotation PDF link was not created.");
+        }
+
+        await updateDoc(
+          doc(db, "leads", lead.id, "quotations", quotationId),
+          {
+            pdfUrl: quotationPdfUrl,
+            quotationPdfUrl,
+            pdfStoragePath: quotationPdfStoragePath,
+            pdfStatus: "ready",
+            pdfGeneratedAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          }
+        );
+
+        await updateDoc(doc(db, "leads", lead.id), {
+          latestQuotationPdfUrl: quotationPdfUrl,
+          updatedAt: serverTimestamp()
+        });
+      } catch (pdfError) {
+        const pdfMessage = pdfError?.message || "Could not create quotation PDF link.";
+        console.error("Quotation PDF share link failed:", pdfError);
+        try {
+          await updateDoc(
+            doc(db, "leads", lead.id, "quotations", quotationId),
+            {
+              status: "draft",
+              isDraft: true,
+              pdfStatus: "failed",
+              pdfError: pdfMessage,
+              updatedAt: serverTimestamp()
+            }
+          );
+        } catch (statusError) {
+          console.warn("Quotation PDF failure status update skipped:", statusError);
+        }
+        throw new Error(`${pdfMessage} Quotation saved as draft; Email/WhatsApp was not sent.`);
+      }
+
+      const subject = buildQuotationEmailSubject({
+        lead,
+        quotationData: finalQuotationData,
+        revision
+      });
+
+      const itineraryAlreadyHasGreeting =
+        htmlContainsGreeting(finalItineraryHtml);
 
       const emailHtml = buildQuotationTravelAgentEmailHtml({
         recipient,
@@ -3988,12 +4252,13 @@ export default function QuotationEditor({
         itineraryHtml: finalItineraryHtmlWithAssets,
         branding,
         emailSignatureHtml,
-        itineraryAlreadyHasGreeting
+        itineraryAlreadyHasGreeting,
+        pdfUrl: quotationPdfUrl
       });
 
       let communicationSettings = {
         quotationManagementBcc: [],
-        quotationCcSelectedTeamMember: true,
+        quotationCcSelectedTeamMember: false,
         quotationBccManagement: false
       };
 
@@ -4028,31 +4293,63 @@ export default function QuotationEditor({
 
       let emailSent = false;
       let whatsappSent = false;
+      let emailFailure = "";
+      let whatsappFailure = "";
 
       if (sendEmail && hasEmail) {
-        await sendEmailViaBrevo({
-          toEmail: recipient.email,
-          toName: recipient.name || "Guest",
-          subject,
-          html: emailHtml,
-          cc,
-          bcc,
-          replyTo: selectedTeamEmail
-            ? {
-              email: selectedTeamEmail,
-              name: selectedTeamName
-            }
-            : null
-        });
+        try {
+          const emailResponse = await sendEmailViaBrevo({
+            toEmail: recipient.email,
+            toName: recipient.name || "Guest",
+            subject,
+            html: emailHtml,
+            text: [
+              stripHtml(emailHtml),
+              quotationPdfUrl ? `Quotation PDF: ${quotationPdfUrl}` : ""
+            ].filter(Boolean).join("\n\n"),
+            cc,
+            bcc,
+            tags: [
+              "dreamtrawell_crm",
+              "quotation",
+              `lead_${lead.id}`,
+              `quotation_${quotationId}`
+            ],
+            replyTo: selectedTeamEmail
+              ? {
+                email: selectedTeamEmail,
+                name: selectedTeamName
+              }
+              : null,
+            emailType: "transactional"
+          });
 
-        emailSent = true;
+          emailSent = true;
 
-        await updateQuotationSentStatus({
-          leadId: lead.id,
-          quotationId,
-          channel: "email",
-          user
-        });
+          await updateQuotationSentStatus({
+            leadId: lead.id,
+            quotationId,
+            channel: "email",
+            user,
+            providerMessageId:
+              emailResponse?.messageId || emailResponse?.result?.messageId || "",
+            recipientEmail: recipient.email,
+            subject
+          });
+        } catch (emailError) {
+          emailFailure = emailError?.message || "Quotation email failed";
+          await updateQuotationEmailFailure({
+            leadId: lead.id,
+            quotationId,
+            recipientEmail: recipient.email,
+            subject,
+            error: emailError,
+            isFinalQuotation,
+            previousLeadStage: lead?.stage || "",
+            previousLeadStageLabel: lead?.stageLabel || ""
+          });
+          console.warn("Quotation email failed; WhatsApp will still be attempted:", emailFailure);
+        }
       }
 
       if (sendWhatsApp && hasWhatsApp) {
@@ -4066,7 +4363,8 @@ export default function QuotationEditor({
           customerQuoteCurrency,
           whatsappSignatureText,
           isFinalQuotation,
-          emailAlsoSent: emailSent
+          emailAlsoSent: emailSent,
+          pdfUrl: quotationPdfUrl
         });
 
         const whatsappMessage = [
@@ -4075,22 +4373,40 @@ export default function QuotationEditor({
         ].filter(Boolean).join("\n\n");
 
 
-        sendWhatsAppWeb({
+        const whatsappOpened = sendWhatsAppWeb({
           mobile: recipient.mobile,
-          message: whatsappMessage
+          message: whatsappMessage,
+          targetWindow: whatsappWindow
         });
 
-        whatsappSent = true;
-
-        await updateQuotationSentStatus({
-          leadId: lead.id,
-          quotationId,
-          channel: "whatsapp",
-          user
-        });
+        if (whatsappOpened) {
+          whatsappSent = true;
+          await updateQuotationSentStatus({
+            leadId: lead.id,
+            quotationId,
+            channel: "whatsapp",
+            user
+          });
+        } else {
+          whatsappFailure = "WhatsApp could not be opened. Please allow pop-ups and try again.";
+          console.warn(whatsappFailure);
+        }
       }
 
       if (emailSent || whatsappSent) {
+        const completedChannels = [
+          emailSent ? "email" : null,
+          whatsappSent ? "whatsapp" : null
+        ].filter(Boolean);
+
+        await finalizeQuotationDispatch({
+          leadId: lead.id,
+          quotationId,
+          channels: completedChannels,
+          user,
+          isFinalQuotation
+        });
+
         const sentChannel =
           emailSent && whatsappSent
             ? "email_whatsapp"
@@ -4138,12 +4454,39 @@ export default function QuotationEditor({
 
           selectedQuotationAssets,
           quotationAssetLinksText,
-          quotationAssetLinksHtml
+          quotationAssetLinksHtml,
+          quotationPdfUrl
         });
+      }
+
+      if (!emailSent && !whatsappSent) {
+        if (whatsappWindow && !whatsappWindow.closed) whatsappWindow.close();
+        throw new Error(
+          [emailFailure, whatsappFailure].filter(Boolean).join(" | ") ||
+          "Quotation was saved, but no communication channel could be completed."
+        );
+      }
+
+      const partialFailures = [
+        emailFailure ? `Email: ${emailFailure}` : "",
+        whatsappFailure ? `WhatsApp: ${whatsappFailure}` : ""
+      ].filter(Boolean);
+
+      if (partialFailures.length) {
+        alert(`Quotation created with a partial notification issue.\n\n${partialFailures.join("\n")}`);
       }
 
       onClose();
     } catch (error) {
+      if (whatsappWindow && !whatsappWindow.closed) {
+        try {
+          if (String(whatsappWindow.location?.href || "").includes("about:blank")) {
+            whatsappWindow.close();
+          }
+        } catch {
+          // Ignore cross-origin access after WhatsApp has opened.
+        }
+      }
       console.error("Quotation send failed:", error);
       alert(error?.message || "Failed to create quotation. Please try again.");
     } finally {
@@ -4179,7 +4522,8 @@ export default function QuotationEditor({
     ].filter(Boolean).join(""),
     branding: previewSignature || {},
     emailSignatureHtml: previewEmailSignatureHtml,
-    itineraryAlreadyHasGreeting: previewAlreadyHasGreeting
+    itineraryAlreadyHasGreeting: previewAlreadyHasGreeting,
+    pdfUrl: initialQuotation?.pdfUrl || initialQuotation?.quotationPdfUrl || ""
   });
 
   const basePreviewWhatsappMessage = buildQuotationWhatsAppMessage({
@@ -4192,7 +4536,8 @@ export default function QuotationEditor({
     customerQuoteCurrency,
     whatsappSignatureText: previewWhatsappSignatureText,
     isFinalQuotation,
-    emailAlsoSent: sendEmail && hasEmail
+    emailAlsoSent: sendEmail && hasEmail,
+    pdfUrl: initialQuotation?.pdfUrl || initialQuotation?.quotationPdfUrl || ""
   });
 
   const previewWhatsappMessage = [
@@ -6722,6 +7067,12 @@ export default function QuotationEditor({
                     }}
                   />
                 </div>
+
+                {hasEmail && hasWhatsApp && (
+                  <p className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
+                    Email and WhatsApp are ON by default. The same customer-safe PDF link is included in both. WhatsApp opens as a pre-filled message; click Send in WhatsApp to deliver it.
+                  </p>
+                )}
 
                 <label className="flex items-center gap-2 text-sm text-gray-700">
                   <input

@@ -44,6 +44,11 @@ import { db, storage } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { createManualLead } from "@/lib/createManualLead";
 import { normalizeRole } from "@/lib/rolePermissions";
+import {
+  cleanOfficeClipboardText,
+  richTextHtmlToText,
+  sanitizeRichTextHtml
+} from "@/lib/richTextSanitizer";
 
 const inputClass = `
   w-full
@@ -200,20 +205,11 @@ function formatFileSize(size = 0) {
 }
 
 function stripHtml(html = "") {
-  return String(html)
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return richTextHtmlToText(html);
 }
 
 function cleanRichHtml(html = "") {
-  return String(html || "")
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "")
-    .trim();
+  return sanitizeRichTextHtml(html);
 }
 
 function getAttachmentType(file) {
@@ -578,7 +574,7 @@ export default function ManualLeadCreatePage() {
     if (html) {
       document.execCommand("insertHTML", false, cleanRichHtml(html));
     } else {
-      document.execCommand("insertText", false, text);
+      document.execCommand("insertText", false, cleanOfficeClipboardText(text));
     }
 
     syncReferenceEditorHtml();
