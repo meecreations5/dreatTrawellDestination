@@ -44,3 +44,9 @@ Restores the earlier quotation emailer layout and full Branding Settings signatu
 
 ## V2.7.5.11.2
 Quotation PDF Storage bucket resolution fix for generic `internal` failures. See `V2_7_5_11_2_QUOTATION_PDF_STORAGE_FIX.md`.
+
+## V2.7.5.11.5
+Restores the Branding Settings logo in quotation email signatures and reduces quotation-send waiting time by removing redundant auth refreshes/Firestore reads, preloading the PDF renderer, reusing branding data, reducing PDF rendering overhead, and parallelizing independent CRM status writes. See `V2_7_5_11_5_SIGNATURE_SEND_SPEED_FIX.md`.
+
+## V2.7.5.11.6 - Quotation Team Copy Fix
+Quotation email now sends a separate private copy to the concerned quotation team member (with logged-in sender fallback) for both new sends and resends, without polluting customer delivery webhook tracking.

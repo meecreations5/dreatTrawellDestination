@@ -19,6 +19,10 @@ import { getLeadAssignee } from "@/lib/leadOwnership";
 import { buildLeadTravelPayloadFromQuotationData } from "@/lib/leadTravelDates";
 
 import { sendEmailViaBrevo } from "@/lib/sendEmailViaBrevo";
+import {
+  resolveQuotationInternalRecipient,
+  sendQuotationInternalCopy
+} from "@/lib/quotationInternalCopy";
 import { sendWhatsAppWeb } from "@/lib/whatsapp";
 import { createQuotationRevision } from "@/lib/createQuotationRevision";
 import { saveQuotationDraft } from "@/lib/saveQuotationDraft";
@@ -30,7 +34,7 @@ import { getUserProfileByUid } from "@/lib/userProfileRef";
 import { buildTravelAgentQuotationEmailTemplate } from "@/lib/emailTemplates";
 import { Download, Eye, Package, Trash2 } from "lucide-react";
 import AssetPickerModal from "@/components/documents/AssetPickerModal";
-import { generateQuotationPdf } from "@/lib/quotationPdf";
+import { generateQuotationPdf, preloadQuotationPdfLibrary } from "@/lib/quotationPdf";
 import { createShareableQuotationPdf } from "@/lib/quotationPdfShare";
 
 import {
@@ -1521,32 +1525,33 @@ async function finalizeQuotationDispatch({
   if (!leadId || !quotationId || !completedChannels.length) return false;
 
   try {
-    await updateDoc(
-      doc(db, "leads", leadId, "quotations", quotationId),
-      {
-        status: isFinalQuotation ? "final" : "sent",
-        isDraft: false,
-        sentVia: arrayUnion(...completedChannels),
-        sentAt: serverTimestamp(),
-        sentByUid: user?.uid || "",
-        sentByName: user?.displayName || user?.name || user?.email || "",
-        sentByEmail: user?.email || "",
+    await Promise.all([
+      updateDoc(
+        doc(db, "leads", leadId, "quotations", quotationId),
+        {
+          status: isFinalQuotation ? "final" : "sent",
+          isDraft: false,
+          sentVia: arrayUnion(...completedChannels),
+          sentAt: serverTimestamp(),
+          sentByUid: user?.uid || "",
+          sentByName: user?.displayName || user?.name || user?.email || "",
+          sentByEmail: user?.email || "",
+          updatedAt: serverTimestamp()
+        }
+      ),
+      updateDoc(doc(db, "leads", leadId), {
+        latestQuotationStatus: isFinalQuotation ? "final" : "sent",
+        latestQuotationSentAt: serverTimestamp(),
+        latestQuotationSentByUid: user?.uid || "",
+        latestQuotationSentByName:
+          user?.displayName || user?.name || user?.email || "",
+        stage: "quote_sent",
+        stageLabel: "Quote sent",
+        lastActivityAt: serverTimestamp(),
+        lastActivityType: "quotation_dispatched",
         updatedAt: serverTimestamp()
-      }
-    );
-
-    await updateDoc(doc(db, "leads", leadId), {
-      latestQuotationStatus: isFinalQuotation ? "final" : "sent",
-      latestQuotationSentAt: serverTimestamp(),
-      latestQuotationSentByUid: user?.uid || "",
-      latestQuotationSentByName:
-        user?.displayName || user?.name || user?.email || "",
-      stage: "quote_sent",
-      stageLabel: "Quote sent",
-      lastActivityAt: serverTimestamp(),
-      lastActivityType: "quotation_dispatched",
-      updatedAt: serverTimestamp()
-    });
+      })
+    ]);
 
     return true;
   } catch (error) {
@@ -3965,6 +3970,14 @@ export default function QuotationEditor({
       return;
     }
     if (!validateBeforeSend()) return;
+
+    // Warm the relatively large PDF renderer while the user reviews the send
+    // confirmation. This removes its dynamic-import cost from the actual Send
+    // button wait without generating or uploading anything prematurely.
+    void preloadQuotationPdfLibrary().catch(error => {
+      console.warn("Quotation PDF pre-load skipped:", error);
+    });
+
     setConfirmOpen(true);
   };
 
@@ -4003,20 +4016,41 @@ export default function QuotationEditor({
       setConfirmOpen(false);
 
       let profileSignatureData = {};
+      let branding = {};
+      let communicationSettings = {
+        quotationManagementBcc: [],
+        quotationCcSelectedTeamMember: false,
+        quotationBccManagement: false
+      };
 
-      try {
-        const profile = await getUserProfileByUid(selectedUid);
-        profileSignatureData = profile?.data || {};
-      } catch (error) {
-        console.warn("Could not load selected signature profile:", error);
+      // These three reads are independent. Loading them together avoids three
+      // back-to-back Firestore round-trips before quotation generation starts.
+      const [profileResult, brandingResult, communicationResult] =
+        await Promise.allSettled([
+          getUserProfileByUid(selectedUid),
+          getBrandingSettings(),
+          sendEmail ? getCommunicationSettings() : Promise.resolve(null)
+        ]);
+
+      if (profileResult.status === "fulfilled") {
+        profileSignatureData = profileResult.value?.data || {};
+      } else {
+        console.warn("Could not load selected signature profile:", profileResult.reason);
       }
 
-      let branding = {};
+      if (brandingResult.status === "fulfilled") {
+        branding = brandingResult.value || {};
+      } else {
+        console.warn("Branding settings not found:", brandingResult.reason);
+      }
 
-      try {
-        branding = await getBrandingSettings();
-      } catch (error) {
-        console.warn("Branding settings not found:", error);
+      if (communicationResult.status === "fulfilled" && communicationResult.value) {
+        communicationSettings = {
+          ...communicationSettings,
+          ...communicationResult.value
+        };
+      } else if (communicationResult.status === "rejected") {
+        console.warn("Communication settings not found:", communicationResult.reason);
       }
 
       const signatureUser = mergeSignatureUserWithProfile(
@@ -4174,6 +4208,7 @@ export default function QuotationEditor({
           leadId: lead.id,
           quotationId,
           revision,
+          branding,
           quotation: {
             leadCode: lead?.leadCode || "",
             revision,
@@ -4200,22 +4235,23 @@ export default function QuotationEditor({
           throw new Error("Quotation PDF link was not created.");
         }
 
-        await updateDoc(
-          doc(db, "leads", lead.id, "quotations", quotationId),
-          {
-            pdfUrl: quotationPdfUrl,
-            quotationPdfUrl,
-            pdfStoragePath: quotationPdfStoragePath,
-            pdfStatus: "ready",
-            pdfGeneratedAt: serverTimestamp(),
+        await Promise.all([
+          updateDoc(
+            doc(db, "leads", lead.id, "quotations", quotationId),
+            {
+              pdfUrl: quotationPdfUrl,
+              quotationPdfUrl,
+              pdfStoragePath: quotationPdfStoragePath,
+              pdfStatus: "ready",
+              pdfGeneratedAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            }
+          ),
+          updateDoc(doc(db, "leads", lead.id), {
+            latestQuotationPdfUrl: quotationPdfUrl,
             updatedAt: serverTimestamp()
-          }
-        );
-
-        await updateDoc(doc(db, "leads", lead.id), {
-          latestQuotationPdfUrl: quotationPdfUrl,
-          updatedAt: serverTimestamp()
-        });
+          })
+        ]);
       } catch (pdfError) {
         const pdfMessage = pdfError?.message || "Could not create quotation PDF link.";
         console.error("Quotation PDF share link failed:", pdfError);
@@ -4256,33 +4292,23 @@ export default function QuotationEditor({
         pdfUrl: quotationPdfUrl
       });
 
-      let communicationSettings = {
-        quotationManagementBcc: [],
-        quotationCcSelectedTeamMember: false,
-        quotationBccManagement: false
-      };
-
-      try {
-        communicationSettings = await getCommunicationSettings();
-      } catch (error) {
-        console.warn("Communication settings not found:", error);
-      }
-
       const selectedTeamEmail = getMemberEmail(signatureUser);
       const selectedTeamName = getMemberName(signatureUser);
+      const quotationEmailText = [
+        stripHtml(emailHtml),
+        quotationPdfUrl ? `Quotation PDF: ${quotationPdfUrl}` : ""
+      ].filter(Boolean).join("\n\n");
 
+      // V2.7.5.11.6: the concerned team member receives a separate internal
+      // copy after the customer message is accepted. Do not CC them on the
+      // customer message: keeping the messages separate prevents internal
+      // recipient webhook events from overwriting customer delivery status.
       const cc = [];
-
-      if (
-        sendEmail &&
-        communicationSettings.quotationCcSelectedTeamMember &&
-        selectedTeamEmail
-      ) {
-        cc.push({
-          email: selectedTeamEmail,
-          name: selectedTeamName
-        });
-      }
+      const internalCopyRecipient = resolveQuotationInternalRecipient({
+        signatureUser,
+        user,
+        customerEmail: recipient.email
+      });
 
       const bcc =
         sendEmail && communicationSettings.quotationBccManagement
@@ -4295,6 +4321,8 @@ export default function QuotationEditor({
       let whatsappSent = false;
       let emailFailure = "";
       let whatsappFailure = "";
+      let teamCopyFailure = "";
+      let teamCopyPromise = null;
 
       if (sendEmail && hasEmail) {
         try {
@@ -4303,10 +4331,7 @@ export default function QuotationEditor({
             toName: recipient.name || "Guest",
             subject,
             html: emailHtml,
-            text: [
-              stripHtml(emailHtml),
-              quotationPdfUrl ? `Quotation PDF: ${quotationPdfUrl}` : ""
-            ].filter(Boolean).join("\n\n"),
+            text: quotationEmailText,
             cc,
             bcc,
             tags: [
@@ -4325,6 +4350,24 @@ export default function QuotationEditor({
           });
 
           emailSent = true;
+
+          if (internalCopyRecipient.email) {
+            // Start immediately after Brevo accepts the customer message, but
+            // let it run alongside WhatsApp/Firestore work so it adds little
+            // or no extra wait to the quotation send flow.
+            teamCopyPromise = sendQuotationInternalCopy({
+              leadId: lead.id,
+              quotationId,
+              toEmail: internalCopyRecipient.email,
+              toName: internalCopyRecipient.name || selectedTeamName,
+              subject,
+              html: emailHtml,
+              text: quotationEmailText,
+              sentByUser: user
+            });
+          } else if (internalCopyRecipient.reason === "missing") {
+            teamCopyFailure = "Concerned team member email is not available.";
+          }
 
           await updateQuotationSentStatus({
             leadId: lead.id,
@@ -4399,14 +4442,6 @@ export default function QuotationEditor({
           whatsappSent ? "whatsapp" : null
         ].filter(Boolean);
 
-        await finalizeQuotationDispatch({
-          leadId: lead.id,
-          quotationId,
-          channels: completedChannels,
-          user,
-          isFinalQuotation
-        });
-
         const sentChannel =
           emailSent && whatsappSent
             ? "email_whatsapp"
@@ -4422,41 +4457,59 @@ export default function QuotationEditor({
           revision
         });
 
-        await logQuotationCommunication({
-          leadId: lead.id,
-          channel: sentChannel,
-          quotationId,
-          revision,
-          recipient,
-          signatureUser,
-          user,
+        // Final CRM status and timeline logging are independent. Persist them
+        // together so the UI does not wait for two serial Firestore writes.
+        await Promise.all([
+          finalizeQuotationDispatch({
+            leadId: lead.id,
+            quotationId,
+            channels: completedChannels,
+            user,
+            isFinalQuotation
+          }),
+          logQuotationCommunication({
+            leadId: lead.id,
+            channel: sentChannel,
+            quotationId,
+            revision,
+            recipient,
+            signatureUser,
+            user,
 
-          customerAmountNumber,
-          vendorCost,
-          vendorCostNumber,
-          grossProfit,
-          marginPercent,
-          itineraryHtml: finalItineraryHtml,
-          quotationData: finalQuotationData,
-          isFinalQuotation,
-          quotationPricingMode,
-          vendorQuoteFinalized,
+            customerAmountNumber,
+            vendorCost,
+            vendorCostNumber,
+            grossProfit,
+            marginPercent,
+            itineraryHtml: finalItineraryHtml,
+            quotationData: finalQuotationData,
+            isFinalQuotation,
+            quotationPricingMode,
+            vendorQuoteFinalized,
 
-          vendorCostingMode,
-          selectedVendorQuotes,
-          selectedVendorQuoteIds,
-          totalSelectedVendorCost,
+            vendorCostingMode,
+            selectedVendorQuotes,
+            selectedVendorQuoteIds,
+            totalSelectedVendorCost,
 
-          selectedVendorName,
-          selectedVendorQuoteId,
-          selectedVendorRequestId,
-          selectedVendorCurrency,
+            selectedVendorName,
+            selectedVendorQuoteId,
+            selectedVendorRequestId,
+            selectedVendorCurrency,
 
-          selectedQuotationAssets,
-          quotationAssetLinksText,
-          quotationAssetLinksHtml,
-          quotationPdfUrl
-        });
+            selectedQuotationAssets,
+            quotationAssetLinksText,
+            quotationAssetLinksHtml,
+            quotationPdfUrl
+          })
+        ]);
+      }
+
+      if (teamCopyPromise) {
+        const teamCopyResult = await teamCopyPromise;
+        if (!teamCopyResult?.sent && !teamCopyResult?.skipped) {
+          teamCopyFailure = teamCopyResult?.error || "Internal quotation copy failed.";
+        }
       }
 
       if (!emailSent && !whatsappSent) {
@@ -4469,7 +4522,8 @@ export default function QuotationEditor({
 
       const partialFailures = [
         emailFailure ? `Email: ${emailFailure}` : "",
-        whatsappFailure ? `WhatsApp: ${whatsappFailure}` : ""
+        whatsappFailure ? `WhatsApp: ${whatsappFailure}` : "",
+        teamCopyFailure ? `Team copy: ${teamCopyFailure}` : ""
       ].filter(Boolean);
 
       if (partialFailures.length) {
