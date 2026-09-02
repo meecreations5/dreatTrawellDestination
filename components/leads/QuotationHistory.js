@@ -33,6 +33,8 @@ import {
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { useLeadTravelAgent } from "@/hooks/useLeadTravelAgent";
+import { buildLeadWithLiveTravelAgent } from "@/lib/leadOwnership";
 import { canDeleteQuotationDraft, deleteQuotationDraft, isDraftQuotation } from "@/lib/deleteQuotationDraft";
 import { canResendQuotation, resendQuotation } from "@/lib/resendQuotation";
 import Card from "@/components/ui/Card";
@@ -1207,6 +1209,11 @@ export default function QuotationHistory({
 }) {
   const leadId = getLeadId(lead);
   const { user } = useAuth();
+  const linkedTravelAgent = useLeadTravelAgent(lead);
+  const communicationLead = useMemo(
+    () => buildLeadWithLiveTravelAgent(lead || {}, linkedTravelAgent || {}),
+    [lead, linkedTravelAgent]
+  );
 
   const [quotations, setQuotations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1263,7 +1270,10 @@ export default function QuotationHistory({
   }, [leadId]);
 
   const handleGeneratePdf = async quotation => {
-    const result = await generateQuotationPdf({ quotation, lead });
+    const result = await generateQuotationPdf({
+      quotation,
+      lead: communicationLead
+    });
     if (!result?.ok && result?.reason === "popup_blocked") {
       alert("Please allow pop-ups for this CRM to generate the quotation PDF.");
     }
@@ -1294,7 +1304,7 @@ export default function QuotationHistory({
   };
 
   const openResend = quotation => {
-    const recipient = getLeadRecipient(lead);
+    const recipient = getLeadRecipient(communicationLead);
     const sentVia = normalizeSentVia(quotation?.sentVia || quotation?.sendVia);
     const emailOriginallyUsed = sentVia.includes("email");
     const whatsappOriginallyUsed = sentVia.includes("whatsapp");
@@ -1322,7 +1332,7 @@ export default function QuotationHistory({
 
     try {
       const result = await resendQuotation({
-        lead,
+        lead: communicationLead,
         leadId,
         quotationId,
         channels,
@@ -1510,7 +1520,7 @@ export default function QuotationHistory({
       )}
 
       {resendTarget && (() => {
-        const recipient = getLeadRecipient(lead);
+        const recipient = getLeadRecipient(communicationLead);
         const anySelected = resendChannels.email || resendChannels.whatsapp;
         const quotationId = resendTarget.id || resendTarget.quotationId;
         const isResending = resendingId === quotationId;

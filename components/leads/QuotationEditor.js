@@ -14,8 +14,9 @@ import {
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { useLeadTravelAgent } from "@/hooks/useLeadTravelAgent";
 import { canAccess, canAccessRecord } from "@/lib/rolePermissions";
-import { getLeadAssignee } from "@/lib/leadOwnership";
+import { buildLeadWithLiveTravelAgent, getLeadAssignee } from "@/lib/leadOwnership";
 import { buildLeadTravelPayloadFromQuotationData } from "@/lib/leadTravelDates";
 
 import { sendEmailViaBrevo } from "@/lib/sendEmailViaBrevo";
@@ -1969,6 +1970,11 @@ export default function QuotationEditor({
   initialQuotation = null
 }) {
   const { user } = useAuth();
+  const linkedTravelAgent = useLeadTravelAgent(lead);
+  const communicationLead = useMemo(
+    () => buildLeadWithLiveTravelAgent(lead || {}, linkedTravelAgent || {}),
+    [lead, linkedTravelAgent]
+  );
 
   const canSendQuotation = Boolean(
     user && lead && canAccessRecord(user, "quotations.send", lead, "lead")
@@ -2092,32 +2098,32 @@ export default function QuotationEditor({
 
   const recipient = useMemo(() => {
     const name = getFirstValue(
-      lead?.spoc?.name,
-      lead?.customerName,
-      lead?.travellerName,
-      lead?.guestName,
-      lead?.contactName,
-      lead?.customer?.name
+      communicationLead?.spoc?.name,
+      communicationLead?.customerName,
+      communicationLead?.travellerName,
+      communicationLead?.guestName,
+      communicationLead?.contactName,
+      communicationLead?.customer?.name
     );
 
     const email = getFirstValue(
-      lead?.spoc?.email,
-      lead?.email,
-      lead?.customerEmail,
-      lead?.customer?.email
+      communicationLead?.spoc?.email,
+      communicationLead?.email,
+      communicationLead?.customerEmail,
+      communicationLead?.customer?.email
     );
 
     const mobile = getFirstValue(
-      lead?.spoc?.mobile,
-      lead?.mobile,
-      lead?.phone,
-      lead?.contactNumber,
-      lead?.customerMobile,
-      lead?.customer?.mobile
+      communicationLead?.spoc?.mobile,
+      communicationLead?.mobile,
+      communicationLead?.phone,
+      communicationLead?.contactNumber,
+      communicationLead?.customerMobile,
+      communicationLead?.customer?.mobile
     );
 
     return { name, email, mobile };
-  }, [lead]);
+  }, [communicationLead]);
 
   const [sendEmail, setSendEmail] = useState(Boolean(recipient.email));
   const [sendWhatsApp, setSendWhatsApp] = useState(Boolean(recipient.mobile));
@@ -4225,7 +4231,7 @@ export default function QuotationEditor({
               quotationClosingLine: branding?.quotationClosingLine || ""
             }
           },
-          lead
+          lead: communicationLead
         });
 
         quotationPdfUrl = pdfShare?.url || "";
@@ -4273,7 +4279,7 @@ export default function QuotationEditor({
       }
 
       const subject = buildQuotationEmailSubject({
-        lead,
+        lead: communicationLead,
         quotationData: finalQuotationData,
         revision
       });
@@ -4283,7 +4289,7 @@ export default function QuotationEditor({
 
       const emailHtml = buildQuotationTravelAgentEmailHtml({
         recipient,
-        lead,
+        lead: communicationLead,
         revision,
         itineraryHtml: finalItineraryHtmlWithAssets,
         branding,
@@ -4399,7 +4405,7 @@ export default function QuotationEditor({
         const baseWhatsappMessage = buildQuotationWhatsAppMessage({
           recipientName: recipient.name || "Partner",
           recipientEmail: recipient.email || "",
-          lead,
+          lead: communicationLead,
           revision,
           quotationData: finalQuotationData || cleanPreviewQuotationData,
           customerQuotedAmount: customerAmountNumber,
@@ -4568,7 +4574,7 @@ export default function QuotationEditor({
 
   const previewEmailHtml = buildQuotationTravelAgentEmailHtml({
     recipient,
-    lead,
+    lead: communicationLead,
     revision: draftRevision,
     itineraryHtml: [
       previewItineraryHtml || "<p>No quotation content added yet.</p>",
@@ -4583,7 +4589,7 @@ export default function QuotationEditor({
   const basePreviewWhatsappMessage = buildQuotationWhatsAppMessage({
     recipientName: recipient.name || "Partner",
     recipientEmail: recipient.email || "",
-    lead,
+    lead: communicationLead,
     revision: draftRevision,
     quotationData: cleanPreviewQuotationData,
     customerQuotedAmount: customerAmountNumber,
@@ -4611,7 +4617,7 @@ export default function QuotationEditor({
         createdAt: initialQuotation?.createdAt || new Date(),
         signatureUser: previewSignature || {}
       },
-      lead
+      lead: communicationLead
     });
 
     if (!result?.ok && result?.reason === "popup_blocked") {

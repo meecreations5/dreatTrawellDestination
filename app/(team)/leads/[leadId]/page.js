@@ -631,17 +631,15 @@ export default function LeadDetailPage() {
     ? `/travel-agents/${travelAgentId}`
     : "";
 
-  const linkedPrimarySpoc = Array.isArray(linkedTravelAgent?.agent?.spocs)
-    ? linkedTravelAgent.agent.spocs.find(item => item?.isPrimary) || linkedTravelAgent.agent.spocs[0] || null
-    : null;
+  const liveTravelAgentSpoc = linkedTravelAgent?.spoc || null;
 
-  const travelAgentSpocName = getFirstValue(linkedPrimarySpoc?.name, lead?.spoc?.name);
-  const travelAgentSpocEmail = getFirstValue(linkedPrimarySpoc?.email, lead?.spoc?.email);
+  const travelAgentSpocName = getFirstValue(liveTravelAgentSpoc?.name, lead?.spoc?.name);
+  const travelAgentSpocEmail = getFirstValue(liveTravelAgentSpoc?.email, lead?.spoc?.email);
   const travelAgentSpocMobile = getFirstValue(
-    linkedPrimarySpoc?.mobile,
-    linkedPrimarySpoc?.phone,
-    linkedPrimarySpoc?.whatsapp,
-    lead?.spoc?.mobile
+    liveTravelAgentSpoc?.mobile,
+    lead?.spoc?.mobile,
+    lead?.spoc?.phone,
+    lead?.spoc?.whatsapp
   );
 
 

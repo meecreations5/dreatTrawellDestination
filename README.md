@@ -50,3 +50,7 @@ Restores the Branding Settings logo in quotation email signatures and reduces qu
 
 ## V2.7.5.11.6 - Quotation Team Copy Fix
 Quotation email now sends a separate private copy to the concerned quotation team member (with logged-in sender fallback) for both new sends and resends, without polluting customer delivery webhook tracking.
+
+
+## V2.7.5.11.8
+Restored live Travel Agent/SPOC sync for existing linked Leads and all future quotation communication. See `V2_7_5_11_8_TRAVEL_AGENT_SPOC_LIVE_SYNC.md`.
