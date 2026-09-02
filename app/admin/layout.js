@@ -7,6 +7,7 @@ import AdminTopBar from "@/components/admin/AdminTopBar";
 import AdminBreadcrumb from "@/components/admin/AdminBreadcrumb";
 import AdminScopeProvider from "@/components/admin/AdminScopeProvider";
 import AdminGlobalScopeBar from "@/components/admin/AdminGlobalScopeBar";
+import ProductivityPulse from "@/components/productivity/ProductivityPulse";
 import { useAuth } from "@/hooks/useAuth";
 import {
   canAccess,
@@ -86,6 +87,7 @@ export default function AdminLayout({ children }) {
   return (
     <AdminScopeProvider>
       <section className="min-h-screen bg-slate-50">
+        <ProductivityPulse />
         <AdminSidebar
           collapsed={collapsed}
           setCollapsed={setCollapsed}

@@ -14,6 +14,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { ENGAGEMENT_OUTCOME_OPTIONS, getOutcomeLabel } from "@/lib/engagementIntentMap";
 import { outcomeToTravelAgentStatus } from "@/lib/travelAgentStatus";
 import { syncTravelAgentStatusFromEngagement } from "@/lib/syncTravelAgentStatusFromEngagement";
+import { buildEngagementProductivityFields } from "@/lib/engagementProductivity";
 
 import EngagementChip from "@/components/engagement/EngagementChip";
 import AssetPickerModal from "@/components/documents/AssetPickerModal";
@@ -91,6 +92,11 @@ export default function EngagementForm({ agent }) {
     const spoc = agent.spocs[form.spocIndex];
     const assignee = team.find(t => t.uid === form.assignedToUid);
 
+    const productivityFields = buildEngagementProductivityFields({
+      channel: form.channel,
+      outcomeCode: form.outcomeCode
+    });
+
     const engagementRef = await addDoc(collection(db, "engagements"), {
       entityType: "travelAgent",
       agentId: agent.id,
@@ -102,6 +108,11 @@ export default function EngagementForm({ agent }) {
       destinationRefId: form.destinationRefId || null,
       destinationName: form.destinationName || null,
       outcomeCode: form.outcomeCode || null,
+      outcomeLabel: getOutcomeLabel(form.outcomeCode),
+      ...productivityFields,
+      callResult: productivityFields.callAttempted
+        ? (productivityFields.callConnected ? "call_connected" : form.outcomeCode)
+        : "not_applicable",
       customRemark: form.customRemark || "",
       scheduledAt: form.scheduledAt
         ? new Date(form.scheduledAt)

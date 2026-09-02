@@ -16,6 +16,7 @@ import {
 
 import { useAuth } from "@/hooks/useAuth";
 import { logFollowUp } from "@/lib/logFollowUp";
+import { alignToWorkSchedule, DEFAULT_WORK_SCHEDULE } from "@/lib/workSchedule";
 
 const channels = [
   {
@@ -42,7 +43,10 @@ const channels = [
 
 const outcomes = [
   { value: "connected", label: "Connected" },
+  { value: "call_not_picked", label: "Call Not Picked" },
   { value: "no_response", label: "No Response" },
+  { value: "busy", label: "Busy" },
+  { value: "not_reachable", label: "Not Reachable" },
   { value: "follow_up_required", label: "Follow-up Required" },
   { value: "quotation_requested", label: "Quotation Requested" },
   { value: "not_interested", label: "Not Interested" }
@@ -66,14 +70,20 @@ function getQuickDate(hoursFromNow = 2) {
   date.setHours(date.getHours() + hoursFromNow);
   date.setMinutes(0, 0, 0);
 
-  return toDatetimeLocal(date);
+  return toDatetimeLocal(alignToWorkSchedule(date, DEFAULT_WORK_SCHEDULE) || date);
 }
 
 function getTodayEvening() {
-  const date = new Date();
-  date.setHours(18, 0, 0, 0);
+  const now = new Date();
+  const date = new Date(now);
+  date.setHours(18, 15, 0, 0);
 
-  return toDatetimeLocal(date);
+  if (date <= now) {
+    date.setDate(date.getDate() + 1);
+    date.setHours(10, 30, 0, 0);
+  }
+
+  return toDatetimeLocal(alignToWorkSchedule(date, DEFAULT_WORK_SCHEDULE) || date);
 }
 
 function getTomorrowMorning() {
@@ -81,7 +91,7 @@ function getTomorrowMorning() {
   date.setDate(date.getDate() + 1);
   date.setHours(10, 0, 0, 0);
 
-  return toDatetimeLocal(date);
+  return toDatetimeLocal(alignToWorkSchedule(date, DEFAULT_WORK_SCHEDULE) || date);
 }
 
 function formatPreviewDate(value) {
@@ -238,6 +248,9 @@ export default function AddFollowUpModal({ leadId, onClose }) {
                     disabled={saving}
                     onClick={() => {
                       setChannel(item.value);
+                      if (item.value !== "call" && ["call_not_picked", "busy", "not_reachable"].includes(outcome)) {
+                        setOutcome("connected");
+                      }
                       setError("");
                     }}
                     className={`
@@ -279,11 +292,13 @@ export default function AddFollowUpModal({ leadId, onClose }) {
                 disabled:bg-gray-50 disabled:text-gray-400
               "
             >
-              {outcomes.map(item => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
+              {outcomes
+                .filter(item => channel === "call" || !["call_not_picked", "busy", "not_reachable"].includes(item.value))
+                .map(item => (
+                  <option key={item.value} value={item.value}>
+                    {item.value === "connected" && channel === "call" ? "Call Connected" : item.label}
+                  </option>
+                ))}
             </select>
           </div>
 
@@ -360,7 +375,7 @@ export default function AddFollowUpModal({ leadId, onClose }) {
                 onClick={() => setNextFollowUpAt(getTodayEvening())}
                 className="text-xs px-3 py-1.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 disabled:opacity-60"
               >
-                Today 6 PM
+                After Evening Break
               </button>
 
               <button
@@ -369,7 +384,7 @@ export default function AddFollowUpModal({ leadId, onClose }) {
                 onClick={() => setNextFollowUpAt(getTomorrowMorning())}
                 className="text-xs px-3 py-1.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 disabled:opacity-60"
               >
-                Tomorrow 10 AM
+                Tomorrow 10:30 AM
               </button>
 
               {nextFollowUpAt && (
@@ -396,7 +411,7 @@ export default function AddFollowUpModal({ leadId, onClose }) {
                 </p>
 
                 <p className="text-sm font-medium text-gray-900 mt-1">
-                  {selectedChannel.label} · {selectedOutcome.label}
+                  {selectedChannel.label} · {selectedOutcome.value === "connected" && channel === "call" ? "Call Connected" : selectedOutcome.label}
                 </p>
 
                 <p className="text-xs text-gray-500 mt-1">

@@ -135,7 +135,10 @@ const COMMON_INTENTS = [
 const COMMON_OUTCOMES = [
   "intro_done",
   "profile_shared",
+  "call_connected",
   "call_not_picked",
+  "busy",
+  "not_reachable",
   "no_response",
   "followup_required",
   "future_follow_up",

@@ -1,9 +1,14 @@
 import Link from "next/link";
 import { deleteDoc, doc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { useAuth } from "@/hooks/useAuth";
+import { canAccess } from "@/lib/rolePermissions";
 
 export default function DestinationCard({ destination }) {
+  const { user } = useAuth();
   const { id, status, active } = destination;
+  const canEdit = canAccess(user, "destinations.edit");
+  const canDelete = canAccess(user, "destinations.delete");
 
   const handleDelete = async e => {
     e.preventDefault();
@@ -81,19 +86,23 @@ export default function DestinationCard({ destination }) {
 
       {/* ACTIONS */}
       <div className="flex justify-end gap-2 px-4 pb-3">
-        <Link
-          href={`/admin/destinations/${id}`}
-          className="text-xs px-3 py-1 border rounded-md hover:bg-gray-100"
-        >
-          Edit
-        </Link>
+        {canEdit && (
+          <Link
+            href={`/admin/destinations/${id}`}
+            className="text-xs px-3 py-1 border rounded-md hover:bg-gray-100"
+          >
+            Edit
+          </Link>
+        )}
 
-        <button
-          onClick={handleDelete}
-          className="text-xs px-3 py-1 rounded-md bg-red-50 text-red-700 hover:bg-red-100"
-        >
-          Delete
-        </button>
+        {canDelete && (
+          <button
+            onClick={handleDelete}
+            className="text-xs px-3 py-1 rounded-md bg-red-50 text-red-700 hover:bg-red-100"
+          >
+            Delete
+          </button>
+        )}
       </div>
     </div>
   );

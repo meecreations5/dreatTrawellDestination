@@ -43,6 +43,11 @@ import {
 import { syncAgentCadenceAfterEngagement } from "@/lib/engagementTaskService";
 import { outcomeToTravelAgentStatus } from "@/lib/travelAgentStatus";
 import { syncTravelAgentStatusFromEngagement } from "@/lib/syncTravelAgentStatusFromEngagement";
+import {
+  buildEngagementProductivityFields,
+  getEngagementConnectionStatus
+} from "@/lib/engagementProductivity";
+import { alignToWorkSchedule, DEFAULT_WORK_SCHEDULE } from "@/lib/workSchedule";
 
 /* =========================
    OPTIONS
@@ -67,6 +72,37 @@ const MEETING_MODES = [
 
 const OUTCOMES = ENGAGEMENT_OUTCOME_OPTIONS;
 
+const QUICK_CALL_RESULTS = [
+  { key: "call_connected", label: "Connected", icon: "✅", tone: "green" },
+  { key: "call_not_picked", label: "Not Picked", icon: "📵", tone: "amber" },
+  { key: "no_response", label: "No Response", icon: "🔕", tone: "amber" },
+  { key: "busy", label: "Busy", icon: "☎️", tone: "slate" },
+  { key: "not_reachable", label: "Not Reachable", icon: "📴", tone: "slate" },
+  { key: "invalid_number", label: "Invalid Number", icon: "❌", tone: "red" }
+];
+
+const CONNECTED_NEXT_OUTCOMES = [
+  { key: "intro_done", label: "Introduction Done" },
+  { key: "no_current_query", label: "No Current Query" },
+  { key: "requirement_received", label: "Requirement Received" },
+  { key: "followup_required", label: "Follow-up Required" },
+  { key: "meeting_scheduled", label: "Meeting Scheduled" },
+  { key: "quote_needed", label: "Quote Needed" },
+  { key: "quote_shared", label: "Quote Shared" },
+  { key: "relationship_reconnected", label: "Reconnected" }
+];
+
+const NON_CONNECTED_OUTCOMES = new Set([
+  "call_not_picked",
+  "no_response",
+  "busy",
+  "not_reachable",
+  "invalid_number",
+  "wrong_details",
+  "business_shut_down",
+  "do_not_contact"
+]);
+
 /* =========================
    FORM DEFAULT
 ========================= */
@@ -83,6 +119,7 @@ function getInitialForm() {
     destinationName: "",
 
     outcomeCode: "",
+    callResult: "",
 
     scheduledAt: "",
     assignedToUid: "",
@@ -180,7 +217,8 @@ function getSuggestedDateTime(days = 1) {
   date.setDate(date.getDate() + Number(days || 1));
   date.setHours(11, 0, 0, 0);
 
-  return toLocalDateTimeValue(date);
+  const aligned = alignToWorkSchedule(date, DEFAULT_WORK_SCHEDULE) || date;
+  return toLocalDateTimeValue(aligned);
 }
 
 function getAssetKey(asset) {
@@ -315,6 +353,14 @@ export default function EngagementForm({
   }, [destinations, form?.destinationRefId]);
 
   const isMeeting = form?.channel === "meeting";
+  const isCall = form?.channel === "call";
+  const callConnectionStatus = isCall
+    ? form?.callResult === "call_connected"
+      ? "connected"
+      : form?.callResult
+        ? "not_connected"
+        : getEngagementConnectionStatus({ channel: "call", outcomeCode: form?.outcomeCode })
+    : "not_applicable";
 
   const smartIntent = useMemo(() => {
     if (!form) return null;
@@ -445,6 +491,36 @@ export default function EngagementForm({
     }));
   };
 
+  const applyQuickCallResult = resultCode => {
+    const connected = resultCode === "call_connected";
+    const label = getOutcomeLabel(resultCode) || "Call update";
+
+    setForm(prev => ({
+      ...prev,
+      channel: "call",
+      callResult: resultCode,
+      outcomeCode: connected
+        ? (prev.outcomeCode && !NON_CONNECTED_OUTCOMES.has(prev.outcomeCode)
+            ? prev.outcomeCode
+            : "call_connected")
+        : resultCode,
+      message: connected
+        ? prev.message
+        : (prev.message || `${label}.`),
+      scheduledAt: outcomeToTravelAgentStatus(resultCode) ? "" : prev.scheduledAt
+    }));
+  };
+
+  const applyConnectedOutcome = outcomeCode => {
+    setForm(prev => ({
+      ...prev,
+      channel: "call",
+      callResult: "call_connected",
+      outcomeCode,
+      scheduledAt: outcomeToTravelAgentStatus(outcomeCode) ? "" : prev.scheduledAt
+    }));
+  };
+
   const resetAfterSave = () => {
     setForm(prev => ({
       ...getInitialForm(),
@@ -555,6 +631,19 @@ export default function EngagementForm({
         isMeeting
       });
 
+      const baseProductivityFields = buildEngagementProductivityFields({
+        channel: form.channel,
+        outcomeCode: form.outcomeCode
+      });
+
+      const productivityFields = isCall
+        ? {
+            ...baseProductivityFields,
+            connectionStatus: callConnectionStatus,
+            callConnected: callConnectionStatus === "connected"
+          }
+        : baseProductivityFields;
+
       const payload = {
         entityType: "travelAgent",
 
@@ -587,6 +676,8 @@ export default function EngagementForm({
 
         outcomeCode: form.outcomeCode,
         outcomeLabel: getOutcomeLabel(form.outcomeCode),
+        callResult: isCall ? (form.callResult || form.outcomeCode || "") : "not_applicable",
+        ...productivityFields,
 
         intentCode: finalIntent.intentCode,
         intentName: finalIntent.intentName,
@@ -956,6 +1047,7 @@ export default function EngagementForm({
                     setForm({
                       ...form,
                       channel: c.key,
+                      callResult: c.key === "call" ? form.callResult : "",
                       outcomeCode:
                         c.key === "meeting"
                           ? "meeting_scheduled"
@@ -991,6 +1083,27 @@ export default function EngagementForm({
               ))}
             </div>
           </Field>
+
+          {isCall && (
+            <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">
+                Quick Call Result
+              </p>
+              <p className="mt-1 text-[11px] text-slate-500">
+                One tap records whether the call actually connected. You can then select the business outcome below.
+              </p>
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {QUICK_CALL_RESULTS.map(result => (
+                  <QuickResultButton
+                    key={result.key}
+                    {...result}
+                    active={form.callResult === result.key || (!form.callResult && form.outcomeCode === result.key)}
+                    onClick={() => applyQuickCallResult(result.key)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </SectionCard>
 
         {/* MEETING DETAILS */}
@@ -1255,7 +1368,27 @@ export default function EngagementForm({
           title="Outcome & Smart Suggestion"
           description="Outcome will decide the smart communication intent."
         >
-          <Field label="Outcome">
+          {isCall && callConnectionStatus === "connected" && (
+            <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                Call Connected - what happened next?
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {CONNECTED_NEXT_OUTCOMES.map(item => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => applyConnectedOutcome(item.key)}
+                    className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${form.outcomeCode === item.key ? "border-emerald-500 bg-white text-emerald-700 shadow-sm" : "border-emerald-200 bg-white/70 text-slate-600 hover:bg-white"}`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <Field label={isCall ? "Business Outcome" : "Outcome"}>
             <select
               className="mui-input"
               value={form.outcomeCode}
@@ -1269,9 +1402,20 @@ export default function EngagementForm({
                   setShowAdvancedFollowUp(false);
                 }
 
+                const inferredConnection = isCall
+                  ? getEngagementConnectionStatus({ channel: "call", outcomeCode: nextOutcomeCode })
+                  : "not_applicable";
+
                 setForm({
                   ...form,
                   outcomeCode: nextOutcomeCode,
+                  callResult: isCall
+                    ? inferredConnection === "connected"
+                      ? (NON_CONNECTED_OUTCOMES.has(form.callResult) || !form.callResult ? "call_connected" : form.callResult)
+                      : inferredConnection === "not_connected"
+                        ? nextOutcomeCode
+                        : form.callResult
+                    : "",
                   scheduledAt: syncsTravelAgentStatus
                     ? ""
                     : form.scheduledAt
@@ -1442,6 +1586,22 @@ export default function EngagementForm({
 /* =========================
    UI COMPONENTS
 ========================= */
+
+function QuickResultButton({ label, icon, tone = "slate", active, onClick }) {
+  const tones = {
+    green: active ? "border-emerald-500 bg-emerald-100 text-emerald-800" : "border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50",
+    amber: active ? "border-amber-500 bg-amber-100 text-amber-800" : "border-amber-200 bg-white text-amber-700 hover:bg-amber-50",
+    red: active ? "border-rose-500 bg-rose-100 text-rose-800" : "border-rose-200 bg-white text-rose-700 hover:bg-rose-50",
+    slate: active ? "border-slate-500 bg-slate-100 text-slate-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+  };
+
+  return (
+    <button type="button" onClick={onClick} className={`rounded-xl border px-3 py-2.5 text-left text-xs font-semibold transition ${tones[tone] || tones.slate}`}>
+      <span className="mr-1.5">{icon}</span>
+      {label}
+    </button>
+  );
+}
 
 function StepLabel({ number, title }) {
   return (

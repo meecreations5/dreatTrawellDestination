@@ -47,9 +47,11 @@ import {
 } from "@/lib/teamDirectory";
 import { normalizeTravelAgentStatus } from "@/lib/travelAgentStatus";
 import { ENGAGEMENT_OUTCOME_OPTIONS } from "@/lib/engagementIntentMap";
+import { isSuccessfulEngagementConnection } from "@/lib/engagementProductivity";
 
 /* ENGAGEMENT COMPONENTS */
 import AgentEngagementOverviewTable from "@/components/admin/dashboard/engagements/AgentEngagementOverviewTable";
+import AdminProductivityPulseSummary from "@/components/productivity/AdminProductivityPulseSummary";
 
 const engagementChartLoading = () => (
   <div className="flex h-64 items-center justify-center rounded-2xl bg-slate-50 text-sm text-slate-400">
@@ -659,52 +661,7 @@ function getLeadActivityDate(lead = {}) {
 }
 
 function isSuccessfulConnection(item = {}) {
-  const value = [
-    item?.outcomeCode,
-    item?.outcomeLabel,
-    item?.status,
-    item?.result,
-    item?.response,
-    item?.agentResponse
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
-  const negativeSignals = [
-    "no response",
-    "no_response",
-    "no answer",
-    "no_answer",
-    "not connected",
-    "not_connected",
-    "call not connected",
-    "call_not_connected",
-    "busy",
-    "wrong number",
-    "wrong_number",
-    "invalid contact",
-    "invalid_contact",
-    "invalid number",
-    "invalid_number",
-    "business shut down",
-    "business_shut_down",
-    "wrong details",
-    "wrong_details",
-    "do not contact",
-    "do_not_contact",
-    "blacklisted",
-    "not reachable",
-    "not_reachable",
-    "unreachable",
-    "switched off",
-    "switched_off",
-    "declined"
-  ];
-
-  return !negativeSignals.some(
-    signal => value.includes(signal)
-  );
+  return isSuccessfulEngagementConnection(item);
 }
 
 function isHotLead(lead = {}) {
@@ -2962,7 +2919,7 @@ export default function AdminEngagementDashboard() {
         }
       }
 
-      if (isSuccessfulConnection(item)) {
+      if (channelValue === "call" && isSuccessfulConnection(item)) {
         if (!firstSuccessfulByAgent.has(agentKey)) {
           firstSuccessfulByAgent.set(agentKey, { item, date, performerKey });
         }
@@ -3396,7 +3353,11 @@ export default function AdminEngagementDashboard() {
         companyWrongDetailsAgentIds.add(agentKey);
       }
 
-      if (!agentKey || !isSuccessfulConnection(item)) return;
+      if (
+        !agentKey ||
+        recordChannel !== "call" ||
+        !isSuccessfulConnection(item)
+      ) return;
 
       companyConnectedAgentIds.add(agentKey);
       row.connectedAgentIds.add(agentKey);
@@ -4743,6 +4704,8 @@ export default function AdminEngagementDashboard() {
             </div>
           </div>
         </section>
+
+        <AdminProductivityPulseSummary />
 
         {/* FILTER PANEL */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4">

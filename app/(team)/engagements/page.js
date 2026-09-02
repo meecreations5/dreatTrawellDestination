@@ -39,6 +39,7 @@ import {
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import { isSuccessfulEngagementConnection } from "@/lib/engagementProductivity";
 
 import CardSkeleton from "@/components/ui/CardSkeleton";
 import EmptyState from "@/components/ui/EmptyState";
@@ -693,34 +694,7 @@ function getLeadActivityDate(lead = {}) {
 }
 
 function isSuccessfulConnection(item = {}) {
-  const value = [
-    item?.outcomeCode,
-    item?.outcomeLabel,
-    item?.status,
-    item?.result,
-    item?.response,
-    item?.agentResponse
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
-  const negativeSignals = [
-    "no response",
-    "not connected",
-    "call not connected",
-    "busy",
-    "wrong number",
-    "invalid contact",
-    "not reachable",
-    "unreachable",
-    "switched off",
-    "declined"
-  ];
-
-  return !negativeSignals.some(signal =>
-    value.includes(signal)
-  );
+  return isSuccessfulEngagementConnection(item);
 }
 
 function getAgentKey(item = {}) {
@@ -1805,6 +1779,7 @@ export default function TeamEngagementDashboardPage() {
     useMemo(() => {
       const successfulHistory =
         activeEngagements
+          .filter(item => getChannel(item?.channel) === "call")
           .filter(
             isSuccessfulConnection
           )
@@ -1859,6 +1834,7 @@ export default function TeamEngagementDashboardPage() {
               getCreatedAt(item)
             )
           )
+          .filter(item => getChannel(item?.channel) === "call")
           .filter(
             isSuccessfulConnection
           )

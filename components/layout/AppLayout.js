@@ -11,6 +11,7 @@ import { auth } from "@/lib/firebase";
 import { canAccess, getRequiredPermissionForPath } from "@/lib/rolePermissions";
 import { getTitleFromAppNav } from "@/lib/getTitleFromAppNav";
 import { LogOut, ArrowLeft } from "lucide-react";
+import ProductivityPulse from "@/components/productivity/ProductivityPulse";
 
 export default function AppLayout({ children }) {
   const pathname = usePathname();
@@ -55,6 +56,10 @@ export default function AppLayout({ children }) {
     if (!pageTitle) return;
     document.title = `${pageTitle} | DreamTrawell Destinations`;
   }, [pageTitle]);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (loading) return;
@@ -144,6 +149,7 @@ export default function AppLayout({ children }) {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex">
+      <ProductivityPulse />
 
       {/* ================= DESKTOP FLOATING ICON RAIL ================= */}
       <aside

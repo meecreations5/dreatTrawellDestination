@@ -61,7 +61,7 @@ export default function FollowUpForm({ leadId }) {
           setForm({ ...form, outcome: e.target.value })
         }
       >
-        <option value="connected">Connected</option>
+        <option value="connected">Call Connected</option>
         <option value="not_picked">Not Picked</option>
         <option value="interested">Interested</option>
         <option value="quote_requested">Quote Requested</option>

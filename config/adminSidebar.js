@@ -240,6 +240,12 @@ export const adminSidebar = [
         icon: Building2,
         href: "/admin/settings/branding",
         permission: "admin.settings"
+      },
+      {
+        label: "Engagement & Productivity",
+        icon: CalendarClock,
+        href: "/admin/settings/engagement-productivity",
+        permission: "admin.settings"
       }
     ]
   },

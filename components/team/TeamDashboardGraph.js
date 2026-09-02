@@ -16,6 +16,10 @@ import {
   getLeadAssignee,
   getLeadOwner
 } from "@/lib/leadOwnership";
+import {
+  isMeaningfulEngagement,
+  isSuccessfulEngagementConnection
+} from "@/lib/engagementProductivity";
 
 import {
   AlertTriangle,
@@ -766,6 +770,24 @@ export default function TeamDashboardGraph() {
     const newAgentCallsToday = Array.from(firstCallByAgent.values())
       .filter(item => isSameDay(getEngagementDate(item)));
 
+    const todayEngagements = engagements.filter(item =>
+      isSameDay(getEngagementDate(item))
+    );
+    const todayCalls = todayEngagements.filter(isCallEngagement);
+    const todayConnectedCalls = todayCalls.filter(isSuccessfulEngagementConnection);
+    const todayUniqueAgentIds = new Set(
+      todayEngagements.map(getEngagementAgentId).filter(Boolean)
+    );
+    const todayMeaningfulEngagements = todayEngagements.filter(isMeaningfulEngagement);
+    const todayRequirements = todayEngagements.filter(item =>
+      ["requirement_received", "quote_needed"].includes(
+        String(item?.outcomeCode || "").trim().toLowerCase()
+      )
+    );
+    const todayConnectionRate = todayCalls.length
+      ? Math.round((todayConnectedCalls.length / todayCalls.length) * 100)
+      : 0;
+
     const latestEngagements = [...engagements]
       .sort((a, b) => {
         const da = getEngagementDate(a)?.getTime() || 0;
@@ -828,6 +850,15 @@ export default function TeamDashboardGraph() {
       meetingsToday,
       newAgentsToday,
       newAgentCallsToday,
+      productivity: {
+        engagements: todayEngagements.length,
+        calls: todayCalls.length,
+        connectedCalls: todayConnectedCalls.length,
+        connectionRate: todayConnectionRate,
+        uniqueAgents: todayUniqueAgentIds.size,
+        meaningful: todayMeaningfulEngagements.length,
+        requirements: todayRequirements.length
+      },
       latestEngagements,
       topDestinations,
       topCities,
@@ -880,6 +911,58 @@ export default function TeamDashboardGraph() {
 
   return (
     <div className="space-y-5">
+
+      {/* ================= BUSINESS PRODUCTIVITY ================= */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6 gap-4">
+        <StatCard
+          title="Engagements Today"
+          value={stats.productivity.engagements}
+          subtitle={`${stats.productivity.calls} call attempts`}
+          icon={Headphones}
+          tone="blue"
+          onClick={() => router.push("/engagements/my")}
+        />
+        <StatCard
+          title="Calls Connected"
+          value={stats.productivity.connectedCalls}
+          subtitle="Actual successful call connections"
+          icon={Phone}
+          tone="green"
+          onClick={() => router.push("/engagements/my")}
+        />
+        <StatCard
+          title="Connection Rate"
+          value={`${stats.productivity.connectionRate}%`}
+          subtitle="Connected calls / call attempts"
+          icon={TrendingUp}
+          tone="green"
+          onClick={() => router.push("/engagements/my")}
+        />
+        <StatCard
+          title="Unique Agents Touched"
+          value={stats.productivity.uniqueAgents}
+          subtitle="Repeated logs do not inflate coverage"
+          icon={Users}
+          tone="purple"
+          onClick={() => router.push("/engagements/my")}
+        />
+        <StatCard
+          title="Meaningful Engagements"
+          value={stats.productivity.meaningful}
+          subtitle="Relationship or business progress"
+          icon={BarChart3}
+          tone="amber"
+          onClick={() => router.push("/engagements/my")}
+        />
+        <StatCard
+          title="Requirements Generated"
+          value={stats.productivity.requirements}
+          subtitle="Requirement received / quote needed"
+          icon={Compass}
+          tone="blue"
+          onClick={() => router.push("/engagements/my")}
+        />
+      </div>
 
       {/* ================= TODAY PULSE ================= */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">

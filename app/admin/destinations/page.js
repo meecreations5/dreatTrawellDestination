@@ -23,6 +23,8 @@ import {
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
+import { useAuth } from "@/hooks/useAuth";
+import { canAccess } from "@/lib/rolePermissions";
 
 import DestinationCard from "@/components/destination/DestinationCard";
 import DestinationTable from "@/components/destination/DestinationTable";
@@ -100,6 +102,8 @@ function createUniqueOptions(destinations, key) {
 
 export default function DestinationsPage() {
   const router = useRouter();
+  const { user } = useAuth();
+  const canCreate = canAccess(user, "destinations.create");
 
   const [destinations, setDestinations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -307,13 +311,15 @@ export default function DestinationsPage() {
                 </p>
               </div>
 
-              <Link
-                href="/admin/destinations/new"
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
-              >
-                <Plus size={16} />
-                Create Destination
-              </Link>
+              {canCreate && (
+                <Link
+                  href="/admin/destinations/new"
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                >
+                  <Plus size={16} />
+                  Create Destination
+                </Link>
+              )}
             </div>
           </div>
 
