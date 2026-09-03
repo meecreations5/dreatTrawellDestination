@@ -158,7 +158,7 @@ export const adminSidebar = [
         label: "Add Destination",
         icon: PlusCircle,
         href: "/admin/destinations/new",
-        permission: "admin.destinations"
+        permission: "destinations.create"
       }
     ]
   },

@@ -6,6 +6,6 @@ import { useUserDirectory } from "@/hooks/useUserDirectory";
 
 export default function MyActionCenterPage() {
   const { user } = useAuth();
-  const { lookup } = useUserDirectory({ includeInactive: true });
-  return <ActionCenterWorkspace user={user} userLookup={lookup} />;
+  const { lookup, directory } = useUserDirectory({ includeInactive: true });
+  return <ActionCenterWorkspace user={user} userLookup={lookup} directory={directory} />;
 }

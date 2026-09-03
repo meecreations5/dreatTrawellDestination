@@ -43,7 +43,7 @@ import {
 import { db, storage } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { createManualLead } from "@/lib/createManualLead";
-import { normalizeRole } from "@/lib/rolePermissions";
+import { canAccess, normalizeRole, resolveUserRole } from "@/lib/rolePermissions";
 import {
   cleanOfficeClipboardText,
   richTextHtmlToText,
@@ -455,15 +455,29 @@ export default function ManualLeadCreatePage() {
     [spocs, spocIndex]
   );
 
+  const currentRole = useMemo(() => resolveUserRole(user || {}), [user]);
+  const isEngagementExecutive = currentRole === "employee";
+
+  const assignableTeam = useMemo(() => {
+    if (!isEngagementExecutive) return team;
+    return team.filter(member =>
+      ["operation_executive", "manager", "admin", "super_admin"].includes(resolveUserRole(member))
+    );
+  }, [team, isEngagementExecutive]);
+
   const canAssignAnotherUser = useMemo(
-    () => ["super_admin", "admin", "manager"].includes(normalizeRole(user?.role)),
-    [user?.role]
+    () => isEngagementExecutive || ["super_admin", "admin", "manager"].includes(currentRole),
+    [currentRole, isEngagementExecutive]
   );
 
   const assignedUser = useMemo(() => {
+    if (isEngagementExecutive) {
+      if (!assignedToUid) return null;
+      return assignableTeam.find(member => member.uid === assignedToUid) || null;
+    }
     if (!canAssignAnotherUser || !assignedToUid) return user;
-    return team.find(member => member.uid === assignedToUid) || user;
-  }, [assignedToUid, team, user, canAssignAnotherUser]);
+    return assignableTeam.find(member => member.uid === assignedToUid) || user;
+  }, [assignedToUid, assignableTeam, user, canAssignAnotherUser, isEngagementExecutive]);
 
   const agentAddress = useMemo(
     () => formatAddress(agent?.address),
@@ -498,6 +512,7 @@ export default function ManualLeadCreatePage() {
     Boolean(destination) &&
     Boolean(agent) &&
     Boolean(spoc) &&
+    Boolean(assignedUser?.uid) &&
     !saving &&
     !referenceUploading &&
     !pageLoading;
@@ -711,7 +726,12 @@ export default function ManualLeadCreatePage() {
         travelMonth: travelStartDate ? travelStartDate.slice(0, 7) : ""
       });
 
-      router.push(`/leads/${leadId}`);
+      if (canAccess(user, "leads.view")) {
+        router.push(`/leads/${leadId}`);
+      } else {
+        window.alert("Lead created successfully and handed over to Lead & Operations.");
+        router.push(requestedMeetingId ? "/meetings" : "/engagements/my");
+      }
     } catch (err) {
       console.error("Manual lead creation failed:", err);
       setFormError(
@@ -998,9 +1018,13 @@ export default function ManualLeadCreatePage() {
                       value={assignedToUid}
                       onChange={e => setAssignedToUid(e.target.value)}
                     >
-                      <option value="">Assign to self - {getDisplayName(user)}</option>
+                      <option value="">
+                        {isEngagementExecutive
+                          ? "Select Lead & Operations Executive"
+                          : `Assign to self - ${getDisplayName(user)}`}
+                      </option>
 
-                      {team.map((member, index) => (
+                      {assignableTeam.map((member, index) => (
                         <option
                           key={member.uid || `team-${index}`}
                           value={member.uid || ""}
@@ -1015,6 +1039,9 @@ export default function ManualLeadCreatePage() {
                       Assigned to you - {getDisplayName(user)}
                     </div>
                   )}
+                  {isEngagementExecutive && !assignedToUid ? (
+                    <p className="text-xs font-medium text-amber-700">Select the Lead & Operations Executive who will manage this Lead.</p>
+                  ) : null}
                 </div>
 
                 {/* CLIENT REFERENCE */}

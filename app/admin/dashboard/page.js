@@ -34,6 +34,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { useAdminScope } from "@/components/admin/AdminScopeProvider";
 import { getAdminDateWindow } from "@/lib/adminScope";
 import { resolveDirectoryIdentity, teamMatchesScope } from "@/lib/teamDirectory";
+import { isMeaningfulEngagement, isSuccessfulEngagementConnection } from "@/lib/engagementProductivity";
+import { WORKSTREAMS, roleWorkstream, workstreamShortLabel } from "@/lib/workstream";
 
 /* DASHBOARD COMPONENTS */
 import DashboardKpiCard from "@/components/admin/dashboard/DashboardKpiCard";
@@ -1054,6 +1056,11 @@ export default function AdminDashboardGraph() {
           // Assignment = current working responsibility.
           assignedLeads: 0,
           assignedActiveLeads: 0,
+          managedWonLeads: 0,
+          managedLostLeads: 0,
+          managedQuoteSentLeads: 0,
+          managedQuotationValue: 0,
+          managedGrossProfit: 0,
 
           // Travel-agent acquisition and engagement.
           newAgentsAdded: 0,
@@ -1064,6 +1071,9 @@ export default function AdminDashboardGraph() {
           engagements: 0,
           completedEngagements: 0,
           calls: 0,
+          connectedCalls: 0,
+          meaningfulEngagements: 0,
+          requirementsGenerated: 0,
           firstCalls: 0,
           newAgentCalls: 0,
           whatsapp: 0,
@@ -1129,6 +1139,11 @@ export default function AdminDashboardGraph() {
         const assigneeRow = ensureMember(assignee);
         assigneeRow.assignedLeads += 1;
         if (isActiveLead(lead)) assigneeRow.assignedActiveLeads += 1;
+        if (isWonLead(lead)) assigneeRow.managedWonLeads += 1;
+        if (isLostLead(lead)) assigneeRow.managedLostLeads += 1;
+        if (hasQuotationSent(lead)) assigneeRow.managedQuoteSentLeads += 1;
+        assigneeRow.managedQuotationValue += getLeadQuotationAmount(lead);
+        assigneeRow.managedGrossProfit += getLeadGrossProfit(lead);
         updateLastActivity(assigneeRow, lead.lastActivityAt || lead.updatedAt || lead.assignedAt);
       }
     });
@@ -1157,6 +1172,9 @@ export default function AdminDashboardGraph() {
 
       row.engagements += 1;
       if (normalize(item.status) === "completed") row.completedEngagements += 1;
+      if (isSuccessfulEngagementConnection(item)) row.connectedCalls += 1;
+      if (isMeaningfulEngagement(item)) row.meaningfulEngagements += 1;
+      if (["requirement_received", "quote_needed"].includes(outcome)) row.requirementsGenerated += 1;
       if (agentId) row.contactedAgentIds.add(agentId);
 
       if (channel === "call") {
@@ -1184,8 +1202,26 @@ export default function AdminDashboardGraph() {
 
     return Array.from(map.values())
       .map(row => {
-        const profitScore = Math.max(Math.floor(row.grossProfit / 1000), 0);
-        const score =
+        const workstream = roleWorkstream(row.role);
+        const uniqueAgentsContacted = row.contactedAgentIds.size;
+        const uniqueAgentsCalled = row.calledAgentIds.size;
+        const engagementScore =
+          row.requirementsGenerated * 10 +
+          row.ownedLeads * 8 +
+          row.connectedCalls * 3 +
+          row.meaningfulEngagements * 3 +
+          uniqueAgentsContacted * 2 +
+          row.firstCalls * 2 +
+          row.meetings * 3;
+        const managedProfitScore = Math.max(Math.floor(row.managedGrossProfit / 1000), 0);
+        const operationsScore =
+          row.managedWonLeads * 15 +
+          row.managedQuoteSentLeads * 6 +
+          row.assignedActiveLeads * 2 +
+          managedProfitScore -
+          row.managedLostLeads * 3;
+        const mixedProfitScore = Math.max(Math.floor(row.grossProfit / 1000), 0);
+        const mixedScore =
           row.wonLeads * 15 +
           row.quoteSentLeads * 5 +
           row.completedEngagements * 3 +
@@ -1194,13 +1230,20 @@ export default function AdminDashboardGraph() {
           row.newAgentsAdded * 2 +
           row.firstCalls * 2 +
           row.activeLeads +
-          profitScore -
+          mixedProfitScore -
           row.lostLeads * 5;
+        const score = workstream === WORKSTREAMS.ENGAGEMENT
+          ? engagementScore
+          : workstream === WORKSTREAMS.LEAD_OPERATIONS
+            ? operationsScore
+            : mixedScore;
 
         return {
           ...row,
-          uniqueAgentsContacted: row.contactedAgentIds.size,
-          uniqueAgentsCalled: row.calledAgentIds.size,
+          workstream,
+          workstreamLabel: workstreamShortLabel(workstream),
+          uniqueAgentsContacted,
+          uniqueAgentsCalled,
           followUpCalls: Math.max(row.calls - row.firstCalls, 0),
           invalidNumber: row.invalidAgentIds.size,
           businessShutDown: row.businessShutAgentIds.size,
@@ -2392,7 +2435,7 @@ export default function AdminDashboardGraph() {
           <SectionHeader
             icon={Users}
             title="Team Performance"
-            description="Commercial performance with permanent lead ownership, current assignment workload and engagement activity kept distinct."
+            description="Role-based performance: Engagement is measured on relationship and qualified Lead generation; Lead & Operations is measured on managed pipeline, quotation and conversion responsibility."
           />
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

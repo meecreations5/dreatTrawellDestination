@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, Save, TimerReset } from "lucide-react";
+import { Loader2, PlayCircle, Save, TimerReset } from "lucide-react";
 
 import Card from "@/components/ui/Card";
 import { useAuth } from "@/hooks/useAuth";
@@ -10,10 +10,11 @@ import {
   getProductivitySettings,
   saveProductivitySettings
 } from "@/lib/engagementProductivitySettings";
+import { PRODUCTIVITY_PULSE_TEST_EVENT } from "@/components/productivity/ProductivityPulse";
 
 const ROLE_OPTIONS = [
-  ["employee", "Employee / Sales"],
-  ["operation_executive", "Operation Executive"],
+  ["employee", "Engagement / Relationship Executive"],
+  ["operation_executive", "Lead & Operations Executive"],
   ["manager", "Manager"],
   ["associate", "Associate"],
   ["partner", "Partner"]
@@ -71,6 +72,10 @@ export default function EngagementProductivitySettingsPage() {
       else current.add(role);
       return { ...prev, enabledRoles: Array.from(current) };
     });
+  };
+
+  const testPulse = () => {
+    window.dispatchEvent(new Event(PRODUCTIVITY_PULSE_TEST_EVENT));
   };
 
   const save = async () => {
@@ -172,7 +177,7 @@ export default function EngagementProductivitySettingsPage() {
       <Card className="space-y-4">
         <div>
           <h2 className="text-sm font-bold text-slate-900">Roles receiving the pulse</h2>
-          <p className="mt-1 text-xs text-slate-500">Admins are excluded by default so the popup stays focused on execution roles.</p>
+          <p className="mt-1 text-xs text-slate-500">Admins are excluded from live pulses by default so the popup stays focused on execution roles. Use Test Pulse Now below to preview it instantly.</p>
         </div>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {ROLE_OPTIONS.map(([value, label]) => (
@@ -188,7 +193,15 @@ export default function EngagementProductivitySettingsPage() {
         </div>
       </Card>
 
-      <div className="flex justify-end">
+      <div className="flex flex-wrap justify-end gap-3">
+        <button
+          type="button"
+          onClick={testPulse}
+          className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+        >
+          <PlayCircle className="h-4 w-4" />
+          Test Pulse Now
+        </button>
         <button
           type="button"
           onClick={save}

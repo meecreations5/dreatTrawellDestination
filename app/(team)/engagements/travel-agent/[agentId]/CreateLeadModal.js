@@ -11,6 +11,7 @@ import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { useRouter } from "next/navigation";
 import { createLeadFromEngagement } from "@/lib/createLeadFromEngagement";
+import { canAccess, resolveUserRole } from "@/lib/rolePermissions";
 
 import EngagementChip from "@/components/engagement/EngagementChip";
 
@@ -26,6 +27,7 @@ export default function CreateLeadModal({ engagement, onClose }) {
   const [travelStartDate, setTravelStartDate] = useState("");
   const [travelEndDate, setTravelEndDate] = useState("");
   const [saving, setSaving] = useState(false);
+  const isEngagementExecutive = resolveUserRole(user || {}) === "employee";
 
   /* =========================
      LOAD TEAM
@@ -41,11 +43,10 @@ export default function CreateLeadModal({ engagement, onClose }) {
       );
 
       setTeam(
-        snap.docs.map(d => ({
-          uid: d.id,
-          name: d.data().name,
-          email: d.data().email
-        }))
+        snap.docs
+          .map(d => ({ uid: d.id, ...d.data() }))
+          .filter(member => ["operation_executive", "manager", "admin", "super_admin"].includes(resolveUserRole(member)))
+          .map(member => ({ uid: member.uid, name: member.name, email: member.email, role: member.role, accessRole: member.accessRole }))
       );
     };
 
@@ -94,12 +95,18 @@ export default function CreateLeadModal({ engagement, onClose }) {
       d => d.id === destinationId
     );
 
-    const assignee =
-      team.find(t => t.uid === assignedUid) || {
-        uid: user.uid,
-        email: user.email,
-        name: user.name
-      };
+    const isEngagementExecutive = resolveUserRole(user || {}) === "employee";
+    const assignee = team.find(t => t.uid === assignedUid) || (isEngagementExecutive ? null : {
+      uid: user.uid,
+      email: user.email,
+      name: user.name
+    });
+
+    if (!assignee?.uid) {
+      alert("Please assign this Lead to a Lead & Operations Executive.");
+      setSaving(false);
+      return;
+    }
 
     try {
       const leadId = await createLeadFromEngagement({
@@ -121,9 +128,15 @@ export default function CreateLeadModal({ engagement, onClose }) {
         travelMonth: travelStartDate ? travelStartDate.slice(0, 7) : ""
       });
 
-      alert("Lead created successfully");
+      alert(
+        canAccess(user, "leads.view")
+          ? "Lead created successfully"
+          : "Lead created successfully and handed over to Lead & Operations."
+      );
       onClose();
-      router.push(`/leads/${leadId}`);
+      if (canAccess(user, "leads.view")) {
+        router.push(`/leads/${leadId}`);
+      }
     } catch (err) {
       alert(err.message || "Failed to create lead");
     } finally {
@@ -178,12 +191,14 @@ export default function CreateLeadModal({ engagement, onClose }) {
           </p>
 
           <div className="flex gap-3 flex-wrap">
-            <EngagementChip
-              label="Assign to self"
-              icon="👤"
-              active={!assignedUid}
-              onClick={() => setAssignedUid("")}
-            />
+            {!isEngagementExecutive ? (
+              <EngagementChip
+                label="Assign to self"
+                icon="👤"
+                active={!assignedUid}
+                onClick={() => setAssignedUid("")}
+              />
+            ) : null}
 
             {team.map(u => (
               <EngagementChip
@@ -195,6 +210,9 @@ export default function CreateLeadModal({ engagement, onClose }) {
               />
             ))}
           </div>
+          {isEngagementExecutive && !assignedUid ? (
+            <p className="text-xs font-medium text-amber-700">Select a Lead & Operations assignee for handover.</p>
+          ) : null}
         </div>
 
         {/* ACTIONS */}

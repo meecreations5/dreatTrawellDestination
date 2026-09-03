@@ -58,8 +58,14 @@ function normalizeRole(data = {}) {
   return resolveUserRole(data);
 }
 
-function getTeamAccessText() {
-  return "Dashboard, Travel Agents, Engagements, Meetings, Leads, Quotations and normal follow-up work are available automatically to every active user.";
+function getTeamAccessText(role) {
+  if (role === "employee") {
+    return "Travel Agents, Engagements, Meetings and Destinations. Qualified Leads can be created from Engagement/Meeting for handover, without direct Lead workspace access.";
+  }
+  if (role === "operation_executive") {
+    return "Travel Agents, Engagements, Meetings, Leads and Destinations, including the Lead & Operations work queue.";
+  }
+  return "Dashboard and the standard CRM workspace are available according to the selected role.";
 }
 
 export default function EditUserPage() {
@@ -442,7 +448,7 @@ export default function EditUserPage() {
                     <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
                     <div>
                       <p className="text-sm font-semibold text-emerald-900">Team/User Access — Included</p>
-                      <p className="mt-1 text-xs leading-5 text-emerald-700">{getTeamAccessText()}</p>
+                      <p className="mt-1 text-xs leading-5 text-emerald-700">{getTeamAccessText(form?.role)}</p>
                       <p className="mt-2 text-xs font-medium text-emerald-800">Travel Agent rule: normal users can claim an unassigned agent for themselves. Manager/Admin/Super Admin can reassign.</p>
                     </div>
                   </div>

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
-import { canEnterAdminArea, getAdminLandingPathForRole } from "@/lib/rolePermissions";
+import { canEnterAdminArea, getAdminLandingPathForRole, getRoleLabel, resolveUserRole } from "@/lib/rolePermissions";
 
 import {
   LogOut,
@@ -96,15 +96,12 @@ export default function DashboardPage() {
 
   const hasAdminAccess = useMemo(() => canEnterAdminArea(user), [user]);
 
-  const roleLabel = useMemo(() => {
-    if (user?.role) {
-      return String(user.role)
-        .replaceAll("_", " ")
-        .replace(/\b\w/g, char => char.toUpperCase());
-    }
+  const effectiveRole = useMemo(() => resolveUserRole(user || {}), [user]);
 
+  const roleLabel = useMemo(() => {
+    if (user) return getRoleLabel(effectiveRole);
     return hasAdminAccess ? "Admin Access" : "Team Member";
-  }, [user?.role, hasAdminAccess]);
+  }, [user, effectiveRole, hasAdminAccess]);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -190,7 +187,7 @@ export default function DashboardPage() {
                       label="Admin"
                       variant="admin"
                       title="Admin Dashboard"
-                      onClick={() => router.push(getAdminLandingPathForRole(user?.role))}
+                      onClick={() => router.push(getAdminLandingPathForRole(effectiveRole))}
                     />
                   )}
 

@@ -7,10 +7,10 @@ import { useAuth } from "@/hooks/useAuth";
 
 export default function AdminActionCenterPage() {
   const { user } = useAuth();
-  const { scope, userLookup } = useAdminScope();
+  const { scope, userLookup, teamDirectory } = useAdminScope();
   return (
     <AdminGuard>
-      <ActionCenterWorkspace adminMode user={user} scopeTeam={scope.team} userLookup={userLookup} />
+      <ActionCenterWorkspace adminMode user={user} scopeTeam={scope.team} userLookup={userLookup} directory={teamDirectory} />
     </AdminGuard>
   );
 }

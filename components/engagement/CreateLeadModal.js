@@ -35,6 +35,7 @@ import { db, storage } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { useRouter } from "next/navigation";
 import { createLeadFromEngagement } from "@/lib/createLeadFromEngagement";
+import { canAccess, resolveUserRole } from "@/lib/rolePermissions";
 import {
   cleanOfficeClipboardText,
   richTextHtmlToText,
@@ -564,6 +565,7 @@ export default function CreateLeadModal({ engagement, onClose }) {
         setTeam(
           teamRows
             .filter(Boolean)
+            .filter(member => ["operation_executive", "manager", "admin", "super_admin"].includes(resolveUserRole(member)))
             .sort((a, b) =>
               getDisplayName(a).localeCompare(getDisplayName(b))
             )
@@ -638,8 +640,11 @@ export default function CreateLeadModal({ engagement, onClose }) {
     return destinations.find(d => d.id === destinationId) || null;
   }, [destinations, destinationId]);
 
+  const isEngagementExecutive = resolveUserRole(user || {}) === "employee";
+
   const assignee = useMemo(() => {
     if (!assignedUid) {
+      if (isEngagementExecutive) return null;
       return {
         uid: user?.uid || "",
         email: user?.email || "",
@@ -654,12 +659,13 @@ export default function CreateLeadModal({ engagement, onClose }) {
         name: getDisplayName(user)
       }
     );
-  }, [assignedUid, team, user]);
+  }, [assignedUid, team, user, isEngagementExecutive]);
 
   const clientReferenceText = stripHtml(clientReferenceHtml);
 
   const canCreate =
     Boolean(destinationId) &&
+    Boolean(assignee?.uid) &&
     !saving &&
     !uploadingReferences &&
     !pageLoading;
@@ -844,7 +850,11 @@ export default function CreateLeadModal({ engagement, onClose }) {
       });
 
       onClose?.();
-      router.push(`/leads/${leadId}`);
+      if (canAccess(user, "leads.view")) {
+        router.push(`/leads/${leadId}`);
+      } else {
+        window.alert("Lead created successfully and handed over to Lead & Operations.");
+      }
     } catch (err) {
       console.error("Create lead from engagement failed:", err);
       setFormError(err?.message || "Failed to create lead.");
@@ -1002,12 +1012,14 @@ export default function CreateLeadModal({ engagement, onClose }) {
                 </p>
 
                 <div className="flex gap-2 flex-wrap">
-                  <EngagementChip
-                    label={`Self - ${getDisplayName(user)}`}
-                    icon="👤"
-                    active={!assignedUid}
-                    onClick={() => setAssignedUid("")}
-                  />
+                  {!isEngagementExecutive ? (
+                    <EngagementChip
+                      label={`Self - ${getDisplayName(user)}`}
+                      icon="👤"
+                      active={!assignedUid}
+                      onClick={() => setAssignedUid("")}
+                    />
+                  ) : null}
 
                   {team.map((u, index) => {
                     const safeUid =
@@ -1027,6 +1039,9 @@ export default function CreateLeadModal({ engagement, onClose }) {
                     );
                   })}
                 </div>
+                {isEngagementExecutive && !assignedUid ? (
+                  <p className="text-xs font-medium text-amber-700">Select a Lead & Operations assignee to hand over this qualified Lead.</p>
+                ) : null}
               </div>
 
               {/* CLIENT REFERENCE */}

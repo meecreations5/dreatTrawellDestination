@@ -1237,40 +1237,56 @@ function ManagementTeamTable({ rows }) {
   return (
     <DashboardTable
       icon={Users}
-      title="Team Commercial Activity"
-      description="Creator ownership, current assigned workload, conversions and agent engagement are kept distinct."
+      title="Role-Based Team Performance"
+      description="Engagement owns relationship and Lead generation. Lead & Operations owns assigned pipeline, quotation, conversion and execution."
       headers={[
         "Team Member",
-        "New Agents",
-        "First Calls",
-        "Owned Leads",
-        "Assigned",
-        "Won",
-        "Gross Profit",
-        "Engagements",
-        "Score",
-        "Rating"
+        "Workstream",
+        "Primary Output",
+        "Leads Generated",
+        "Leads Managed",
+        "Connected",
+        "Requirements",
+        "Managed Quotes",
+        "Managed Wins",
+        "Role Score"
       ]}
       emptyText="No team data found."
       colSpan={10}
     >
-      {rows.map(row => (
-        <tr key={row.uid || row.email || row.name} className="hover:bg-gray-50">
-          <td className="px-4 py-3 text-left">
-            <div className="font-medium text-gray-900">{row.name}</div>
-            <div className="text-xs text-gray-500">{row.department || row.email || "—"}</div>
-          </td>
-          <td className="px-4 py-3 text-right">{row.newAgentsAdded}</td>
-          <td className="px-4 py-3 text-right font-medium text-green-700">{row.firstCalls}</td>
-          <td className="px-4 py-3 text-right">{row.ownedLeads}</td>
-          <td className="px-4 py-3 text-right">{row.assignedLeads}</td>
-          <td className="px-4 py-3 text-right font-medium text-green-700">{row.wonLeads}</td>
-          <td className="px-4 py-3 text-right font-medium">{formatCurrency(row.grossProfit)}</td>
-          <td className="px-4 py-3 text-right">{row.engagements}</td>
-          <td className="px-4 py-3 text-right font-semibold">{row.score}</td>
-          <td className="px-4 py-3 text-right"><span className={`inline-flex items-center px-2 py-1 rounded-full text-xs border ${getScoreClass(row.score)}`}>{getScoreLabel(row.score)}</span></td>
-        </tr>
-      ))}
+      {rows.map(row => {
+        const engagement = row.workstream === "engagement";
+        const operations = row.workstream === "lead_operations";
+        const primaryOutput = engagement
+          ? `${row.requirementsGenerated || 0} requirements · ${row.ownedLeads || 0} leads`
+          : operations
+            ? `${row.managedQuoteSentLeads || 0} quotes · ${row.managedWonLeads || 0} wins`
+            : `${row.engagements || 0} engagement · ${row.assignedLeads || 0} assigned`;
+        return (
+          <tr key={row.uid || row.email || row.name} className="hover:bg-gray-50">
+            <td className="px-4 py-3 text-left">
+              <div className="font-medium text-gray-900">{row.name}</div>
+              <div className="text-xs text-gray-500">{row.department || row.email || "—"}</div>
+            </td>
+            <td className="px-4 py-3 text-left">
+              <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${engagement ? "bg-violet-50 text-violet-700" : operations ? "bg-cyan-50 text-cyan-700" : "bg-gray-100 text-gray-600"}`}>
+                {row.workstreamLabel || "General"}
+              </span>
+            </td>
+            <td className="px-4 py-3 text-left text-xs font-medium text-gray-700">{primaryOutput}</td>
+            <td className="px-4 py-3 text-right">{row.ownedLeads}</td>
+            <td className="px-4 py-3 text-right">{row.assignedLeads}</td>
+            <td className="px-4 py-3 text-right font-medium text-green-700">{row.connectedCalls || 0}</td>
+            <td className="px-4 py-3 text-right font-medium text-violet-700">{row.requirementsGenerated || 0}</td>
+            <td className="px-4 py-3 text-right">{row.managedQuoteSentLeads || 0}</td>
+            <td className="px-4 py-3 text-right font-medium text-green-700">{row.managedWonLeads || 0}</td>
+            <td className="px-4 py-3 text-right">
+              <div className="font-semibold">{row.score}</div>
+              <span className={`mt-1 inline-flex items-center px-2 py-1 rounded-full text-xs border ${getScoreClass(row.score)}`}>{getScoreLabel(row.score)}</span>
+            </td>
+          </tr>
+        );
+      })}
     </DashboardTable>
   );
 }

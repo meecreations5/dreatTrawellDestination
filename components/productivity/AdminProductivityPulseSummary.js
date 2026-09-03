@@ -6,6 +6,7 @@ import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { Activity, Settings2, Star, TimerReset, Users } from "lucide-react";
 
 import { db } from "@/lib/firebase";
+import { WORKSTREAMS, roleWorkstream, workstreamShortLabel } from "@/lib/workstream";
 
 function toDate(value) {
   if (!value) return null;
@@ -60,6 +61,8 @@ export default function AdminProductivityPulseSummary() {
         grouped.set(key, {
           key,
           name: row.userName || row.userEmail || "Team Member",
+          role: row.role || "",
+          workstream: row.workstream || roleWorkstream(row.role),
           pulses: 0,
           ratingTotal: 0,
           ratingCount: 0,
@@ -68,6 +71,8 @@ export default function AdminProductivityPulseSummary() {
       }
       const item = grouped.get(key);
       item.pulses += 1;
+      item.role = row.role || item.role;
+      item.workstream = row.workstream || roleWorkstream(row.role || item.role);
       if (Number(row.rating) > 0) {
         item.ratingTotal += Number(row.rating);
         item.ratingCount += 1;
@@ -124,13 +129,11 @@ export default function AdminProductivityPulseSummary() {
           <thead className="bg-slate-50 text-slate-500">
             <tr>
               <th className="px-4 py-3 font-semibold">Team Member</th>
+              <th className="px-4 py-3 font-semibold">Workstream</th>
               <th className="px-4 py-3 text-right font-semibold">Pulses</th>
               <th className="px-4 py-3 text-right font-semibold">Avg Rating</th>
-              <th className="px-4 py-3 text-right font-semibold">Latest Engagements</th>
-              <th className="px-4 py-3 text-right font-semibold">Connected</th>
-              <th className="px-4 py-3 text-right font-semibold">Unique Agents</th>
-              <th className="px-4 py-3 text-right font-semibold">Meaningful</th>
-              <th className="px-4 py-3 text-right font-semibold">Requirements</th>
+              <th className="px-4 py-3 font-semibold">Latest Output</th>
+              <th className="px-4 py-3 font-semibold">Latest Detail</th>
               <th className="px-4 py-3 text-right font-semibold">Latest Pulse</th>
             </tr>
           </thead>
@@ -140,13 +143,11 @@ export default function AdminProductivityPulseSummary() {
               return (
                 <tr key={item.key} className="text-slate-700">
                   <td className="px-4 py-3 font-semibold text-slate-900">{item.name}</td>
+                  <td className="px-4 py-3"><span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${item.workstream === WORKSTREAMS.ENGAGEMENT ? "bg-violet-50 text-violet-700" : item.workstream === WORKSTREAMS.LEAD_OPERATIONS ? "bg-cyan-50 text-cyan-700" : "bg-slate-100 text-slate-600"}`}>{workstreamShortLabel(item.workstream)}</span></td>
                   <td className="px-4 py-3 text-right">{item.pulses}</td>
                   <td className="px-4 py-3 text-right"><span className="inline-flex items-center gap-1"><Star className="h-3.5 w-3.5 text-amber-500" />{item.averageRating}</span></td>
-                  <td className="px-4 py-3 text-right">{metrics.engagements ?? 0}</td>
-                  <td className="px-4 py-3 text-right">{metrics.connected ?? 0}</td>
-                  <td className="px-4 py-3 text-right">{metrics.uniqueAgents ?? 0}</td>
-                  <td className="px-4 py-3 text-right">{metrics.meaningful ?? 0}</td>
-                  <td className="px-4 py-3 text-right">{metrics.requirements ?? 0}</td>
+                  <td className="px-4 py-3 font-medium text-slate-800">{item.workstream === WORKSTREAMS.LEAD_OPERATIONS ? `${metrics.completedWork ?? 0} completed · ${metrics.workActions ?? 0} actions` : `${metrics.requirements ?? 0} requirements · ${metrics.leadsGenerated ?? 0} leads`}</td>
+                  <td className="px-4 py-3 text-slate-500">{item.workstream === WORKSTREAMS.LEAD_OPERATIONS ? `${metrics.quoteWork ?? 0} quote · ${metrics.requoteWork ?? 0} re-quote · ${metrics.onGroundWork ?? 0} on-ground` : `${metrics.connected ?? 0} connected · ${metrics.uniqueAgents ?? 0} agents · ${metrics.meaningful ?? 0} meaningful`}</td>
                   <td className="px-4 py-3 text-right text-slate-500">{formatTime(item.latest?.pulseSlotAt)}</td>
                 </tr>
               );

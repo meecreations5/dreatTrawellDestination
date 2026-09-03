@@ -8,6 +8,8 @@ import EngagementChip from "@/components/engagement/EngagementChip";
 import InitialAvatar from "@/components/ui/InitialAvatar";
 import CreateLeadModal from "./CreateLeadModal";
 import SendCommunicationModal from "./SendCommunicationModal";
+import { useAuth } from "@/hooks/useAuth";
+import { canAccess } from "@/lib/rolePermissions";
 
 export default function EngagementCard({
   engagement,
@@ -15,6 +17,8 @@ export default function EngagementCard({
   highlight
 }) {
   const router = useRouter();
+  const { user } = useAuth();
+  const canViewLead = canAccess(user, "leads.view");
 
   const [leadOpen, setLeadOpen] = useState(false);
   const [commOpen, setCommOpen] = useState(false);
@@ -179,14 +183,16 @@ export default function EngagementCard({
           </button>
         )}
 
-        {engagement.leadId && (
+        {engagement.leadId && canViewLead ? (
           <button
             onClick={() => router.push(`/leads/${engagement.leadId}`)}
             className="text-sm text-blue-600 hover:underline"
           >
             View Lead
           </button>
-        )}
+        ) : engagement.leadId ? (
+          <span className="text-sm font-medium text-emerald-700">Lead Handed Over</span>
+        ) : null}
       </div>
 
       {/* MODALS */}

@@ -29,6 +29,8 @@ import {
 import InitialAvatar from "@/components/ui/InitialAvatar";
 import CreateLeadModal from "@/components/engagement/CreateLeadModal";
 import SendCommunicationModal from "@/components/engagement/SendCommunicationModal";
+import { useAuth } from "@/hooks/useAuth";
+import { canAccess } from "@/lib/rolePermissions";
 
 /* =========================
    CHANNEL CONFIG
@@ -439,6 +441,8 @@ export default function EngagementCard({
   showProfileBadge = true
 }) {
   const router = useRouter();
+  const { user } = useAuth();
+  const canViewLead = canAccess(user, "leads.view");
 
   const [expanded, setExpanded] = useState(false);
   const [assetsExpanded, setAssetsExpanded] = useState(false);
@@ -987,7 +991,7 @@ export default function EngagementCard({
               <PlusCircle className="w-3.5 h-3.5" />
               Lead
             </button>
-          ) : (
+          ) : canViewLead ? (
             <button
               type="button"
               onClick={() => router.push(`/leads/${engagement.leadId}`)}
@@ -996,6 +1000,10 @@ export default function EngagementCard({
               <Eye className="w-3.5 h-3.5" />
               Lead
             </button>
+          ) : (
+            <span className="py-1.5 rounded-md text-xs font-medium border border-emerald-200 bg-emerald-50 text-emerald-700 flex items-center justify-center px-2">
+              Lead Handed Over
+            </span>
           )}
         </div>
       </article>

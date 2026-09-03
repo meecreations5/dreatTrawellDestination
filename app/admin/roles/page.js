@@ -19,7 +19,7 @@ export default function RoleDefaultsPage() {
           <div>
             <h1 className="text-xl font-semibold text-gray-900">Role Access</h1>
             <p className="mt-1 max-w-3xl text-sm text-gray-500">
-              Simple rule: every active user gets the normal Team/User CRM workspace. The selected role decides which Admin pages are available.
+              Role access now follows the actual workstream. Engagement Executives focus on Travel Agent relationships; Lead & Operations Executives manage the Lead pipeline and execution.
             </p>
           </div>
         </div>
@@ -28,9 +28,9 @@ export default function RoleDefaultsPage() {
           <div className="flex items-start gap-3">
             <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
             <div>
-              <p className="text-sm font-semibold text-emerald-900">Team/User Access is automatic</p>
+              <p className="text-sm font-semibold text-emerald-900">Workstream access is automatic</p>
               <p className="mt-1 text-sm leading-6 text-emerald-700">
-                Dashboard, Travel Agents, Engagements, Meetings, Leads, Quotations and normal follow-up work do not need separate permission setup.
+                Engagement / Relationship Executive: Travel Agents, Engagements, Meetings and Destinations. Lead & Operations Executive: Travel Agents, Engagements, Meetings, Leads and Destinations.
               </p>
               <p className="mt-1 text-xs font-medium text-emerald-800">
                 Travel Agents: users can claim an unassigned agent for themselves; Manager/Admin/Super Admin can reassign.

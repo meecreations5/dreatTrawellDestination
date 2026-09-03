@@ -20,6 +20,8 @@ import {
   isMeaningfulEngagement,
   isSuccessfulEngagementConnection
 } from "@/lib/engagementProductivity";
+import { resolveUserRole } from "@/lib/rolePermissions";
+import { WORKSTREAMS, roleWorkstream } from "@/lib/workstream";
 
 import {
   AlertTriangle,
@@ -30,6 +32,7 @@ import {
   Compass,
   Headphones,
   MapPin,
+  ListChecks,
   MessageCircle,
   Phone,
   Plus,
@@ -141,6 +144,19 @@ function getLeadCreatedByUid(lead) {
 
 function getLeadAssignedToUid(lead) {
   return getLeadAssignee(lead).uid || "";
+}
+
+function getLeadCreatedDate(lead) {
+  return toDate(lead?.createdAt) || toDate(lead?.createdOn) || toDate(lead?.createdDate) || null;
+}
+
+function getLeadAssignedDate(lead) {
+  return toDate(lead?.assignedAt) || null;
+}
+
+function isTerminalLead(lead) {
+  const stage = String(getLeadStage(lead) || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return ["won", "lost", "closed", "closed_won", "closed_lost", "cancelled", "completed"].includes(stage);
 }
 
 function getLeadTitle(lead) {
@@ -585,11 +601,15 @@ export default function TeamDashboardGraph() {
   const [leads, setLeads] = useState([]);
   const [engagements, setEngagements] = useState([]);
   const [travelAgents, setTravelAgents] = useState([]);
+  const [workTasks, setWorkTasks] = useState([]);
+  const [engagementTasks, setEngagementTasks] = useState([]);
   const [fetching, setFetching] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
   const todayKey = useMemo(() => toDateKey(new Date()), []);
+  const currentRole = resolveUserRole(user || {});
+  const currentWorkstream = roleWorkstream(currentRole);
 
   useEffect(() => {
     if (loading || !user?.uid) return;
@@ -609,7 +629,9 @@ export default function TeamDashboardGraph() {
         createdByEngagements,
         ownerEngagements,
         createdAgentRows,
-        assignedAgentRows
+        assignedAgentRows,
+        assignedWorkTasks,
+        assignedEngagementTasks
       ] = await Promise.all([
         safeGetDocs(
           query(
@@ -658,6 +680,18 @@ export default function TeamDashboardGraph() {
             collection(db, "travelAgents"),
             where("assignedToUid", "==", uid)
           )
+        ),
+        safeGetDocs(
+          query(
+            collection(db, "workTasks"),
+            where("assignedToUid", "==", uid)
+          )
+        ),
+        safeGetDocs(
+          query(
+            collection(db, "engagementTasks"),
+            where("assignedToUid", "==", uid)
+          )
         )
       ]);
 
@@ -678,6 +712,8 @@ export default function TeamDashboardGraph() {
       setLeads(mergedLeads);
       setEngagements(mergedEngagements);
       setTravelAgents(mergeById(createdAgentRows, assignedAgentRows));
+      setWorkTasks(assignedWorkTasks);
+      setEngagementTasks(assignedEngagementTasks);
       setLastUpdated(new Date());
       setFetching(false);
     }
@@ -706,9 +742,18 @@ export default function TeamDashboardGraph() {
       unassigned: 0
     };
 
-    leads.forEach(lead => {
-      health[getLeadHealth(lead)] += 1;
+    const responsibilityLeads = leads.filter(lead => {
+      const ownerUid = getLeadCreatedByUid(lead);
+      const assignedToUid = getLeadAssignedToUid(lead);
+      if (assignedToUid) return assignedToUid === user?.uid;
+      return ownerUid === user?.uid;
+    });
 
+    responsibilityLeads.forEach(lead => {
+      health[getLeadHealth(lead)] += 1;
+    });
+
+    leads.forEach(lead => {
       const createdByUid = getLeadCreatedByUid(lead);
       const assignedToUid = getLeadAssignedToUid(lead);
 
@@ -719,10 +764,10 @@ export default function TeamDashboardGraph() {
       if (assignedToMe) ownership.assignedToMe += 1;
       if (createdByMe && assignedToMe) ownership.selfOwned += 1;
       if (!createdByMe && assignedToMe) ownership.assignedByOthers += 1;
-      if (!assignedToUid) ownership.unassigned += 1;
+      if (createdByMe && !assignedToUid) ownership.unassigned += 1;
     });
 
-    const overdueLeads = leads
+    const overdueLeads = responsibilityLeads
       .filter(lead => getLeadHealth(lead) === "overdue")
       .sort((a, b) => {
         const da = getNextActionDate(a)?.getTime() || 0;
@@ -730,7 +775,7 @@ export default function TeamDashboardGraph() {
         return da - db;
       });
 
-    const dueTodayLeads = leads
+    const dueTodayLeads = responsibilityLeads
       .filter(lead => getLeadHealth(lead) === "at_risk")
       .sort((a, b) => {
         const da = getNextActionDate(a)?.getTime() || 0;
@@ -787,6 +832,39 @@ export default function TeamDashboardGraph() {
     const todayConnectionRate = todayCalls.length
       ? Math.round((todayConnectedCalls.length / todayCalls.length) * 100)
       : 0;
+    const leadsGeneratedToday = leads.filter(lead =>
+      getLeadCreatedByUid(lead) === user?.uid && isSameDay(getLeadCreatedDate(lead))
+    );
+    const leadsAssignedToday = responsibilityLeads.filter(lead =>
+      getLeadAssignedToUid(lead) === user?.uid && isSameDay(getLeadAssignedDate(lead))
+    );
+
+    const structuredTasks = [...workTasks, ...engagementTasks]
+      .filter(item => !(item?.deleted === true || item?.isDeleted === true));
+    const openStructuredTasks = structuredTasks.filter(item =>
+      !["completed", "skipped", "cancelled"].includes(
+        String(item?.status || item?.completionStatus || "pending").trim().toLowerCase()
+      )
+    );
+    const structuredDueToday = openStructuredTasks.filter(item => {
+      const due = toDate(item?.dueAt);
+      return due && isSameDay(due);
+    });
+    const structuredOverdue = openStructuredTasks.filter(item => {
+      const due = toDate(item?.dueAt);
+      return Boolean(due && due < new Date());
+    });
+    const todayWorkTasks = workTasks.filter(item => {
+      const due = toDate(item?.dueAt);
+      const completed = toDate(item?.completedAt || item?.updatedAt);
+      return (due && isSameDay(due)) || (completed && isSameDay(completed));
+    });
+    const taskTypeCount = type => todayWorkTasks.filter(item => item?.activityType === type).length;
+    const onGroundToday = todayWorkTasks.filter(item => item?.activityGroup === "on_ground").length;
+    const completedWorkToday = todayWorkTasks.filter(item =>
+      String(item?.status || "").toLowerCase() === "completed" && isSameDay(toDate(item?.completedAt || item?.updatedAt))
+    ).length;
+    const openAssignedLeads = responsibilityLeads.filter(lead => !isTerminalLead(lead)).length;
 
     const latestEngagements = [...engagements]
       .sort((a, b) => {
@@ -832,7 +910,11 @@ export default function TeamDashboardGraph() {
 
     const stageCounter = new Map();
 
-    leads.forEach(lead => {
+    const stageSource = currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS
+      ? responsibilityLeads
+      : leads.filter(lead => getLeadCreatedByUid(lead) === user?.uid);
+
+    stageSource.forEach(lead => {
       const stage = getLeadStage(lead);
       stageCounter.set(stage, (stageCounter.get(stage) || 0) + 1);
     });
@@ -850,6 +932,26 @@ export default function TeamDashboardGraph() {
       meetingsToday,
       newAgentsToday,
       newAgentCallsToday,
+      workQueue: {
+        open: openStructuredTasks.length,
+        dueToday: structuredDueToday.length,
+        overdue: structuredOverdue.length
+      },
+      workstream: currentWorkstream,
+      engagementOutput: {
+        leadsGenerated: leadsGeneratedToday.length,
+        engagementFollowUpsDue: structuredDueToday.filter(item => item?.activityGroup === "engagement" || item?.purpose).length
+      },
+      operationsOutput: {
+        openAssignedLeads,
+        leadsAssignedToday: leadsAssignedToday.length,
+        quoteWork: taskTypeCount("quote_creation") + taskTypeCount("quote_follow_up"),
+        requoteWork: taskTypeCount("requote_follow_up"),
+        leadFollowUps: taskTypeCount("lead_follow_up"),
+        vendorCoordination: taskTypeCount("vendor_coordination"),
+        onGround: onGroundToday,
+        completedWork: completedWorkToday
+      },
       productivity: {
         engagements: todayEngagements.length,
         calls: todayCalls.length,
@@ -864,7 +966,7 @@ export default function TeamDashboardGraph() {
       topCities,
       stageBreakdown
     };
-  }, [leads, engagements, travelAgents, user?.uid]);
+  }, [currentWorkstream, leads, engagements, travelAgents, workTasks, engagementTasks, user?.uid]);
 
 
   if (fetching) {
@@ -912,59 +1014,57 @@ export default function TeamDashboardGraph() {
   return (
     <div className="space-y-5">
 
-      {/* ================= BUSINESS PRODUCTIVITY ================= */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6 gap-4">
+      {/* ================= ROLE-BASED PRODUCTIVITY ================= */}
+      {currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6 gap-4">
+          <StatCard title="Open Assigned Leads" value={stats.operationsOutput.openAssignedLeads} subtitle="Current Lead & Operations responsibility" icon={Users} tone="blue" onClick={() => router.push("/leads")} />
+          <StatCard title="New Leads Received" value={stats.operationsOutput.leadsAssignedToday} subtitle="Assigned to you today" icon={ArrowRight} tone="purple" onClick={() => router.push("/leads")} />
+          <StatCard title="Quote Work" value={stats.operationsOutput.quoteWork} subtitle="Quote creation + quote follow-up today" icon={Compass} tone="blue" onClick={() => router.push("/action-center")} />
+          <StatCard title="Re-Quote Work" value={stats.operationsOutput.requoteWork} subtitle="Revision activity today" icon={RefreshCcw} tone="amber" onClick={() => router.push("/action-center")} />
+          <StatCard title="Lead Follow-ups" value={stats.operationsOutput.leadFollowUps} subtitle="Structured Lead follow-up activity" icon={Phone} tone="green" onClick={() => router.push("/action-center")} />
+          <StatCard title="Ops Work Completed" value={stats.operationsOutput.completedWork} subtitle={`${stats.operationsOutput.vendorCoordination} vendor · ${stats.operationsOutput.onGround} on-ground`} icon={CheckCircle2} tone="green" onClick={() => router.push("/action-center")} />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6 gap-4">
+          <StatCard title="Engagements Today" value={stats.productivity.engagements} subtitle={`${stats.productivity.calls} call attempts`} icon={Headphones} tone="blue" onClick={() => router.push("/engagements/my")} />
+          <StatCard title="Calls Connected" value={stats.productivity.connectedCalls} subtitle="Actual successful call connections" icon={Phone} tone="green" onClick={() => router.push("/engagements/my")} />
+          <StatCard title="Unique Agents Touched" value={stats.productivity.uniqueAgents} subtitle={`${stats.productivity.connectionRate}% connection rate`} icon={Users} tone="purple" onClick={() => router.push("/engagements/my")} />
+          <StatCard title="Meaningful Engagements" value={stats.productivity.meaningful} subtitle="Relationship or business progress" icon={BarChart3} tone="amber" onClick={() => router.push("/engagements/my")} />
+          <StatCard title="Requirements Generated" value={stats.productivity.requirements} subtitle="Requirement received / quote needed" icon={Compass} tone="blue" onClick={() => router.push("/engagements/my")} />
+          <StatCard title="Qualified Leads Created" value={stats.engagementOutput.leadsGenerated} subtitle="Your permanent Lead generation credit" icon={Plus} tone="green" onClick={() => router.push("/leads")} />
+        </div>
+      )}
+
+      {/* ================= UNIFIED FOLLOW-UP QUEUE ================= */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <StatCard
-          title="Engagements Today"
-          value={stats.productivity.engagements}
-          subtitle={`${stats.productivity.calls} call attempts`}
-          icon={Headphones}
+          title={currentWorkstream === WORKSTREAMS.ENGAGEMENT ? "My Relationship Follow-ups" : "My Open Work"}
+          value={stats.workQueue.open}
+          subtitle={currentWorkstream === WORKSTREAMS.ENGAGEMENT ? "Agent and Engagement follow-ups" : "Lead + On-ground execution"}
+          icon={ListChecks}
           tone="blue"
-          onClick={() => router.push("/engagements/my")}
+          onClick={() => router.push("/action-center")}
         />
         <StatCard
-          title="Calls Connected"
-          value={stats.productivity.connectedCalls}
-          subtitle="Actual successful call connections"
-          icon={Phone}
-          tone="green"
-          onClick={() => router.push("/engagements/my")}
-        />
-        <StatCard
-          title="Connection Rate"
-          value={`${stats.productivity.connectionRate}%`}
-          subtitle="Connected calls / call attempts"
-          icon={TrendingUp}
-          tone="green"
-          onClick={() => router.push("/engagements/my")}
-        />
-        <StatCard
-          title="Unique Agents Touched"
-          value={stats.productivity.uniqueAgents}
-          subtitle="Repeated logs do not inflate coverage"
-          icon={Users}
-          tone="purple"
-          onClick={() => router.push("/engagements/my")}
-        />
-        <StatCard
-          title="Meaningful Engagements"
-          value={stats.productivity.meaningful}
-          subtitle="Relationship or business progress"
-          icon={BarChart3}
+          title="Work Due Today"
+          value={stats.workQueue.dueToday}
+          subtitle="Structured actions due today"
+          icon={Clock}
           tone="amber"
-          onClick={() => router.push("/engagements/my")}
+          onClick={() => router.push("/action-center")}
         />
         <StatCard
-          title="Requirements Generated"
-          value={stats.productivity.requirements}
-          subtitle="Requirement received / quote needed"
-          icon={Compass}
-          tone="blue"
-          onClick={() => router.push("/engagements/my")}
+          title="Work Overdue"
+          value={stats.workQueue.overdue}
+          subtitle="Open actions past due"
+          icon={AlertTriangle}
+          tone="red"
+          onClick={() => router.push("/action-center")}
         />
       </div>
 
-      {/* ================= TODAY PULSE ================= */}
+      {/* ================= ENGAGEMENT DAILY PULSE ================= */}
+      {currentWorkstream !== WORKSTREAMS.LEAD_OPERATIONS ? (
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard
           title="New Agents Added Today"
@@ -981,13 +1081,13 @@ export default function TeamDashboardGraph() {
           subtitle="Agents you called for the first time today"
           icon={Phone}
           tone="green"
-          onClick={() => router.push("/engagements/my")}
+          onClick={() => router.push(currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS ? "/action-center" : "/engagements/my")}
         />
 
         <StatCard
-          title="Due Today"
-          value={stats.dueTodayLeads.length}
-          subtitle="Follow-ups scheduled today"
+          title={currentWorkstream === WORKSTREAMS.ENGAGEMENT ? "Leads Still With Me" : "Due Today"}
+          value={currentWorkstream === WORKSTREAMS.ENGAGEMENT ? stats.ownership.selfOwned + stats.ownership.unassigned : stats.dueTodayLeads.length}
+          subtitle={currentWorkstream === WORKSTREAMS.ENGAGEMENT ? "Created leads not fully handed over" : "Lead follow-ups scheduled today"}
           icon={Clock}
           tone="amber"
           onClick={() => router.push("/leads")}
@@ -1003,30 +1103,32 @@ export default function TeamDashboardGraph() {
         />
       </div>
 
+      ) : null}
+
       {/* ================= LEAD OWNERSHIP ================= */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard
-          title="Owned By Me"
+          title={currentWorkstream === WORKSTREAMS.ENGAGEMENT ? "Leads Generated By Me" : "Leads Created By Me"}
           value={stats.ownership.createdByMe}
-          subtitle="Permanent creator credit"
+          subtitle={currentWorkstream === WORKSTREAMS.ENGAGEMENT ? "Permanent opportunity-generation credit" : "Permanent creator credit"}
           icon={Plus}
           tone="blue"
           onClick={() => router.push("/leads")}
         />
 
         <StatCard
-          title="Assigned Workload"
+          title={currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS ? "Leads Managed By Me" : "Assigned Workload"}
           value={stats.ownership.assignedToMe}
-          subtitle="Current follow-up responsibility"
+          subtitle={currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS ? "Current Lead/Operations responsibility" : "Current follow-up responsibility"}
           icon={Users}
           tone="green"
           onClick={() => router.push("/leads")}
         />
 
         <StatCard
-          title="Assigned By Others"
+          title={currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS ? "Handover From Engagement" : "Assigned By Others"}
           value={stats.ownership.assignedByOthers}
-          subtitle="Created by others but assigned to you"
+          subtitle={currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS ? "Leads generated by others, now managed by you" : "Created by others but assigned to you"}
           icon={ArrowRight}
           tone="purple"
           onClick={() => router.push("/leads")}
@@ -1046,18 +1148,18 @@ export default function TeamDashboardGraph() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <QuickAction
           icon={Plus}
-          label="Add Lead"
-          description="Create new enquiry"
+          label={currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS ? "My Lead Queue" : "Create Qualified Lead"}
+          description={currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS ? "Work assigned enquiries" : "Create lead from identified requirement"}
           tone="blue"
-          onClick={() => router.push("/leads/create")}
+          onClick={() => router.push(currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS ? "/leads" : "/leads/create")}
         />
 
         <QuickAction
           icon={MessageCircle}
-          label="Add Engagement"
-          description="Log call or follow-up"
+          label={currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS ? "Action Center" : "Add Engagement"}
+          description={currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS ? "Quote, follow-up and operations work" : "Log call or relationship follow-up"}
           tone="purple"
-          onClick={() => router.push("/engagements/my")}
+          onClick={() => router.push(currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS ? "/action-center" : "/engagements/my")}
         />
 
         <QuickAction
@@ -1077,8 +1179,8 @@ export default function TeamDashboardGraph() {
 
           {/* FOLLOW-UP QUEUE */}
           <SectionCard
-            title="Follow-up Priority Queue"
-            subtitle="Overdue and today’s follow-ups should be closed first"
+            title={currentWorkstream === WORKSTREAMS.ENGAGEMENT ? "Leads Still Under Your Responsibility" : "Follow-up Priority Queue"}
+            subtitle={currentWorkstream === WORKSTREAMS.ENGAGEMENT ? "Only unassigned or still-assigned Leads appear here after handover." : "Overdue and today’s Lead follow-ups should be closed first"}
             icon={AlertTriangle}
             right={
               <button
@@ -1155,8 +1257,8 @@ export default function TeamDashboardGraph() {
           {/* LEAD HEALTH + STAGE */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <SectionCard
-              title="Lead Health"
-              subtitle="Health based on next follow-up date"
+              title={currentWorkstream === WORKSTREAMS.ENGAGEMENT ? "Unhanded Lead Health" : "Lead Health"}
+              subtitle={currentWorkstream === WORKSTREAMS.ENGAGEMENT ? "Only Leads still under your responsibility" : "Health based on next follow-up date"}
               icon={TrendingUp}
             >
               <div className="space-y-4">
@@ -1189,7 +1291,7 @@ export default function TeamDashboardGraph() {
 
             <SectionCard
               title="Lead Stage Summary"
-              subtitle="Current split of your leads"
+              subtitle={currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS ? "Current split of Leads you manage" : "Current split of Leads you generated"}
               icon={BarChart3}
             >
               {stats.stageBreakdown.length ? (

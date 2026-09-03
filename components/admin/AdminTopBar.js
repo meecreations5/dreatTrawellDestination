@@ -4,6 +4,7 @@ import { Crown, LogOut, Menu, Shield } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useRouter } from "next/navigation";
 import { getAuth, signOut } from "firebase/auth";
+import { getRoleLabel } from "@/lib/rolePermissions";
 
 export default function AdminTopBar({ collapsed, onMenuClick }) {
   const { user } = useAuth();
@@ -22,7 +23,7 @@ export default function AdminTopBar({ collapsed, onMenuClick }) {
     ? "Super Admin"
     : isAdmin
     ? "Admin"
-    : formatRole(user?.role);
+    : getRoleLabel(user?.role);
 
   const roleBadgeClass = isSuperAdmin
     ? "bg-purple-100 text-purple-700"

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 import AdminGuard from "@/components/AdminGuard";
 import { useAuth } from "@/hooks/useAuth";
-import { getAdminLandingPathForRole } from "@/lib/rolePermissions";
+import { getAdminLandingPathForRole, resolveUserRole } from "@/lib/rolePermissions";
 
 export default function AdminIndexPage() {
   const router = useRouter();
@@ -14,7 +14,7 @@ export default function AdminIndexPage() {
   useEffect(() => {
     if (loading || !user) return;
 
-    router.replace(getAdminLandingPathForRole(user.role));
+    router.replace(getAdminLandingPathForRole(resolveUserRole(user)));
   }, [user, loading, router]);
 
   return (

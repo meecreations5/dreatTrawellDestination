@@ -2,18 +2,43 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { collection, doc, getDocs, query, serverTimestamp, setDoc, where } from "firebase/firestore";
-import { Activity, BarChart3, CheckCircle2, Clock3, Phone, Sparkles, Users } from "lucide-react";
+import { Activity, AlertTriangle, BarChart3, CheckCircle2, Clock3, ListChecks, Phone, Plus, RefreshCcw, Sparkles, Target, Users } from "lucide-react";
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { resolveUserRole } from "@/lib/rolePermissions";
-import { subscribeProductivitySettings } from "@/lib/engagementProductivitySettings";
+import { WORKSTREAMS, roleWorkstream, workstreamShortLabel } from "@/lib/workstream";
+import {
+  DEFAULT_PRODUCTIVITY_SETTINGS,
+  subscribeProductivitySettings
+} from "@/lib/engagementProductivitySettings";
 import {
   isCallEngagementRecord,
   isMeaningfulEngagement,
   isSuccessfulEngagementConnection
 } from "@/lib/engagementProductivity";
-import { getLatestPulseSlot } from "@/lib/workSchedule";
+import { getLatestPulseSlot, getNextPulseSlot, isScheduledBreak } from "@/lib/workSchedule";
+
+export const PRODUCTIVITY_PULSE_TEST_EVENT = "dreamtrawell:test-productivity-pulse";
+
+const EMPTY_METRICS = {
+  engagements: 0,
+  calls: 0,
+  connected: 0,
+  meaningful: 0,
+  requirements: 0,
+  uniqueAgents: 0,
+  connectionRate: 0,
+  workActions: 0,
+  completedWork: 0,
+  leadWork: 0,
+  onGroundWork: 0,
+  quoteWork: 0,
+  requoteWork: 0,
+  leadFollowUps: 0,
+  vendorCoordination: 0,
+  leadsGenerated: 0
+};
 
 function toDate(value) {
   if (!value) return null;
@@ -26,6 +51,14 @@ function toDate(value) {
 
 function getEngagementDate(item = {}) {
   return toDate(item.createdAt) || toDate(item.completedAt) || toDate(item.updatedAt);
+}
+
+function getWorkEventDate(item = {}) {
+  return toDate(item.activityAt) || toDate(item.activityAtClient) || toDate(item.updatedAt);
+}
+
+function getLeadCreatedDate(item = {}) {
+  return toDate(item.createdAt) || toDate(item.createdOn) || toDate(item.createdDate);
 }
 
 function getAgentKey(item = {}) {
@@ -69,92 +102,277 @@ function calculateMetrics(rows = []) {
   };
 }
 
+function calculateWorkMetrics(events = []) {
+  const idsFor = predicate => new Set(
+    events.filter(predicate).map(item => item.taskId || item.id).filter(Boolean)
+  );
+  const uniqueTasks = idsFor(() => true);
+  const completedTasks = idsFor(item =>
+    ["completed", "lead_follow_up_completed"].includes(String(item.toStatus || item.eventType || "").trim().toLowerCase())
+  );
+  const leadTasks = idsFor(item => item.taskGroup === "lead");
+  const onGroundTasks = idsFor(item => item.taskGroup === "on_ground");
+  const quoteTasks = idsFor(item => ["quote_creation", "quote_follow_up"].includes(item.taskType));
+  const requoteTasks = idsFor(item => item.taskType === "requote_follow_up");
+  const leadFollowUps = idsFor(item => item.taskType === "lead_follow_up");
+  const vendorTasks = idsFor(item => item.taskType === "vendor_coordination");
+
+  return {
+    workActions: uniqueTasks.size,
+    completedWork: completedTasks.size,
+    leadWork: leadTasks.size,
+    onGroundWork: onGroundTasks.size,
+    quoteWork: quoteTasks.size,
+    requoteWork: requoteTasks.size,
+    leadFollowUps: leadFollowUps.size,
+    vendorCoordination: vendorTasks.size
+  };
+}
+
+function calculateLeadGenerationMetrics(rows = []) {
+  return { leadsGenerated: rows.length };
+}
+
 export default function ProductivityPulse() {
   const { user } = useAuth();
   const [settings, setSettings] = useState(null);
+  const [settingsResolved, setSettingsResolved] = useState(false);
+  const [settingsWarning, setSettingsWarning] = useState(false);
   const [pulse, setPulse] = useState(null);
   const [rating, setRating] = useState(0);
   const [focus, setFocus] = useState("");
   const [saving, setSaving] = useState(false);
+  const [clock, setClock] = useState(() => new Date());
   const snoozedUntil = useRef(0);
+  const activeSlotRef = useRef("");
 
   useEffect(() => {
     if (!user) return;
     return subscribeProductivitySettings(
-      value => setSettings(value),
-      error => console.error("Unable to load productivity settings:", error)
+      value => {
+        setSettings(value);
+        setSettingsResolved(true);
+      },
+      error => {
+        console.error("Unable to load productivity settings. Using defaults:", error);
+        setSettingsWarning(true);
+        setSettingsResolved(true);
+      }
     );
   }, [user]);
 
+  const effectiveSettings = settings || DEFAULT_PRODUCTIVITY_SETTINGS;
+  const currentRole = resolveUserRole(user || {});
+  const currentWorkstream = roleWorkstream(currentRole);
+
   const enabledForUser = useMemo(() => {
-    if (!user || !settings?.enabled) return false;
+    if (!user || !settingsResolved || !effectiveSettings?.enabled) return false;
     const role = resolveUserRole(user);
-    return (settings.enabledRoles || []).includes(role);
-  }, [settings, user]);
+    return (effectiveSettings.enabledRoles || []).includes(role);
+  }, [effectiveSettings, settingsResolved, user]);
 
-  const loadPulse = useCallback(async slot => {
-    if (!user?.uid || !settings) return;
+  const loadPulse = useCallback(async (slot, options = {}) => {
+    if (!user?.uid) return;
 
-    const intervalMs = settings.pulseIntervalMinutes * 60 * 1000;
+    const activeSettings = settings || DEFAULT_PRODUCTIVITY_SETTINGS;
+    const intervalMs = activeSettings.pulseIntervalMinutes * 60 * 1000;
     const intervalStart = new Date(slot.getTime() - intervalMs);
     const dayStart = new Date(slot);
     dayStart.setHours(0, 0, 0, 0);
+    const activeKey = `${slotKey(slot)}${options.testMode ? "_test" : ""}`;
 
-    const snap = await getDocs(
-      query(collection(db, "engagements"), where("createdByUid", "==", user.uid))
-    );
-
-    const rows = snap.docs
-      .map(item => ({ id: item.id, ...item.data() }))
-      .filter(item => item.deleted !== true && item.isDeleted !== true);
-
-    const intervalRows = rows.filter(item => {
-      const date = getEngagementDate(item);
-      return date && date > intervalStart && date <= slot;
-    });
-
-    const todayRows = rows.filter(item => {
-      const date = getEngagementDate(item);
-      return date && date >= dayStart && date <= slot;
-    });
-
+    activeSlotRef.current = activeKey;
     setRating(0);
     setFocus("");
+
+    // Open the pulse immediately. Metrics are loaded after the modal is already
+    // visible so a slow Firestore read cannot make the pulse look missing.
     setPulse({
       slot,
       intervalStart,
-      intervalMetrics: calculateMetrics(intervalRows),
-      todayMetrics: calculateMetrics(todayRows)
+      intervalMetrics: EMPTY_METRICS,
+      todayMetrics: EMPTY_METRICS,
+      metricsLoading: true,
+      metricsError: false,
+      testMode: Boolean(options.testMode),
+      activeKey
     });
+
+    try {
+      const engagementSnap = await getDocs(
+        query(collection(db, "engagements"), where("createdByUid", "==", user.uid))
+      );
+
+      let leadRows = [];
+      try {
+        const [ownerSnap, creatorSnap] = await Promise.all([
+          getDocs(query(collection(db, "leads"), where("ownerUid", "==", user.uid))),
+          getDocs(query(collection(db, "leads"), where("createdByUid", "==", user.uid)))
+        ]);
+        const leadMap = new Map();
+        [...ownerSnap.docs, ...creatorSnap.docs].forEach(item => {
+          if (!leadMap.has(item.id)) leadMap.set(item.id, { id: item.id, ...item.data() });
+        });
+        leadRows = Array.from(leadMap.values()).filter(item => item.deleted !== true && item.isDeleted !== true);
+      } catch (leadError) {
+        console.warn("Unable to load Lead generation metrics for pulse:", leadError);
+      }
+
+      let workEventRows = [];
+      try {
+        const workEventSnap = await getDocs(
+          query(collection(db, "workActivityEvents"), where("performedByUid", "==", user.uid))
+        );
+        workEventRows = workEventSnap.docs
+          .map(item => ({ id: item.id, ...item.data() }))
+          .filter(item => item.deleted !== true && item.isDeleted !== true);
+      } catch (workEventError) {
+        console.warn("Unable to load work activity metrics for pulse:", workEventError);
+      }
+
+      const rows = engagementSnap.docs
+        .map(item => ({ id: item.id, ...item.data() }))
+        .filter(item => item.deleted !== true && item.isDeleted !== true);
+
+      const intervalRows = rows.filter(item => {
+        const date = getEngagementDate(item);
+        return date && date > intervalStart && date <= slot;
+      });
+
+      const todayRows = rows.filter(item => {
+        const date = getEngagementDate(item);
+        return date && date >= dayStart && date <= slot;
+      });
+
+      const intervalWorkEvents = workEventRows.filter(item => {
+        const date = getWorkEventDate(item);
+        return date && date > intervalStart && date <= slot;
+      });
+      const todayWorkEvents = workEventRows.filter(item => {
+        const date = getWorkEventDate(item);
+        return date && date >= dayStart && date <= slot;
+      });
+      const intervalLeadRows = leadRows.filter(item => {
+        const date = getLeadCreatedDate(item);
+        return date && date > intervalStart && date <= slot;
+      });
+      const todayLeadRows = leadRows.filter(item => {
+        const date = getLeadCreatedDate(item);
+        return date && date >= dayStart && date <= slot;
+      });
+
+      setPulse(current =>
+        current?.activeKey === activeKey
+          ? {
+              ...current,
+              intervalMetrics: { ...calculateMetrics(intervalRows), ...calculateWorkMetrics(intervalWorkEvents), ...calculateLeadGenerationMetrics(intervalLeadRows) },
+              todayMetrics: { ...calculateMetrics(todayRows), ...calculateWorkMetrics(todayWorkEvents), ...calculateLeadGenerationMetrics(todayLeadRows) },
+              metricsLoading: false,
+              metricsError: false
+            }
+          : current
+      );
+    } catch (error) {
+      console.error("Unable to load productivity pulse metrics:", error);
+      setPulse(current =>
+        current?.activeKey === activeKey
+          ? { ...current, metricsLoading: false, metricsError: true }
+          : current
+      );
+    }
   }, [settings, user?.uid]);
 
   useEffect(() => {
-    if (!enabledForUser || !settings) return;
+    if (!enabledForUser || !settingsResolved) return;
 
     const check = () => {
-      const now = new Date();
+      setClock(new Date());
       if (Date.now() < snoozedUntil.current) return;
 
-      const slot = getLatestPulseSlot(now, settings.pulseIntervalMinutes, settings.workSchedule);
+      const now = new Date();
+      const slot = getLatestPulseSlot(
+        now,
+        effectiveSettings.pulseIntervalMinutes,
+        effectiveSettings.workSchedule
+      );
       if (!slot) return;
 
-      // If the tab was sleeping or the user returned after the exact boundary,
-      // surface the latest unsubmitted slot instead of silently missing it.
-      const key = `dreamtrawell_productivity_pulse_${user.uid}_${slotKey(slot)}`;
-      if (window.localStorage.getItem(key) || pulse?.slot?.getTime() === slot.getTime()) return;
+      const slotId = slotKey(slot);
+      const key = `dreamtrawell_productivity_pulse_${user.uid}_${slotId}`;
+      if (window.localStorage.getItem(key) || activeSlotRef.current === slotId) return;
 
-      loadPulse(slot).catch(error => console.error("Unable to prepare productivity pulse:", error));
+      loadPulse(slot).catch(error =>
+        console.error("Unable to prepare productivity pulse:", error)
+      );
     };
 
     check();
-    const timer = window.setInterval(check, 30000);
-    return () => window.clearInterval(timer);
-  }, [enabledForUser, loadPulse, pulse?.slot, settings, user?.uid]);
+    const timer = window.setInterval(check, 15000);
+    const onFocus = () => check();
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") check();
+    };
 
-  if (!pulse || !settings || !enabledForUser) return null;
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("pageshow", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("pageshow", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [effectiveSettings, enabledForUser, loadPulse, settingsResolved, user?.uid]);
+
+  useEffect(() => {
+    const onTestPulse = () => {
+      if (!user?.uid) return;
+      const slot = new Date();
+      slot.setSeconds(0, 0);
+      loadPulse(slot, { testMode: true }).catch(error =>
+        console.error("Unable to prepare test productivity pulse:", error)
+      );
+    };
+
+    window.addEventListener(PRODUCTIVITY_PULSE_TEST_EVENT, onTestPulse);
+    return () => window.removeEventListener(PRODUCTIVITY_PULSE_TEST_EVENT, onTestPulse);
+  }, [loadPulse, user?.uid]);
+
+  const nextSlot = useMemo(() => {
+    if (!enabledForUser) return null;
+    return getNextPulseSlot(
+      clock,
+      effectiveSettings.pulseIntervalMinutes,
+      effectiveSettings.workSchedule
+    );
+  }, [clock, effectiveSettings, enabledForUser]);
+
+  if (!settingsResolved && !pulse) return null;
+
+  if (!pulse) {
+    if (!enabledForUser || !nextSlot) return null;
+    const onBreak = isScheduledBreak(clock, effectiveSettings.workSchedule);
+
+    return (
+      <div className="fixed bottom-4 right-4 z-[1200] hidden rounded-full border border-slate-200 bg-white/95 px-3 py-2 text-xs font-semibold text-slate-600 shadow-lg backdrop-blur sm:flex sm:items-center sm:gap-2">
+        <Clock3 className="h-3.5 w-3.5 text-blue-600" />
+        {onBreak ? "Pulse paused for break" : "Next productivity pulse"}: {formatTime(nextSlot)}
+      </div>
+    );
+  }
+
+  const canRenderPulse = pulse.testMode || enabledForUser;
+  if (!canRenderPulse) return null;
 
   const save = async () => {
-    if (settings.requireSelfRating && !rating) {
+    if (pulse.testMode) {
+      activeSlotRef.current = "";
+      setPulse(null);
+      return;
+    }
+
+    if (effectiveSettings.requireSelfRating && !rating) {
       alert("Please rate your last work interval from 1 to 5.");
       return;
     }
@@ -168,20 +386,22 @@ export default function ProductivityPulse() {
         userUid: user.uid,
         userName: user.displayName || user.name || user.email || "Team Member",
         userEmail: user.email || "",
-        role: resolveUserRole(user),
+        role: currentRole,
+        workstream: currentWorkstream,
         pulseSlotAt: pulse.slot,
-        intervalMinutes: settings.pulseIntervalMinutes,
+        intervalMinutes: effectiveSettings.pulseIntervalMinutes,
         intervalStartAt: pulse.intervalStart,
         rating: rating || null,
         nextFocus: focus || "",
         intervalMetrics: pulse.intervalMetrics,
         todayMetrics: pulse.todayMetrics,
-        workScheduleSnapshot: settings.workSchedule,
+        workScheduleSnapshot: effectiveSettings.workSchedule,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       }, { merge: true });
 
       window.localStorage.setItem(key, "submitted");
+      activeSlotRef.current = "";
       setPulse(null);
     } catch (error) {
       console.error("Unable to save productivity pulse:", error);
@@ -194,6 +414,7 @@ export default function ProductivityPulse() {
   const snooze = () => {
     const slot = pulse.slot;
     snoozedUntil.current = Date.now() + 2 * 60 * 1000;
+    activeSlotRef.current = "";
     setPulse(null);
     window.setTimeout(() => {
       loadPulse(slot).catch(error =>
@@ -201,6 +422,8 @@ export default function ProductivityPulse() {
       );
     }, 2 * 60 * 1000);
   };
+
+  const metricValue = value => pulse.metricsLoading ? "..." : value;
 
   return (
     <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-[2px]">
@@ -211,47 +434,96 @@ export default function ProductivityPulse() {
               <Sparkles className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-100">Productivity Pulse</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-100">
+                {pulse.testMode ? "Test Productivity Pulse" : `${workstreamShortLabel(currentWorkstream)} Productivity Pulse`}
+              </p>
               <h2 className="mt-1 text-xl font-bold">{formatTime(pulse.intervalStart)} - {formatTime(pulse.slot)}</h2>
-              <p className="mt-1 text-sm text-blue-50/90">Review what moved, rate the interval and choose your next focus.</p>
+              <p className="mt-1 text-sm text-blue-50/90">
+                {pulse.testMode
+                  ? "Preview only. This test will not create a productivity record."
+                  : currentWorkstream === WORKSTREAMS.ENGAGEMENT
+                    ? "Review relationship activity, requirements and Lead generation, then choose your next focus."
+                    : currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS
+                      ? "Review Lead and Operations execution, then choose your next focus."
+                      : "Review what moved, rate the interval and choose your next focus."}
+              </p>
             </div>
           </div>
         </div>
 
         <div className="space-y-5 p-5">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            <Metric icon={Activity} label="Engagements" value={pulse.intervalMetrics.engagements} />
-            <Metric icon={Phone} label="Calls" value={pulse.intervalMetrics.calls} />
-            <Metric icon={CheckCircle2} label="Connected" value={pulse.intervalMetrics.connected} />
-            <Metric icon={Users} label="Unique Agents" value={pulse.intervalMetrics.uniqueAgents} />
-            <Metric icon={Sparkles} label="Meaningful" value={pulse.intervalMetrics.meaningful} />
-            <Metric icon={BarChart3} label="Requirements" value={pulse.intervalMetrics.requirements} />
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Connection Rate</p>
-                <p className="mt-1 text-2xl font-bold text-slate-950">{pulse.intervalMetrics.connectionRate}%</p>
-              </div>
-              <Clock3 className="h-6 w-6 text-slate-400" />
-            </div>
-          </div>
-
-          {settings.showTodaySummary && (
-            <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Today so far</p>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-                <MiniMetric label="Engagements" value={pulse.todayMetrics.engagements} />
-                <MiniMetric label="Connected" value={pulse.todayMetrics.connected} />
-                <MiniMetric label="Unique Agents" value={pulse.todayMetrics.uniqueAgents} />
-                <MiniMetric label="Meaningful" value={pulse.todayMetrics.meaningful} />
-                <MiniMetric label="Requirements" value={pulse.todayMetrics.requirements} />
-              </div>
+          {(settingsWarning || pulse.metricsError) && (
+            <div className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                {pulse.metricsError
+                  ? "The pulse timer is working, but CRM productivity metrics could not be loaded. Check Firestore permissions/connectivity."
+                  : "Using the default pulse schedule because productivity settings could not be synced."}
+              </span>
             </div>
           )}
 
-          {settings.requireSelfRating && (
+          {currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS ? (
+            <>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <Metric icon={ListChecks} label="Work Actions" value={metricValue(pulse.intervalMetrics.workActions)} />
+                <Metric icon={CheckCircle2} label="Completed" value={metricValue(pulse.intervalMetrics.completedWork)} />
+                <Metric icon={Target} label="Quote Work" value={metricValue(pulse.intervalMetrics.quoteWork)} />
+                <Metric icon={RefreshCcw} label="Re-Quote" value={metricValue(pulse.intervalMetrics.requoteWork)} />
+                <Metric icon={Phone} label="Lead Follow-ups" value={metricValue(pulse.intervalMetrics.leadFollowUps)} />
+                <Metric icon={Users} label="On-ground" value={metricValue(pulse.intervalMetrics.onGroundWork)} />
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Execution Mix</p>
+                <p className="mt-1 text-sm font-semibold text-slate-800">{metricValue(pulse.intervalMetrics.vendorCoordination)} vendor coordination · {metricValue(pulse.intervalMetrics.leadWork)} Lead actions</p>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <Metric icon={Activity} label="Engagements" value={metricValue(pulse.intervalMetrics.engagements)} />
+                <Metric icon={Phone} label="Calls" value={metricValue(pulse.intervalMetrics.calls)} />
+                <Metric icon={CheckCircle2} label="Connected" value={metricValue(pulse.intervalMetrics.connected)} />
+                <Metric icon={Users} label="Unique Agents" value={metricValue(pulse.intervalMetrics.uniqueAgents)} />
+                <Metric icon={Sparkles} label="Meaningful" value={metricValue(pulse.intervalMetrics.meaningful)} />
+                <Metric icon={BarChart3} label="Requirements" value={metricValue(pulse.intervalMetrics.requirements)} />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Metric icon={Plus} label="Leads Generated" value={metricValue(pulse.intervalMetrics.leadsGenerated)} />
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Connection Rate</p>
+                  <p className="mt-1 text-2xl font-bold text-slate-950">{metricValue(`${pulse.intervalMetrics.connectionRate}%`)}</p>
+                </div>
+              </div>
+            </>
+          )}
+
+          {effectiveSettings.showTodaySummary && (
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Today so far</p>
+              {currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS ? (
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                  <MiniMetric label="Work Actions" value={metricValue(pulse.todayMetrics.workActions)} />
+                  <MiniMetric label="Completed" value={metricValue(pulse.todayMetrics.completedWork)} />
+                  <MiniMetric label="Quote Work" value={metricValue(pulse.todayMetrics.quoteWork)} />
+                  <MiniMetric label="Re-Quote" value={metricValue(pulse.todayMetrics.requoteWork)} />
+                  <MiniMetric label="Lead Follow-ups" value={metricValue(pulse.todayMetrics.leadFollowUps)} />
+                  <MiniMetric label="On-ground" value={metricValue(pulse.todayMetrics.onGroundWork)} />
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                  <MiniMetric label="Engagements" value={metricValue(pulse.todayMetrics.engagements)} />
+                  <MiniMetric label="Connected" value={metricValue(pulse.todayMetrics.connected)} />
+                  <MiniMetric label="Unique Agents" value={metricValue(pulse.todayMetrics.uniqueAgents)} />
+                  <MiniMetric label="Meaningful" value={metricValue(pulse.todayMetrics.meaningful)} />
+                  <MiniMetric label="Requirements" value={metricValue(pulse.todayMetrics.requirements)} />
+                  <MiniMetric label="Leads Generated" value={metricValue(pulse.todayMetrics.leadsGenerated)} />
+                </div>
+              )}
+            </div>
+          )}
+
+          {effectiveSettings.requireSelfRating && !pulse.testMode && (
             <div>
               <p className="text-sm font-semibold text-slate-900">How would you rate your last work interval?</p>
               <div className="mt-2 grid grid-cols-5 gap-2">
@@ -269,28 +541,46 @@ export default function ProductivityPulse() {
             </div>
           )}
 
-          {settings.showNextFocus && (
+          {effectiveSettings.showNextFocus && !pulse.testMode && (
             <div>
               <label className="text-sm font-semibold text-slate-900">Next focus</label>
               <select value={focus} onChange={e => setFocus(e.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm">
                 <option value="">Select focus (optional)</option>
-                <option value="new_agents">New Agents</option>
-                <option value="existing_agents">Existing Agents</option>
-                <option value="lead_followups">Lead Follow-ups</option>
-                <option value="quotation_followups">Quotation Follow-ups</option>
-                <option value="payments">Payment Follow-ups</option>
-                <option value="meetings">Meetings</option>
+                {currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS ? (
+                  <>
+                    <option value="new_leads">New Leads</option>
+                    <option value="quote_creation">Quote Creation</option>
+                    <option value="requote">Re-Quote</option>
+                    <option value="lead_followups">Lead Follow-ups</option>
+                    <option value="vendor_coordination">Vendor Coordination</option>
+                    <option value="supplier_coordination">Supplier Coordination</option>
+                    <option value="on_ground">On-ground Operations</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="new_agents">New Agents</option>
+                    <option value="existing_agents">Existing Agents</option>
+                    <option value="engagement_followups">Engagement Follow-ups</option>
+                    <option value="requirements">Requirement Discovery</option>
+                    <option value="lead_creation">Lead Creation</option>
+                    <option value="meetings">Meetings</option>
+                  </>
+                )}
               </select>
             </div>
           )}
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-5 py-4">
-          <button type="button" onClick={snooze} disabled={saving} className="text-xs font-semibold text-slate-500 hover:text-slate-800">
-            Remind me in 2 minutes
-          </button>
+          {pulse.testMode ? (
+            <span className="text-xs font-medium text-slate-400">Admin test preview</span>
+          ) : (
+            <button type="button" onClick={snooze} disabled={saving} className="text-xs font-semibold text-slate-500 hover:text-slate-800">
+              Remind me in 2 minutes
+            </button>
+          )}
           <button type="button" onClick={save} disabled={saving} className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
-            {saving ? "Saving..." : "Submit Pulse"}
+            {pulse.testMode ? "Close Test" : saving ? "Saving..." : "Submit Pulse"}
           </button>
         </div>
       </div>

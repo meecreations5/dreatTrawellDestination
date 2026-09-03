@@ -37,6 +37,16 @@ const inputClass = `
 const labelClass = "text-xs font-medium text-gray-500";
 const errorText = "mt-1 text-xs text-red-600";
 
+function getTeamAccessText(role) {
+  if (role === "employee") {
+    return "Travel Agents, Engagements, Meetings and Destinations. Qualified Leads can be created from Engagement/Meeting for handover, without direct Lead workspace access.";
+  }
+  if (role === "operation_executive") {
+    return "Travel Agents, Engagements, Meetings, Leads and Destinations, including the Lead & Operations work queue.";
+  }
+  return "Dashboard and the standard CRM workspace are available according to the selected role.";
+}
+
 const roleIcons = {
   super_admin: Crown,
   admin: ShieldCheck,
@@ -228,7 +238,7 @@ export default function AddUserPage() {
                 <h2 className="text-base font-semibold text-gray-900">Access Summary</h2>
                 <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
                   <p className="text-sm font-semibold text-emerald-900">Team/User Access — Included</p>
-                  <p className="mt-1 text-xs leading-5 text-emerald-700">Dashboard, Travel Agents, Engagements, Meetings, Leads, Quotations and normal follow-up work.</p>
+                  <p className="mt-1 text-xs leading-5 text-emerald-700">{getTeamAccessText(form.role)}</p>
                 </div>
                 <div className="mt-3 rounded-2xl border border-blue-100 bg-blue-50 p-4">
                   <p className="text-sm font-semibold text-blue-900">Admin Access</p>
