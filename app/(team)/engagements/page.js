@@ -40,7 +40,11 @@ import {
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { isSuccessfulEngagementConnection } from "@/lib/engagementProductivity";
+import { resolveUserRole } from "@/lib/rolePermissions";
+import { WORKSTREAMS, roleWorkstream } from "@/lib/workstream";
+import { calculateOperationalActivityMetrics, classifyOperationalActivity, getOperationalWorkUnitKey, isOperationalCompletionEvent } from "@/lib/workActivityClassifier";
 
+import OperationalActivityDrawer from "@/components/engagement/OperationalActivityDrawer";
 import CardSkeleton from "@/components/ui/CardSkeleton";
 import EmptyState from "@/components/ui/EmptyState";
 
@@ -693,6 +697,41 @@ function getLeadActivityDate(lead = {}) {
   );
 }
 
+function getAssetCount(item = {}) {
+  return (
+    Number(item?.assetShareCount || 0) ||
+    (Array.isArray(item?.sharedAssetIds) ? item.sharedAssetIds.length : 0) ||
+    (Array.isArray(item?.sharedAssets) ? item.sharedAssets.length : 0) ||
+    0
+  );
+}
+
+function getWorkEventDate(item = {}) {
+  return (
+    item?.activityAt ||
+    item?.activityAtClient ||
+    item?.updatedAt ||
+    item?.createdAt ||
+    null
+  );
+}
+
+function uniqueOperationalRows(rows = []) {
+  const seen = new Set();
+  const result = [];
+
+  rows.forEach(item => {
+    const classification = classifyOperationalActivity(item);
+    if (!classification.trackable) return;
+    const key = getOperationalWorkUnitKey(item, classification);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    result.push(item);
+  });
+
+  return result;
+}
+
 function isSuccessfulConnection(item = {}) {
   return isSuccessfulEngagementConnection(item);
 }
@@ -791,6 +830,89 @@ function getTaskTitle(task = {}) {
   );
 }
 
+function engagementDetailRow(item = {}) {
+  return {
+    ...item,
+    taskTypeLabel: formatLabel(getOutcome(item) || "Engagement"),
+    travelAgentName: getAgentName(item),
+    spocName: getSpocName(item),
+    destinationName: getDestinationName(item),
+    performedByName: item?.assignedToName || item?.createdByName || item?.ownerName || "Team Member",
+    performedByEmail: item?.assignedToEmail || item?.createdByEmail || "",
+    activityAt: getCreatedAt(item),
+    activityStatus: getOutcome(item),
+    note: item?.message || item?.messageText || item?.customRemark || item?.subject || "Engagement logged",
+    href: item?.id ? `/engagements/${item.id}` : "",
+    hrefLabel: "Open Engagement"
+  };
+}
+
+function leadDetailRow(item = {}) {
+  return {
+    ...item,
+    taskTypeLabel: item?.stageLabel || formatLabel(item?.stage || item?.status || "Lead"),
+    travelAgentName: getAgentName(item),
+    destinationName: getDestinationName(item),
+    performedByName: item?.assignedToName || item?.ownerName || item?.createdByName || "Team Member",
+    performedByEmail: item?.assignedToEmail || item?.ownerEmail || item?.createdByEmail || "",
+    activityAt: getLeadActivityDate(item) || item?.createdAt,
+    activityStatus: item?.stage || item?.status || "open",
+    note: item?.lastFollowUpSummary || item?.lastActivitySummary || item?.nextActionType || item?.remarks || "Lead activity",
+    leadId: item?.id,
+    leadCode: item?.leadCode || item?.code || item?.referenceNo || item?.id,
+    href: item?.id ? `/leads/${item.id}` : "",
+    hrefLabel: "Open Lead"
+  };
+}
+
+function taskDetailRow(item = {}) {
+  const leadId = item?.leadId || item?.metadata?.leadId || "";
+  const agentId = item?.agentId || item?.travelAgentId || "";
+  return {
+    ...item,
+    taskTypeLabel: getTaskTitle(item),
+    travelAgentName: item?.travelAgentName || item?.agentName || item?.companyName || "",
+    destinationName: item?.destinationName || item?.destination || "",
+    performedByName: item?.assignedToName || item?.ownerName || item?.createdByName || "Team Member",
+    performedByEmail: item?.assignedToEmail || item?.createdByEmail || "",
+    activityAt: getTaskDueAt(item) || item?.updatedAt || item?.createdAt,
+    activityStatus: getTaskStatus(item),
+    note: item?.description || item?.purpose || item?.note || item?.summary || getTaskTitle(item),
+    leadId,
+    leadCode: item?.leadCode || item?.metadata?.leadCode || "",
+    href: leadId ? `/leads/${leadId}` : agentId ? `/travel-agents/${agentId}` : "",
+    hrefLabel: leadId ? "Open Lead" : "Open Travel Agent"
+  };
+}
+
+function agentDetailRow(item = {}) {
+  return {
+    ...item,
+    taskTypeLabel: formatLabel(getAgentSegment(item) || "Travel Agent"),
+    travelAgentName: item?.companyName || item?.agencyName || item?.agentName || item?.name || "Travel Agent",
+    spocName: item?.primarySpocName || item?.spocName || item?.contactPersonName || "",
+    performedByName: item?.assignedToName || item?.relationshipOwnerName || item?.createdByName || "Team Member",
+    activityAt: item?.lastEngagementAt || item?.updatedAt || item?.createdAt,
+    activityStatus: item?.engagementSegment || item?.relationshipStage || item?.status || "active",
+    note: item?.city || item?.location || item?.remarks || "Travel Agent profile",
+    href: item?.id ? `/travel-agents/${item.id}` : "",
+    hrefLabel: "Open Travel Agent"
+  };
+}
+
+function uniqueEngagementAgentDetailRows(items = []) {
+  const map = new Map();
+  items.forEach(item => {
+    const key = getAgentKey(item);
+    if (!key) return;
+    const current = map.get(key);
+    const nextTime = toDate(getCreatedAt(item))?.getTime() || 0;
+    const currentTime = current ? (toDate(getCreatedAt(current))?.getTime() || 0) : -1;
+    if (!current || nextTime >= currentTime) map.set(key, item);
+  });
+  return Array.from(map.values()).map(engagementDetailRow);
+}
+
 /* =========================
    UI COMPONENTS
 ========================= */
@@ -800,7 +922,8 @@ function MetricCard({
   label,
   value,
   helper,
-  tone = "blue"
+  tone = "blue",
+  onClick
 }) {
   const tones = {
     blue:
@@ -822,8 +945,14 @@ function MetricCard({
       "border-slate-200 bg-slate-50 text-slate-700"
   };
 
+  const Wrapper = onClick ? "button" : "div";
+
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 ">
+    <Wrapper
+      type={onClick ? "button" : undefined}
+      onClick={onClick}
+      className={`w-full rounded-2xl border border-slate-200 bg-white p-4 text-left ${onClick ? "transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md" : ""}`}
+    >
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -850,7 +979,7 @@ function MetricCard({
           <Icon className="h-5 w-5" />
         </div>
       </div>
-    </div>
+    </Wrapper>
   );
 }
 
@@ -859,30 +988,38 @@ function SectionCard({
   description,
   icon: Icon,
   children,
-  rightContent
+  rightContent,
+  onHeaderClick
 }) {
   return (
     <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white ">
       <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-4 py-4">
-        <div className="flex items-start gap-3">
-          {Icon ? (
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
-              <Icon className="h-5 w-5" />
-            </div>
-          ) : null}
-
-          <div>
-            <h2 className="text-sm font-semibold text-slate-900">
-              {title}
-            </h2>
-
-            {description ? (
-              <p className="mt-0.5 text-xs text-slate-500">
-                {description}
-              </p>
+        {onHeaderClick ? (
+          <button type="button" onClick={onHeaderClick} className="group flex min-w-0 flex-1 items-start gap-3 text-left">
+            {Icon ? (
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700 transition group-hover:bg-blue-50 group-hover:text-blue-700">
+                <Icon className="h-5 w-5" />
+              </div>
             ) : null}
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold text-slate-900 group-hover:text-blue-700">{title}</h2>
+              {description ? <p className="mt-0.5 text-xs text-slate-500">{description}</p> : null}
+              <p className="mt-1 text-[11px] font-semibold text-blue-600 opacity-0 transition group-hover:opacity-100">Click to view exact records</p>
+            </div>
+          </button>
+        ) : (
+          <div className="flex items-start gap-3">
+            {Icon ? (
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                <Icon className="h-5 w-5" />
+              </div>
+            ) : null}
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
+              {description ? <p className="mt-0.5 text-xs text-slate-500">{description}</p> : null}
+            </div>
           </div>
-        </div>
+        )}
 
         {rightContent || null}
       </div>
@@ -897,13 +1034,16 @@ function SectionCard({
 function ProgressRow({
   label,
   value,
-  total
+  total,
+  onClick
 }) {
   const width =
     percent(value, total);
 
+  const Wrapper = onClick ? "button" : "div";
+
   return (
-    <div className="space-y-2">
+    <Wrapper type={onClick ? "button" : undefined} onClick={onClick} className={`w-full space-y-2 text-left ${onClick ? "rounded-xl p-2 -m-2 transition hover:bg-slate-50" : ""}`}>
       <div className="flex items-center justify-between gap-3">
         <p className="truncate text-xs font-medium text-slate-700">
           {label}
@@ -925,7 +1065,7 @@ function ProgressRow({
           }}
         />
       </div>
-    </div>
+    </Wrapper>
   );
 }
 
@@ -1043,13 +1183,15 @@ function EngagementTaskQueue({
   tasks,
   bucket,
   onBucketChange,
-  counts
+  counts,
+  onViewAll
 }) {
   return (
     <SectionCard
       icon={ListChecks}
       title="My Engagement Task Queue"
       description="Cadence actions, lead follow-ups and relationship tasks assigned to you."
+      onHeaderClick={onViewAll}
       rightContent={
         <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
           {tasks.length} visible
@@ -1364,6 +1506,9 @@ export default function TeamEngagementDashboardPage() {
   const [leads, setLeads] = useState([]);
   const [travelAgents, setTravelAgents] = useState([]);
   const [engagementTasks, setEngagementTasks] = useState([]);
+  const [workActivityEvents, setWorkActivityEvents] = useState([]);
+  const [activityDrilldown, setActivityDrilldown] = useState(null);
+  const [dashboardDrilldown, setDashboardDrilldown] = useState(null);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1385,6 +1530,7 @@ export default function TeamEngagementDashboardPage() {
       setLeads([]);
       setTravelAgents([]);
       setEngagementTasks([]);
+      setWorkActivityEvents([]);
       setLoading(false);
       return;
     }
@@ -1396,7 +1542,8 @@ export default function TeamEngagementDashboardPage() {
       engagements: false,
       leads: false,
       agents: false,
-      tasks: false
+      tasks: false,
+      workEvents: false
     };
 
     function markReady(key) {
@@ -1500,6 +1647,13 @@ export default function TeamEngagementDashboardPage() {
       )
     ];
 
+    const workEventQueries = [
+      query(
+        collection(db, "workActivityEvents"),
+        where("performedByUid", "==", uid)
+      )
+    ];
+
     if (email) {
       leadQueries.push(
         query(
@@ -1519,6 +1673,13 @@ export default function TeamEngagementDashboardPage() {
         query(
           collection(db, "engagementTasks"),
           where("assignedToEmail", "==", email)
+        )
+      );
+
+      workEventQueries.push(
+        query(
+          collection(db, "workActivityEvents"),
+          where("performedByEmail", "==", email)
         )
       );
     }
@@ -1551,11 +1712,19 @@ export default function TeamEngagementDashboardPage() {
       "Engagement tasks"
     );
 
+    const unsubscribeWorkEvents = subscribeMerged(
+      workEventQueries,
+      setWorkActivityEvents,
+      "workEvents",
+      "Lead & Operations activity"
+    );
+
     return () => {
       unsubscribeEngagements();
       unsubscribeLeads();
       unsubscribeAgents();
       unsubscribeTasks();
+      unsubscribeWorkEvents();
     };
   }, [user?.uid, user?.id, user?.email, authLoading]);
 
@@ -1585,6 +1754,10 @@ export default function TeamEngagementDashboardPage() {
   const activeTasks = useMemo(() => {
     return engagementTasks.filter(item => !isDeletedRecord(item));
   }, [engagementTasks]);
+
+  const activeWorkEvents = useMemo(() => {
+    return workActivityEvents.filter(item => !isDeletedRecord(item));
+  }, [workActivityEvents]);
 
   const channelOptions = useMemo(() => {
     const set = new Set();
@@ -1646,6 +1819,69 @@ export default function TeamEngagementDashboardPage() {
       );
     });
   }, [activeTasks, filters.search, filters.channel]);
+
+  const filteredWorkEvents = useMemo(() => {
+    return activeWorkEvents
+      .filter(item => {
+        const classification = classifyOperationalActivity(item);
+        if (!classification.trackable) return false;
+
+        const matchesDate = isWithinPeriod(
+          getWorkEventDate(item),
+          filters.period,
+          filters.dateFrom,
+          filters.dateTo
+        );
+
+        const searchValue = normalize(filters.search);
+        const searchText = [
+          item?.leadCode,
+          item?.travelAgentName,
+          item?.destinationName,
+          item?.taskTypeLabel,
+          item?.title,
+          item?.note,
+          item?.vendorName,
+          item?.supplierName,
+          item?.counterpartyName
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return matchesDate && (!searchValue || searchText.includes(searchValue));
+      })
+      .sort((a, b) => (toDate(getWorkEventDate(b))?.getTime() || 0) - (toDate(getWorkEventDate(a))?.getTime() || 0));
+  }, [activeWorkEvents, filters]);
+
+  const operationalActivityMetrics = useMemo(() => {
+    return calculateOperationalActivityMetrics(filteredWorkEvents);
+  }, [filteredWorkEvents]);
+
+  const currentWorkstream = roleWorkstream(resolveUserRole(user || {}));
+  const isLeadOperationsUser = currentWorkstream === WORKSTREAMS.LEAD_OPERATIONS;
+
+  const drilldownRows = useMemo(() => {
+    if (!activityDrilldown?.type) return [];
+    if (activityDrilldown.type === "all") return uniqueOperationalRows(filteredWorkEvents);
+    if (activityDrilldown.type === "completed") {
+      return uniqueOperationalRows(
+        filteredWorkEvents.filter(item =>
+          isOperationalCompletionEvent(item, classifyOperationalActivity(item))
+        )
+      );
+    }
+    if (activityDrilldown.type === "quote_work") {
+      return uniqueOperationalRows(
+        filteredWorkEvents.filter(item =>
+          ["quote_creation", "quote_follow_up"].includes(classifyOperationalActivity(item).activityType)
+        )
+      );
+    }
+    return uniqueOperationalRows(
+      filteredWorkEvents.filter(item => classifyOperationalActivity(item).activityType === activityDrilldown.type)
+    );
+  }, [activityDrilldown, filteredWorkEvents]);
 
   /* =========================
      TASK METRICS
@@ -1943,6 +2179,9 @@ export default function TeamEngagementDashboardPage() {
             )
           ).length,
 
+        callConnected:
+          successfulToday.length,
+
         uniqueAgentsConnected:
           uniqueToday.size,
 
@@ -1974,6 +2213,47 @@ export default function TeamEngagementDashboardPage() {
       filters.search,
       filters.channel
     ]);
+
+  const todayConnectionDetails = useMemo(() => {
+    const history = activeEngagements
+      .filter(item => getChannel(item?.channel) === "call")
+      .filter(isSuccessfulConnection)
+      .filter(item => toDate(getCreatedAt(item)))
+      .sort((a, b) => (toDate(getCreatedAt(a))?.getTime() || 0) - (toDate(getCreatedAt(b))?.getTime() || 0));
+
+    const firstByAgent = new Map();
+    history.forEach(item => {
+      const key = getAgentKey(item);
+      if (key && !firstByAgent.has(key)) firstByAgent.set(key, item);
+    });
+
+    const calls = history
+      .filter(item => isToday(getCreatedAt(item)))
+      .filter(item => matchesSearch(item, filters.search))
+      .filter(item => filters.channel === "all" || getChannel(item?.channel) === filters.channel);
+
+    const latestUnique = new Map();
+    calls.forEach(item => {
+      const key = getAgentKey(item);
+      if (key) latestUnique.set(key, item);
+    });
+
+    const unique = Array.from(latestUnique.values());
+    return {
+      calls: calls.map(engagementDetailRow),
+      unique: unique.map(engagementDetailRow),
+      first: unique.filter(item => {
+        const key = getAgentKey(item);
+        const first = firstByAgent.get(key);
+        return first && isToday(getCreatedAt(first));
+      }).map(engagementDetailRow),
+      existing: unique.filter(item => {
+        const key = getAgentKey(item);
+        const first = firstByAgent.get(key);
+        return first && !isToday(getCreatedAt(first));
+      }).map(engagementDetailRow)
+    };
+  }, [activeEngagements, filters.search, filters.channel]);
 
   /* =========================
      LEAD ACTIONS
@@ -2328,40 +2608,40 @@ export default function TeamEngagementDashboardPage() {
                 <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-semibold text-slate-200">
                   <BarChart3 className="h-3.5 w-3.5" />
 
-                  Team Engagement Workspace
+                  {isLeadOperationsUser ? "Lead & Operations Workspace" : "Team Engagement Workspace"}
                 </div>
 
                 <h1 className="mt-5 text-3xl font-bold tracking-tight text-white">
-                  My Engagement Dashboard
+                  {isLeadOperationsUser ? "My Lead & Operations Dashboard" : "My Engagement Dashboard"}
                 </h1>
 
                 <p className="mt-3 text-sm leading-6 text-slate-300">
-                  Manage your assigned agents, cadence tasks, active queries,
-                  follow-ups and engagement performance from one workspace.
+                  {isLeadOperationsUser
+                    ? "Track quotation, Re-Quote, Lead follow-up, vendor/supplier coordination and operational execution from the same dashboard."
+                    : "Manage your assigned agents, cadence tasks, active queries, follow-ups and engagement performance from one workspace."}
                 </p>
               </div>
 
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:min-w-[620px]">
                 <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
                   <p className="text-xs text-slate-300">
-                    Engagements
+                    {isLeadOperationsUser ? "Work Actions" : "Engagements"}
                   </p>
 
                   <p className="mt-2 text-2xl font-bold">
-                    {summary.total}
+                    {isLeadOperationsUser ? operationalActivityMetrics.workActions : summary.total}
                   </p>
                 </div>
 
                 <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
                   <p className="text-xs text-slate-300">
-                    Agents Today
+                    {isLeadOperationsUser ? "Re-Quote" : "Agents Today"}
                   </p>
 
                   <p className="mt-2 text-2xl font-bold text-sky-300">
-                    {
-                      todaySnapshot
-                        .uniqueAgentsConnected
-                    }
+                    {isLeadOperationsUser
+                      ? operationalActivityMetrics.requoteWork
+                      : todaySnapshot.uniqueAgentsConnected}
                   </p>
                 </div>
 
@@ -2395,7 +2675,9 @@ export default function TeamEngagementDashboardPage() {
               <p className="flex items-center gap-2 text-sm text-slate-300">
                 <Filter className="h-4 w-4" />
 
-                The dashboard only shows records assigned to or created by you.
+                {isLeadOperationsUser
+                  ? "The dashboard shows your own Lead & Operations execution activity plus your permitted Engagement records."
+                  : "The dashboard only shows records assigned to or created by you."}
               </p>
 
               <div className="flex flex-wrap gap-2">
@@ -2561,6 +2843,31 @@ export default function TeamEngagementDashboardPage() {
           </div>
         ) : null}
 
+        {isLeadOperationsUser ? (
+          <section className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900">Lead & Operations Activity</h2>
+                <p className="mt-1 text-xs text-slate-500">Actual CRM work captured from quotations, Re-Quotes, Lead follow-ups, vendor/supplier coordination and on-ground activity. Click any KPI to see the exact records.</p>
+              </div>
+              <span className="rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">Selected Period</span>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+              <MetricCard icon={Activity} label="Work Actions" value={operationalActivityMetrics.workActions} helper="Unique Lead & Operations work units." tone="blue" onClick={() => setActivityDrilldown({ type: "all", title: "All Lead & Operations Activity" })} />
+              <MetricCard icon={FileText} label="Quote Work" value={operationalActivityMetrics.quoteWork} helper="Initial quotation creation and quote activity." tone="blue" onClick={() => setActivityDrilldown({ type: "quote_work", title: "Quote Work" })} />
+              <MetricCard icon={RefreshCcw} label="Re-Quote" value={operationalActivityMetrics.requoteWork} helper="Quotation revision work, Rev 2+." tone="amber" onClick={() => setActivityDrilldown({ type: "requote_follow_up", title: "Re-Quote Activity" })} />
+              <MetricCard icon={PhoneCall} label="Lead Follow-up" value={operationalActivityMetrics.leadFollowUps} helper="Lead follow-up work logged." tone="violet" onClick={() => setActivityDrilldown({ type: "lead_follow_up", title: "Lead Follow-up Activity" })} />
+              <MetricCard icon={Workflow} label="Vendor Coordination" value={operationalActivityMetrics.vendorCoordination} helper="Vendor pricing and confirmation work." tone="amber" onClick={() => setActivityDrilldown({ type: "vendor_coordination", title: "Vendor Coordination" })} />
+              <MetricCard icon={Users} label="Supplier Coordination" value={operationalActivityMetrics.supplierCoordination} helper="Supplier operational coordination." tone="emerald" onClick={() => setActivityDrilldown({ type: "supplier_coordination", title: "Supplier Coordination" })} />
+              <MetricCard icon={Users} label="Group Coordination" value={operationalActivityMetrics.groupCoordination} helper="On-ground group coordination." tone="emerald" onClick={() => setActivityDrilldown({ type: "group_coordination", title: "Group Coordination" })} />
+              <MetricCard icon={ListChecks} label="Ticket Editing" value={operationalActivityMetrics.ticketEditing} helper="Ticket correction/editing work." tone="violet" onClick={() => setActivityDrilldown({ type: "ticket_editing", title: "Ticket Editing" })} />
+              <MetricCard icon={CircleDollarSign} label="Payment / Ops" value={operationalActivityMetrics.paymentWork} helper="Agent/vendor payment and operations activity." tone="amber" onClick={() => setActivityDrilldown({ type: "payment_management", title: "Payment / Operations Activity" })} />
+              <MetricCard icon={CheckCircle2} label="Completed Work" value={operationalActivityMetrics.completedWork} helper="Completed operational work units." tone="emerald" onClick={() => setActivityDrilldown({ type: "completed", title: "Completed Lead & Operations Work" })} />
+            </div>
+          </section>
+        ) : null}
+
         {/* TODAY SNAPSHOT */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4 ">
           <div>
@@ -2573,7 +2880,7 @@ export default function TeamEngagementDashboardPage() {
             </p>
           </div>
 
-          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-9">
             <MetricCard
               icon={UserPlus}
               label="New Connections"
@@ -2582,6 +2889,7 @@ export default function TeamEngagementDashboardPage() {
               }
               helper="Agents connected by you for the first time."
               tone="violet"
+              onClick={() => setDashboardDrilldown({ title: "New Connections Today", helper: "First successful Travel Agent connections today.", rows: todayConnectionDetails.first })}
             />
 
             <MetricCard
@@ -2593,6 +2901,16 @@ export default function TeamEngagementDashboardPage() {
               }
               helper="Unique agents successfully reached today."
               tone="blue"
+              onClick={() => setDashboardDrilldown({ title: "Agents Connected Today", helper: "Unique Travel Agents successfully reached today.", rows: todayConnectionDetails.unique })}
+            />
+
+            <MetricCard
+              icon={PhoneCall}
+              label="Call Connected"
+              value={todaySnapshot.callConnected}
+              helper="Successful connected call records today, including repeat calls."
+              tone="blue"
+              onClick={() => setDashboardDrilldown({ title: "Call Connected Today", helper: "Every successful connected call record today. Travel Agent and outcome are shown for each call.", rows: todayConnectionDetails.calls })}
             />
 
             <MetricCard
@@ -2603,6 +2921,7 @@ export default function TeamEngagementDashboardPage() {
               }
               helper="Existing agents contacted today."
               tone="emerald"
+              onClick={() => setDashboardDrilldown({ title: "Existing Agent Follow-ups Today", helper: "Existing Travel Agents successfully contacted today.", rows: todayConnectionDetails.existing })}
             />
 
             <MetricCard
@@ -2614,6 +2933,7 @@ export default function TeamEngagementDashboardPage() {
               }
               helper="Lead records created today."
               tone="blue"
+              onClick={() => setDashboardDrilldown({ title: "Leads Generated Today", helper: "Lead records created today from your scope.", rows: scopedLeads.filter(item => isToday(item?.createdAt)).map(leadDetailRow) })}
             />
 
             <MetricCard
@@ -2625,6 +2945,7 @@ export default function TeamEngagementDashboardPage() {
               }
               helper="Queries moved to quote-sent today."
               tone="amber"
+              onClick={() => setDashboardDrilldown({ title: "Quotes Shared Today", helper: "Leads whose quotation activity moved to quote-sent today.", rows: scopedLeads.filter(item => isQuoteSentLead(item) && isToday(getLeadActivityDate(item))).map(leadDetailRow) })}
             />
 
             <MetricCard
@@ -2636,6 +2957,7 @@ export default function TeamEngagementDashboardPage() {
               }
               helper="Cadence tasks completed today."
               tone="emerald"
+              onClick={() => setDashboardDrilldown({ title: "Tasks Completed Today", helper: "Completed Engagement tasks today.", rows: scopedTasks.filter(item => getTaskStatus(item) === "completed" && isToday(item?.completedAt)).map(taskDetailRow) })}
             />
 
             <MetricCard
@@ -2646,6 +2968,7 @@ export default function TeamEngagementDashboardPage() {
               }
               helper="Queries converted or won today."
               tone="emerald"
+              onClick={() => setDashboardDrilldown({ title: "Converted Leads Today", helper: "Leads converted or won today.", rows: scopedLeads.filter(item => isWonLead(item) && isToday(getLeadActivityDate(item))).map(leadDetailRow) })}
             />
 
             <MetricCard
@@ -2656,6 +2979,7 @@ export default function TeamEngagementDashboardPage() {
               }
               helper="Pending tasks beyond due date."
               tone="red"
+              onClick={() => setDashboardDrilldown({ title: "Overdue Tasks", helper: "Pending tasks already beyond their due date.", rows: scopedTasks.filter(item => isOpenTask(item) && getTaskBucket(item) === "overdue").map(taskDetailRow) })}
             />
           </div>
         </section>
@@ -2670,6 +2994,7 @@ export default function TeamEngagementDashboardPage() {
             }
             helper="Open assigned query opportunities."
             tone="blue"
+            onClick={() => setDashboardDrilldown({ title: "Active Queries", helper: "Open query opportunities in your Lead scope.", rows: scopedLeads.filter(isActiveLead).map(leadDetailRow) })}
           />
 
           <MetricCard
@@ -2680,6 +3005,7 @@ export default function TeamEngagementDashboardPage() {
             }
             helper="Daily call and WhatsApp focus."
             tone="red"
+            onClick={() => setDashboardDrilldown({ title: "Hot Leads", helper: "Hot Leads requiring priority follow-up.", rows: scopedLeads.filter(isHotLead).map(leadDetailRow) })}
           />
 
           <MetricCard
@@ -2690,6 +3016,7 @@ export default function TeamEngagementDashboardPage() {
             }
             helper="Revenue-critical payment follow-ups."
             tone="amber"
+            onClick={() => setDashboardDrilldown({ title: "Payment Pending Leads", helper: "Revenue-critical Lead payment follow-ups.", rows: scopedLeads.filter(isPaymentPendingLead).map(leadDetailRow) })}
           />
 
           <MetricCard
@@ -2700,6 +3027,7 @@ export default function TeamEngagementDashboardPage() {
             }
             helper="Revised quotation actions pending."
             tone="violet"
+            onClick={() => setDashboardDrilldown({ title: "Revision Pending Leads", helper: "Leads requiring quotation revision / Re-Quote action.", rows: scopedLeads.filter(isRevisionPendingLead).map(leadDetailRow) })}
           />
 
           <MetricCard
@@ -2710,6 +3038,7 @@ export default function TeamEngagementDashboardPage() {
             }
             helper="Queries awaiting decision after quotation."
             tone="emerald"
+            onClick={() => setDashboardDrilldown({ title: "Quote Sent Leads", helper: "Leads currently awaiting a decision after quotation.", rows: scopedLeads.filter(isQuoteSentLead).map(leadDetailRow) })}
           />
         </section>
 
@@ -2721,6 +3050,7 @@ export default function TeamEngagementDashboardPage() {
             setTaskBucket
           }
           counts={taskMetrics}
+          onViewAll={() => setDashboardDrilldown({ title: "Engagement Task Queue", helper: "Exact tasks in the currently selected task bucket.", rows: visibleTaskQueue.map(taskDetailRow) })}
         />
 
         {/* PORTFOLIO */}
@@ -2729,6 +3059,7 @@ export default function TeamEngagementDashboardPage() {
             icon={Users}
             title="My Agent Portfolio"
             description="Relationship segments for agents assigned to you."
+            onHeaderClick={() => setDashboardDrilldown({ title: "My Agent Portfolio", helper: "All Travel Agents in your current dashboard scope.", rows: scopedAgents.map(agentDetailRow) })}
           >
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               <MetricCard
@@ -2738,6 +3069,7 @@ export default function TeamEngagementDashboardPage() {
                   agentPortfolio.total
                 }
                 tone="slate"
+                onClick={() => setDashboardDrilldown({ title: "Total Agents", helper: "All Travel Agents in your portfolio.", rows: scopedAgents.map(agentDetailRow) })}
               />
 
               <MetricCard
@@ -2747,6 +3079,7 @@ export default function TeamEngagementDashboardPage() {
                   agentPortfolio.newAgent
                 }
                 tone="violet"
+                onClick={() => setDashboardDrilldown({ title: "New Agents", helper: "Travel Agents in the New Agent relationship segment.", rows: scopedAgents.filter(item => getAgentSegment(item) === "new_agent").map(agentDetailRow) })}
               />
 
               <MetricCard
@@ -2756,6 +3089,7 @@ export default function TeamEngagementDashboardPage() {
                   agentPortfolio.regular
                 }
                 tone="emerald"
+                onClick={() => setDashboardDrilldown({ title: "Regular Business Agents", helper: "Travel Agents in the Regular Business segment.", rows: scopedAgents.filter(item => getAgentSegment(item) === "regular_business").map(agentDetailRow) })}
               />
 
               <MetricCard
@@ -2765,6 +3099,7 @@ export default function TeamEngagementDashboardPage() {
                   agentPortfolio.warm
                 }
                 tone="blue"
+                onClick={() => setDashboardDrilldown({ title: "Warm Irregular Agents", helper: "Travel Agents in the Warm Irregular segment.", rows: scopedAgents.filter(item => getAgentSegment(item) === "warm_irregular").map(agentDetailRow) })}
               />
 
               <MetricCard
@@ -2774,6 +3109,7 @@ export default function TeamEngagementDashboardPage() {
                   agentPortfolio.inactive
                 }
                 tone="amber"
+                onClick={() => setDashboardDrilldown({ title: "Inactive Agents", helper: "Travel Agents currently marked Inactive.", rows: scopedAgents.filter(item => getAgentSegment(item) === "inactive").map(agentDetailRow) })}
               />
 
               <MetricCard
@@ -2783,6 +3119,7 @@ export default function TeamEngagementDashboardPage() {
                   agentPortfolio.cold
                 }
                 tone="red"
+                onClick={() => setDashboardDrilldown({ title: "Cold Agents", helper: "Travel Agents currently in the Cold segment.", rows: scopedAgents.filter(item => getAgentSegment(item) === "cold").map(agentDetailRow) })}
               />
             </div>
           </SectionCard>
@@ -2791,6 +3128,7 @@ export default function TeamEngagementDashboardPage() {
             icon={Share2}
             title="Engagement Summary"
             description="Filtered outreach coverage and shared assets."
+            onHeaderClick={() => setDashboardDrilldown({ title: "Engagement Summary", helper: "All Engagement records matching the current filters.", rows: filteredEngagements.map(engagementDetailRow) })}
           >
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <MetricCard
@@ -2798,6 +3136,7 @@ export default function TeamEngagementDashboardPage() {
                 label="Engagements"
                 value={summary.total}
                 tone="blue"
+                onClick={() => setDashboardDrilldown({ title: "Engagements", helper: "All Engagement records matching the current filters.", rows: filteredEngagements.map(engagementDetailRow) })}
               />
 
               <MetricCard
@@ -2807,6 +3146,7 @@ export default function TeamEngagementDashboardPage() {
                   summary.uniqueAgents
                 }
                 tone="emerald"
+                onClick={() => setDashboardDrilldown({ title: "Agents Covered", helper: "Unique Travel Agents covered by the filtered Engagement activity.", rows: uniqueEngagementAgentDetailRows(filteredEngagements) })}
               />
 
               <MetricCard
@@ -2816,6 +3156,7 @@ export default function TeamEngagementDashboardPage() {
                   summary.assetShares
                 }
                 tone="amber"
+                onClick={() => setDashboardDrilldown({ title: "Asset Sharing Engagements", helper: "Engagement records where promotional/package assets were shared.", rows: filteredEngagements.filter(item => getAssetCount(item) > 0).map(engagementDetailRow) })}
               />
 
               <MetricCard
@@ -2826,6 +3167,7 @@ export default function TeamEngagementDashboardPage() {
                     ?.createdAt
                 )}
                 tone="slate"
+                onClick={() => setDashboardDrilldown({ title: "Last Engagement", helper: "Most recent Engagement record in the current filters.", rows: summary.lastEngagement ? [engagementDetailRow(summary.lastEngagement)] : [] })}
               />
             </div>
           </SectionCard>
@@ -2837,6 +3179,7 @@ export default function TeamEngagementDashboardPage() {
             icon={MessageCircle}
             title="Channel Breakdown"
             description="Your activity by communication channel."
+            onHeaderClick={() => setDashboardDrilldown({ title: "Channel Breakdown", helper: "All Engagement records behind the channel breakdown.", rows: filteredEngagements.map(engagementDetailRow) })}
           >
             {summary.channelRows
               .length ? (
@@ -2850,6 +3193,7 @@ export default function TeamEngagementDashboardPage() {
                       )}
                       value={row.value}
                       total={summary.total}
+                      onClick={() => setDashboardDrilldown({ title: `${getChannelLabel(row.label)} Engagements`, helper: "Exact Engagement records for this communication channel.", rows: filteredEngagements.filter(item => getChannel(item?.channel) === row.label).map(engagementDetailRow) })}
                     />
                   )
                 )}
@@ -2863,6 +3207,7 @@ export default function TeamEngagementDashboardPage() {
             icon={MapPin}
             title="Top Destinations"
             description="Most discussed destinations in your activity."
+            onHeaderClick={() => setDashboardDrilldown({ title: "Destination Activity", helper: "Engagement records behind the destination summary.", rows: filteredEngagements.map(engagementDetailRow) })}
           >
             {summary.destinationRows
               .length ? (
@@ -2874,6 +3219,7 @@ export default function TeamEngagementDashboardPage() {
                       label={row.label}
                       value={row.value}
                       total={summary.total}
+                      onClick={() => setDashboardDrilldown({ title: `${row.label} Engagements`, helper: "Exact Engagement records for this destination.", rows: filteredEngagements.filter(item => getDestinationName(item) === row.label).map(engagementDetailRow) })}
                     />
                   )
                 )}
@@ -2887,6 +3233,7 @@ export default function TeamEngagementDashboardPage() {
             icon={BarChart3}
             title="Outcome Summary"
             description="Most common engagement outcomes."
+            onHeaderClick={() => setDashboardDrilldown({ title: "Outcome Summary", helper: "Engagement records behind the outcome summary.", rows: filteredEngagements.map(engagementDetailRow) })}
           >
             {summary.outcomeRows
               .length ? (
@@ -2900,6 +3247,7 @@ export default function TeamEngagementDashboardPage() {
                       )}
                       value={row.value}
                       total={summary.total}
+                      onClick={() => setDashboardDrilldown({ title: `${formatLabel(row.label)} Outcome`, helper: "Exact Engagement records for this outcome.", rows: filteredEngagements.filter(item => getOutcome(item) === row.label).map(engagementDetailRow) })}
                     />
                   )
                 )}
@@ -2915,6 +3263,7 @@ export default function TeamEngagementDashboardPage() {
           icon={Activity}
           title="Recent Engagements"
           description="Latest activity based on your selected filters."
+          onHeaderClick={() => setDashboardDrilldown({ title: "Recent Engagements", helper: "Exact Engagement records matching the current dashboard filters.", rows: filteredEngagements.map(engagementDetailRow) })}
           rightContent={
             <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
               {
@@ -2946,6 +3295,26 @@ export default function TeamEngagementDashboardPage() {
           )}
         </SectionCard>
       </div>
+      <OperationalActivityDrawer
+        open={Boolean(dashboardDrilldown)}
+        title={dashboardDrilldown?.title || "Dashboard Details"}
+        helper={dashboardDrilldown?.helper || "Exact records behind the selected Dashboard card."}
+        rows={dashboardDrilldown?.rows || []}
+        onClose={() => setDashboardDrilldown(null)}
+        leadBasePath="/leads"
+        leads={activeLeads}
+        travelAgents={activeTravelAgents}
+      />
+      <OperationalActivityDrawer
+        open={Boolean(activityDrilldown)}
+        title={activityDrilldown?.title || "Lead & Operations Activity"}
+        helper="Exact CRM activity for your selected Engagement Dashboard date/search filters."
+        rows={drilldownRows}
+        onClose={() => setActivityDrilldown(null)}
+        leadBasePath="/leads"
+        leads={activeLeads}
+        travelAgents={activeTravelAgents}
+      />
     </main>
   );
 }

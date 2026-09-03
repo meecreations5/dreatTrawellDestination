@@ -22,6 +22,7 @@ import {
 } from "@/lib/engagementProductivity";
 import { resolveUserRole } from "@/lib/rolePermissions";
 import { WORKSTREAMS, roleWorkstream } from "@/lib/workstream";
+import { calculateOperationalActivityMetrics } from "@/lib/workActivityClassifier";
 
 import {
   AlertTriangle,
@@ -265,6 +266,15 @@ function getEngagementDate(item) {
     toDate(item.updatedAt) ||
     toDate(item.engagementAt) ||
     toDate(item.date) ||
+    null
+  );
+}
+
+function getWorkEventDate(item) {
+  return (
+    toDate(item.activityAt) ||
+    toDate(item.activityAtClient) ||
+    toDate(item.updatedAt) ||
     null
   );
 }
@@ -602,6 +612,7 @@ export default function TeamDashboardGraph() {
   const [engagements, setEngagements] = useState([]);
   const [travelAgents, setTravelAgents] = useState([]);
   const [workTasks, setWorkTasks] = useState([]);
+  const [workEvents, setWorkEvents] = useState([]);
   const [engagementTasks, setEngagementTasks] = useState([]);
   const [fetching, setFetching] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
@@ -631,6 +642,7 @@ export default function TeamDashboardGraph() {
         createdAgentRows,
         assignedAgentRows,
         assignedWorkTasks,
+        performedWorkEvents,
         assignedEngagementTasks
       ] = await Promise.all([
         safeGetDocs(
@@ -689,6 +701,12 @@ export default function TeamDashboardGraph() {
         ),
         safeGetDocs(
           query(
+            collection(db, "workActivityEvents"),
+            where("performedByUid", "==", uid)
+          )
+        ),
+        safeGetDocs(
+          query(
             collection(db, "engagementTasks"),
             where("assignedToUid", "==", uid)
           )
@@ -713,6 +731,7 @@ export default function TeamDashboardGraph() {
       setEngagements(mergedEngagements);
       setTravelAgents(mergeById(createdAgentRows, assignedAgentRows));
       setWorkTasks(assignedWorkTasks);
+      setWorkEvents(performedWorkEvents);
       setEngagementTasks(assignedEngagementTasks);
       setLastUpdated(new Date());
       setFetching(false);
@@ -859,11 +878,8 @@ export default function TeamDashboardGraph() {
       const completed = toDate(item?.completedAt || item?.updatedAt);
       return (due && isSameDay(due)) || (completed && isSameDay(completed));
     });
-    const taskTypeCount = type => todayWorkTasks.filter(item => item?.activityType === type).length;
-    const onGroundToday = todayWorkTasks.filter(item => item?.activityGroup === "on_ground").length;
-    const completedWorkToday = todayWorkTasks.filter(item =>
-      String(item?.status || "").toLowerCase() === "completed" && isSameDay(toDate(item?.completedAt || item?.updatedAt))
-    ).length;
+    const todayWorkEvents = workEvents.filter(item => isSameDay(getWorkEventDate(item)));
+    const actualOperationsMetrics = calculateOperationalActivityMetrics(todayWorkEvents);
     const openAssignedLeads = responsibilityLeads.filter(lead => !isTerminalLead(lead)).length;
 
     const latestEngagements = [...engagements]
@@ -945,12 +961,13 @@ export default function TeamDashboardGraph() {
       operationsOutput: {
         openAssignedLeads,
         leadsAssignedToday: leadsAssignedToday.length,
-        quoteWork: taskTypeCount("quote_creation") + taskTypeCount("quote_follow_up"),
-        requoteWork: taskTypeCount("requote_follow_up"),
-        leadFollowUps: taskTypeCount("lead_follow_up"),
-        vendorCoordination: taskTypeCount("vendor_coordination"),
-        onGround: onGroundToday,
-        completedWork: completedWorkToday
+        quoteWork: actualOperationsMetrics.quoteWork,
+        requoteWork: actualOperationsMetrics.requoteWork,
+        leadFollowUps: actualOperationsMetrics.leadFollowUps,
+        vendorCoordination: actualOperationsMetrics.vendorCoordination,
+        paymentWork: actualOperationsMetrics.paymentWork,
+        onGround: actualOperationsMetrics.onGroundWork,
+        completedWork: actualOperationsMetrics.completedWork
       },
       productivity: {
         engagements: todayEngagements.length,
@@ -966,7 +983,7 @@ export default function TeamDashboardGraph() {
       topCities,
       stageBreakdown
     };
-  }, [currentWorkstream, leads, engagements, travelAgents, workTasks, engagementTasks, user?.uid]);
+  }, [currentWorkstream, leads, engagements, travelAgents, workTasks, workEvents, engagementTasks, user?.uid]);
 
 
   if (fetching) {
@@ -1022,7 +1039,7 @@ export default function TeamDashboardGraph() {
           <StatCard title="Quote Work" value={stats.operationsOutput.quoteWork} subtitle="Quote creation + quote follow-up today" icon={Compass} tone="blue" onClick={() => router.push("/action-center")} />
           <StatCard title="Re-Quote Work" value={stats.operationsOutput.requoteWork} subtitle="Revision activity today" icon={RefreshCcw} tone="amber" onClick={() => router.push("/action-center")} />
           <StatCard title="Lead Follow-ups" value={stats.operationsOutput.leadFollowUps} subtitle="Structured Lead follow-up activity" icon={Phone} tone="green" onClick={() => router.push("/action-center")} />
-          <StatCard title="Ops Work Completed" value={stats.operationsOutput.completedWork} subtitle={`${stats.operationsOutput.vendorCoordination} vendor · ${stats.operationsOutput.onGround} on-ground`} icon={CheckCircle2} tone="green" onClick={() => router.push("/action-center")} />
+          <StatCard title="Ops Work Completed" value={stats.operationsOutput.completedWork} subtitle={`${stats.operationsOutput.vendorCoordination} vendor · ${stats.operationsOutput.paymentWork} payment · ${stats.operationsOutput.onGround} on-ground`} icon={CheckCircle2} tone="green" onClick={() => router.push("/action-center")} />
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6 gap-4">

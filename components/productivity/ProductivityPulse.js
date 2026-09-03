@@ -18,6 +18,7 @@ import {
   isSuccessfulEngagementConnection
 } from "@/lib/engagementProductivity";
 import { getLatestPulseSlot, getNextPulseSlot, isScheduledBreak } from "@/lib/workSchedule";
+import { calculateOperationalActivityMetrics } from "@/lib/workActivityClassifier";
 
 export const PRODUCTIVITY_PULSE_TEST_EVENT = "dreamtrawell:test-productivity-pulse";
 
@@ -37,6 +38,10 @@ const EMPTY_METRICS = {
   requoteWork: 0,
   leadFollowUps: 0,
   vendorCoordination: 0,
+  supplierCoordination: 0,
+  groupCoordination: 0,
+  ticketEditing: 0,
+  paymentWork: 0,
   leadsGenerated: 0
 };
 
@@ -103,30 +108,7 @@ function calculateMetrics(rows = []) {
 }
 
 function calculateWorkMetrics(events = []) {
-  const idsFor = predicate => new Set(
-    events.filter(predicate).map(item => item.taskId || item.id).filter(Boolean)
-  );
-  const uniqueTasks = idsFor(() => true);
-  const completedTasks = idsFor(item =>
-    ["completed", "lead_follow_up_completed"].includes(String(item.toStatus || item.eventType || "").trim().toLowerCase())
-  );
-  const leadTasks = idsFor(item => item.taskGroup === "lead");
-  const onGroundTasks = idsFor(item => item.taskGroup === "on_ground");
-  const quoteTasks = idsFor(item => ["quote_creation", "quote_follow_up"].includes(item.taskType));
-  const requoteTasks = idsFor(item => item.taskType === "requote_follow_up");
-  const leadFollowUps = idsFor(item => item.taskType === "lead_follow_up");
-  const vendorTasks = idsFor(item => item.taskType === "vendor_coordination");
-
-  return {
-    workActions: uniqueTasks.size,
-    completedWork: completedTasks.size,
-    leadWork: leadTasks.size,
-    onGroundWork: onGroundTasks.size,
-    quoteWork: quoteTasks.size,
-    requoteWork: requoteTasks.size,
-    leadFollowUps: leadFollowUps.size,
-    vendorCoordination: vendorTasks.size
-  };
+  return calculateOperationalActivityMetrics(events);
 }
 
 function calculateLeadGenerationMetrics(rows = []) {
@@ -475,7 +457,7 @@ export default function ProductivityPulse() {
               </div>
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Execution Mix</p>
-                <p className="mt-1 text-sm font-semibold text-slate-800">{metricValue(pulse.intervalMetrics.vendorCoordination)} vendor coordination · {metricValue(pulse.intervalMetrics.leadWork)} Lead actions</p>
+                <p className="mt-1 text-sm font-semibold text-slate-800">{metricValue(pulse.intervalMetrics.vendorCoordination)} vendor · {metricValue(pulse.intervalMetrics.paymentWork)} payment · {metricValue(pulse.intervalMetrics.leadWork)} Lead actions</p>
               </div>
             </>
           ) : (

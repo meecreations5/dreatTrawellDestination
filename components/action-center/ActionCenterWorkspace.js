@@ -47,6 +47,7 @@ import {
   userWorkstream,
   workstreamShortLabel
 } from "@/lib/workstream";
+import { classifyOperationalActivity } from "@/lib/workActivityClassifier";
 import {
   WORK_TASK_STATUS,
   WORK_TASK_STATUS_OPTIONS,
@@ -712,19 +713,22 @@ export default function ActionCenterWorkspace({
         const activityAt = getEventDate(event);
         return activityAt && dateKey(activityAt) === activityDate;
       })
-      .map(event => ({
-        id: `event_${event.id}`,
-        at: getEventDate(event),
-        person: event.performedByName || event.assignedToName || "Team Member",
-        personKey: resolveDirectoryIdentity({ uid: event.performedByUid, email: event.performedByEmail, name: event.performedByName }, userLookup).key,
-        type: event.taskTypeLabel || taskTypeLabel(event.taskType),
-        group: event.taskGroup || "lead",
-        detail: event.note || event.eventType?.replaceAll("_", " ") || "Activity updated",
-        status: event.toStatus || event.eventType || "updated",
-        leadCode: event.leadCode || "",
-        agentName: event.travelAgentName || "",
-        source: "work"
-      }));
+      .map(event => {
+        const classification = classifyOperationalActivity(event);
+        return {
+          id: `event_${event.id}`,
+          at: getEventDate(event),
+          person: event.performedByName || event.assignedToName || "Team Member",
+          personKey: resolveDirectoryIdentity({ uid: event.performedByUid, email: event.performedByEmail, name: event.performedByName }, userLookup).key,
+          type: classification.trackable ? classification.activityTypeLabel : (event.taskTypeLabel || taskTypeLabel(event.taskType)),
+          group: classification.trackable ? classification.activityGroup : (event.taskGroup || "lead"),
+          detail: event.note || event.eventType?.replaceAll("_", " ") || "Activity updated",
+          status: event.toStatus || event.activityStatus || event.eventType || "updated",
+          leadCode: event.leadCode || "",
+          agentName: event.travelAgentName || "",
+          source: "work"
+        };
+      });
 
     const engagementEvents = scoped.scopedEngagements
       .filter(item => {

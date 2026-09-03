@@ -26,6 +26,7 @@ import {
 } from "@/lib/quotationInternalCopy";
 import { sendWhatsAppWeb } from "@/lib/whatsapp";
 import { createQuotationRevision } from "@/lib/createQuotationRevision";
+import { recordDailyActivity } from "@/lib/workTaskService";
 import { saveQuotationDraft } from "@/lib/saveQuotationDraft";
 import { deleteQuotationDraft } from "@/lib/deleteQuotationDraft";
 
@@ -2015,6 +2016,7 @@ export default function QuotationEditor({
   const autoSaveSkipFirstRunRef = useRef(true);
   const hydratedQuotationSessionRef = useRef("");
   const autoSavingRef = useRef(false);
+  const productivityStartLoggedRef = useRef("");
 
   const [autoSaving, setAutoSaving] = useState(false);
 
@@ -2036,6 +2038,49 @@ export default function QuotationEditor({
   const initialPricingSnapshot = useMemo(() => {
     return getInitialPricingSnapshot(initialQuotation, lead);
   }, [initialQuotation, lead]);
+
+  useEffect(() => {
+    const leadId = lead?.id || lead?.leadId || "";
+    if (!user?.uid || !leadId) return;
+
+    const existingRevision = Number(initialQuotation?.revision || 0);
+    const latestRevision = Number(
+      lead?.latestQuotationRevision ||
+      lead?.quotationRevision ||
+      lead?.latestDraftQuotationRevision ||
+      0
+    );
+    const targetRevision = existingRevision > 0
+      ? existingRevision
+      : Math.max(latestRevision + 1, 1);
+    const activityType = targetRevision > 1 ? "requote_follow_up" : "quote_creation";
+    const activityLabel = targetRevision > 1 ? "Re-Quote" : "Quote Creation";
+    const sessionKey = `${activityType}:${leadId}:${targetRevision}`;
+
+    if (productivityStartLoggedRef.current === sessionKey) return;
+    productivityStartLoggedRef.current = sessionKey;
+
+    recordDailyActivity({
+      activityType,
+      activityTypeLabel: activityLabel,
+      activityGroup: "lead",
+      title: `${activityLabel} started - Rev ${targetRevision}`,
+      lead,
+      eventType: targetRevision > 1 ? "requote_started" : "quote_creation_started",
+      note: `${activityLabel} work opened in quotation editor.`,
+      status: "in_progress",
+      user,
+      extra: {
+        revision: targetRevision,
+        quotationId: initialQuotation?.quotationId || initialQuotation?.id || "",
+        sourceQuotationId: initialQuotation?.sourceQuotationId || "",
+        workUnitKey: `${activityType}:${leadId}:${targetRevision}`,
+        activityKind: "quotation_work"
+      }
+    }).catch(error => {
+      console.warn(`${activityLabel} opened, but productivity activity tracking failed:`, error);
+    });
+  }, [user?.uid, lead?.id, lead?.leadId]);
 
   const selectedVendorName = initialPricingSnapshot.selectedVendorName;
   const selectedVendorQuoteId = initialPricingSnapshot.selectedVendorQuoteId;

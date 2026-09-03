@@ -1464,6 +1464,7 @@ function FollowUpQueue({
 }) {
   const isOverdue =
     type === "overdue";
+  const [showAll, setShowAll] = useState(false);
 
   return (
     <div className="overflow-hidden rounded-3xl border border-gray-200 bg-white">
@@ -1511,8 +1512,7 @@ function FollowUpQueue({
           </div>
         ) : (
           <div className="space-y-3">
-            {items
-              .slice(0, 5)
+            {(showAll ? items : items.slice(0, 5))
               .map(item => {
                 const dueAt =
                   getFollowUpDate(
@@ -1609,9 +1609,13 @@ function FollowUpQueue({
               })}
 
             {items.length > 5 ? (
-              <p className="text-center text-xs font-medium text-gray-500">
-                +{items.length - 5} more follow-ups
-              </p>
+              <button
+                type="button"
+                onClick={() => setShowAll(value => !value)}
+                className="w-full rounded-xl border border-dashed border-blue-200 bg-blue-50 px-3 py-2 text-center text-xs font-semibold text-blue-700 hover:bg-blue-100"
+              >
+                {showAll ? "Show fewer follow-ups" : `+${items.length - 5} more follow-ups · View all`}
+              </button>
             ) : null}
           </div>
         )}

@@ -48,9 +48,11 @@ import {
 import { normalizeTravelAgentStatus } from "@/lib/travelAgentStatus";
 import { ENGAGEMENT_OUTCOME_OPTIONS } from "@/lib/engagementIntentMap";
 import { isSuccessfulEngagementConnection } from "@/lib/engagementProductivity";
+import { calculateOperationalActivityMetrics, classifyOperationalActivity, getOperationalWorkUnitKey, isOperationalCompletionEvent } from "@/lib/workActivityClassifier";
 
 /* ENGAGEMENT COMPONENTS */
 import AgentEngagementOverviewTable from "@/components/admin/dashboard/engagements/AgentEngagementOverviewTable";
+import OperationalActivityDrawer from "@/components/engagement/OperationalActivityDrawer";
 import AdminProductivityPulseSummary from "@/components/productivity/AdminProductivityPulseSummary";
 
 const engagementChartLoading = () => (
@@ -489,6 +491,13 @@ function getSearchText(item = {}) {
     item?.destinationIds?.join?.(" "),
     item?.assignedToName,
     item?.assignedToEmail,
+    item?.performedByName,
+    item?.performedByEmail,
+    item?.vendorName,
+    item?.supplierName,
+    item?.counterpartyName,
+    item?.taskTypeLabel,
+    item?.eventType,
     item?.createdByName,
     item?.createdBy,
     item?.remarks,
@@ -658,6 +667,26 @@ function getLeadActivityDate(lead = {}) {
     lead?.createdAt ||
     null
   );
+}
+
+function getWorkEventDate(item = {}) {
+  return item?.activityAt || item?.activityAtClient || item?.updatedAt || item?.createdAt || null;
+}
+
+function uniqueOperationalRows(rows = []) {
+  const seen = new Set();
+  const result = [];
+
+  rows.forEach(item => {
+    const classification = classifyOperationalActivity(item);
+    if (!classification.trackable) return;
+    const key = getOperationalWorkUnitKey(item, classification);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    result.push(item);
+  });
+
+  return result;
 }
 
 function isSuccessfulConnection(item = {}) {
@@ -1099,6 +1128,122 @@ function getFollowUpHref(
   return `/admin/engagements/${item.id}`;
 }
 
+function engagementDetailRow(item = {}) {
+  return {
+    ...item,
+    taskTypeLabel: getEngagementOutcome(item),
+    travelAgentName: getAgentName(item),
+    destinationName: getDestinationName(item),
+    spocName: item?.spocName || item?.spoc?.name || item?.contactPersonName || "",
+    performedByName: item?.assignedToName || item?.createdByName || item?.ownerName || "Team Member",
+    performedByEmail: item?.assignedToEmail || item?.createdByEmail || "",
+    activityAt: getCreatedDate(item),
+    activityStatus: item?.outcomeCode || item?.outcomeLabel || item?.status || "logged",
+    note: item?.message || item?.messageText || item?.customRemark || item?.subject || "Engagement logged",
+    href: item?.id ? `/admin/engagements/${item.id}` : "",
+    hrefLabel: "Open Engagement"
+  };
+}
+
+function leadDetailRow(item = {}) {
+  return {
+    ...item,
+    taskTypeLabel: item?.stageLabel || item?.stage || item?.status || "Lead",
+    travelAgentName: getAgentName(item),
+    destinationName: getDestinationName(item),
+    performedByName: getAssignedName(item),
+    performedByEmail: item?.assignedToEmail || item?.ownerEmail || item?.createdByEmail || "",
+    activityAt: getLeadActivityDate(item) || getCreatedDate(item),
+    activityStatus: item?.stage || item?.status || "open",
+    note: item?.lastFollowUpSummary || item?.lastActivitySummary || item?.nextActionType || item?.remarks || "Lead activity",
+    leadId: item?.id,
+    leadCode: item?.leadCode || item?.code || item?.referenceNo || item?.id,
+    href: item?.id ? `/admin/leads/${item.id}` : "",
+    hrefLabel: "Open Lead"
+  };
+}
+
+function taskDetailRow(item = {}) {
+  const leadId = item?.leadId || item?.metadata?.leadId || "";
+  const agentId = item?.agentId || item?.travelAgentId || "";
+  return {
+    ...item,
+    taskTypeLabel: item?.title || item?.purpose || item?.ruleCode || "Engagement Task",
+    travelAgentName: item?.travelAgentName || item?.agentName || item?.companyName || "",
+    destinationName: item?.destinationName || item?.destination || "",
+    performedByName: item?.assignedToName || item?.ownerName || item?.createdByName || "Team Member",
+    performedByEmail: item?.assignedToEmail || item?.createdByEmail || "",
+    activityAt: getTaskDueAt(item) || item?.updatedAt || item?.createdAt,
+    activityStatus: getTaskStatus(item),
+    note: item?.description || item?.purpose || item?.note || item?.summary || item?.title || "Task",
+    leadId,
+    leadCode: item?.leadCode || item?.metadata?.leadCode || "",
+    href: leadId ? `/admin/leads/${leadId}` : agentId ? `/admin/travel-agents/${agentId}` : "",
+    hrefLabel: leadId ? "Open Lead" : "Open Travel Agent"
+  };
+}
+
+function agentDetailRow(item = {}) {
+  return {
+    ...item,
+    taskTypeLabel: item?.engagementSegment || item?.relationshipStage || item?.lifecycleStatus || "Travel Agent",
+    travelAgentName: item?.companyName || item?.agencyName || item?.agentName || item?.name || "Travel Agent",
+    spocName: item?.primarySpocName || item?.spocName || item?.contactPersonName || "",
+    performedByName: item?.assignedToName || item?.relationshipOwnerName || item?.createdByName || "Team Member",
+    performedByEmail: item?.assignedToEmail || item?.createdByEmail || "",
+    activityAt: item?.lastEngagementAt || item?.updatedAt || item?.createdAt,
+    activityStatus: item?.engagementSegment || item?.relationshipStage || item?.status || "active",
+    note: item?.city || item?.location || item?.remarks || "Travel Agent profile",
+    href: item?.id ? `/admin/travel-agents/${item.id}` : "",
+    hrefLabel: "Open Travel Agent"
+  };
+}
+
+function followUpDetailRow(item = {}) {
+  return {
+    ...item,
+    taskTypeLabel: `${item?.sourceType === "lead" ? "Lead" : "Engagement"} Follow-up`,
+    travelAgentName: item?.agentName || "Travel Agent",
+    destinationName: item?.destinationName || "",
+    performedByName: item?.assignedToName || "Team Member",
+    activityAt: item?.dueAt,
+    activityStatus: isOverdueDate(item?.dueAt) ? "overdue" : "due",
+    note: item?.summary || "Follow-up pending",
+    href: item?.href || "",
+    hrefLabel: "Open Follow-up"
+  };
+}
+
+function uniqueEngagementAgentDetailRows(items = []) {
+  const map = new Map();
+  items.forEach(item => {
+    const key = item?.agentId || item?.travelAgentId || getAgentName(item);
+    if (!key) return;
+    const current = map.get(key);
+    const nextTime = toDate(getCreatedDate(item))?.getTime() || 0;
+    const currentTime = current ? (toDate(getCreatedDate(current))?.getTime() || 0) : -1;
+    if (!current || nextTime >= currentTime) map.set(key, item);
+  });
+  return Array.from(map.values()).map(engagementDetailRow);
+}
+
+function warmthDetailRows(rows = [], status = "") {
+  return rows
+    .filter(item => !status || item?.status === status)
+    .map(item => {
+      const latest = [...(item?.engagements || [])].sort((a, b) => (toDate(getCreatedDate(b))?.getTime() || 0) - (toDate(getCreatedDate(a))?.getTime() || 0))[0];
+      if (latest) return engagementDetailRow(latest);
+      return {
+        id: item?.key,
+        taskTypeLabel: `${status || "Agent"} Relationship`,
+        travelAgentName: item?.name || "Travel Agent",
+        activityAt: item?.lastEngagementAt,
+        activityStatus: status || item?.status || "unknown",
+        note: "Relationship warmth based on engagement history."
+      };
+    });
+}
+
 /* =========================
    INTELLIGENCE HELPERS
 ========================= */
@@ -1370,7 +1515,8 @@ function CommandMetric({
   label,
   value,
   icon: Icon,
-  tone = "slate"
+  tone = "slate",
+  onClick
 }) {
   const tones = {
     slate: "text-slate-200",
@@ -1380,8 +1526,10 @@ function CommandMetric({
     red: "text-red-300"
   };
 
+  const Wrapper = onClick ? "button" : "div";
+
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur">
+    <Wrapper type={onClick ? "button" : undefined} onClick={onClick} className={`w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-left backdrop-blur ${onClick ? "transition hover:bg-white/15" : ""}`}>
       <div className="flex items-center gap-2 text-xs font-medium text-slate-300">
         <Icon className="h-4 w-4" />
         {label}
@@ -1394,7 +1542,7 @@ function CommandMetric({
       >
         {value}
       </p>
-    </div>
+    </Wrapper>
   );
 }
 
@@ -1416,7 +1564,8 @@ function StatCard({
   value,
   helper,
   icon: Icon,
-  tone = "slate"
+  tone = "slate",
+  onClick
 }) {
   const tones = {
     slate:
@@ -1433,8 +1582,10 @@ function StatCard({
       "border-red-200 bg-red-50 text-red-700"
   };
 
+  const Wrapper = onClick ? "button" : "div";
+
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+    <Wrapper type={onClick ? "button" : undefined} onClick={onClick} className={`w-full rounded-2xl border border-slate-200 bg-white p-4 text-left ${onClick ? "transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md" : ""}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -1460,7 +1611,7 @@ function StatCard({
           <Icon className="h-5 w-5" />
         </div>
       </div>
-    </div>
+    </Wrapper>
   );
 }
 
@@ -1538,7 +1689,8 @@ function HealthCard({
   value,
   helper,
   icon: Icon,
-  tone = "blue"
+  tone = "blue",
+  onClick
 }) {
   const tones = {
     blue:
@@ -1570,11 +1722,13 @@ function HealthCard({
       "bg-slate-100 text-slate-700"
   };
 
+  const Wrapper = onClick ? "button" : "div";
+
   return (
-    <div
-      className={`rounded-2xl border p-4 ${tones[tone] ||
-        tones.blue
-        }`}
+    <Wrapper
+      type={onClick ? "button" : undefined}
+      onClick={onClick}
+      className={`w-full rounded-2xl border p-4 text-left ${tones[tone] || tones.blue} ${onClick ? "transition hover:-translate-y-0.5 hover:shadow-md" : ""}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -1599,7 +1753,7 @@ function HealthCard({
           <Icon className="h-5 w-5" />
         </div>
       </div>
-    </div>
+    </Wrapper>
   );
 }
 
@@ -1608,7 +1762,8 @@ function FunnelCard({
   value,
   helper,
   percentValue,
-  tone = "blue"
+  tone = "blue",
+  onClick
 }) {
   const tones = {
     blue: "bg-blue-600",
@@ -1618,8 +1773,10 @@ function FunnelCard({
     red: "bg-red-600"
   };
 
+  const Wrapper = onClick ? "button" : "div";
+
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+    <Wrapper type={onClick ? "button" : undefined} onClick={onClick} className={`w-full rounded-2xl border border-slate-200 bg-white p-4 text-left ${onClick ? "transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md" : ""}`}>
       <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
         {label}
       </p>
@@ -1651,7 +1808,7 @@ function FunnelCard({
       <p className="mt-3 text-xs text-slate-500">
         {helper}
       </p>
-    </div>
+    </Wrapper>
   );
 }
 
@@ -1660,30 +1817,38 @@ function SectionCard({
   description,
   icon: Icon,
   children,
-  rightContent = null
+  rightContent = null,
+  onHeaderClick
 }) {
   return (
     <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
       <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-4 py-4">
-        <div className="flex items-start gap-3">
-          {Icon ? (
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
-              <Icon className="h-5 w-5" />
-            </div>
-          ) : null}
-
-          <div>
-            <h2 className="text-sm font-semibold text-slate-900">
-              {title}
-            </h2>
-
-            {description ? (
-              <p className="mt-0.5 text-xs text-slate-500">
-                {description}
-              </p>
+        {onHeaderClick ? (
+          <button type="button" onClick={onHeaderClick} className="group flex min-w-0 flex-1 items-start gap-3 text-left">
+            {Icon ? (
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700 transition group-hover:bg-blue-50 group-hover:text-blue-700">
+                <Icon className="h-5 w-5" />
+              </div>
             ) : null}
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold text-slate-900 group-hover:text-blue-700">{title}</h2>
+              {description ? <p className="mt-0.5 text-xs text-slate-500">{description}</p> : null}
+              <p className="mt-1 text-[11px] font-semibold text-blue-600 opacity-0 transition group-hover:opacity-100">Click to view exact records</p>
+            </div>
+          </button>
+        ) : (
+          <div className="flex items-start gap-3">
+            {Icon ? (
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                <Icon className="h-5 w-5" />
+              </div>
+            ) : null}
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
+              {description ? <p className="mt-0.5 text-xs text-slate-500">{description}</p> : null}
+            </div>
           </div>
-        </div>
+        )}
 
         {rightContent}
       </div>
@@ -1848,13 +2013,15 @@ function FollowUpQueue({
   description,
   icon: Icon,
   items,
-  emptyText
+  emptyText,
+  onViewAll
 }) {
   return (
     <SectionCard
       icon={Icon}
       title={title}
       description={description}
+      onHeaderClick={onViewAll}
       rightContent={
         <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
           {items.length} items
@@ -1873,9 +2040,9 @@ function FollowUpQueue({
             ))}
 
           {items.length > 6 ? (
-            <p className="text-center text-xs font-medium text-slate-500">
-              +{items.length - 6} more follow-ups
-            </p>
+            <button type="button" onClick={onViewAll} className="w-full rounded-xl border border-dashed border-blue-200 bg-blue-50 px-3 py-2 text-center text-xs font-semibold text-blue-700 transition hover:bg-blue-100">
+              +{items.length - 6} more follow-ups · View all
+            </button>
           ) : null}
         </div>
       ) : (
@@ -2027,7 +2194,8 @@ function BusinessMetricCard({
   value,
   helper,
   icon: Icon,
-  tone = "blue"
+  tone = "blue",
+  onClick
 }) {
   const tones = {
     blue:
@@ -2044,8 +2212,14 @@ function BusinessMetricCard({
       "border-slate-200 bg-slate-50 text-slate-700"
   };
 
+  const Wrapper = onClick ? "button" : "div";
+
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+    <Wrapper
+      type={onClick ? "button" : undefined}
+      onClick={onClick}
+      className={`w-full rounded-2xl border border-slate-200 bg-white p-4 text-left ${onClick ? "transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md" : ""}`}
+    >
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -2071,7 +2245,7 @@ function BusinessMetricCard({
           <Icon className="h-5 w-5" />
         </div>
       </div>
-    </div>
+    </Wrapper>
   );
 }
 
@@ -2162,13 +2336,15 @@ function EngagementTaskQueue({
   tasks = [],
   bucket = "today",
   onBucketChange,
-  counts
+  counts,
+  onViewAll
 }) {
   return (
     <SectionCard
       icon={ListChecks}
       title="Engagement Task Queue"
       description="Automatic cadence tasks, lead follow-ups and relationship actions for the full team."
+      onHeaderClick={onViewAll}
       rightContent={
         <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
           {tasks.length} visible
@@ -2564,6 +2740,14 @@ export default function AdminEngagementDashboard() {
   ] = useState([]);
 
   const [
+    workActivityEvents,
+    setWorkActivityEvents
+  ] = useState([]);
+
+  const [activityDrilldown, setActivityDrilldown] = useState(null);
+  const [dashboardDrilldown, setDashboardDrilldown] = useState(null);
+
+  const [
     search,
     setSearch
   ] = useState("");
@@ -2747,11 +2931,28 @@ export default function AdminEngagementDashboard() {
 
 
 
+    const unsubWorkActivityEvents =
+      onSnapshot(
+        collection(db, "workActivityEvents"),
+        snapshot => {
+          setWorkActivityEvents(
+            snapshot.docs.map(activityDocument => ({
+              id: activityDocument.id,
+              ...activityDocument.data()
+            }))
+          );
+        },
+        snapshotError => {
+          console.error("Work activity events load error:", snapshotError);
+        }
+      );
+
     return () => {
       unsubEngagements();
       unsubLeads();
       unsubTravelAgents();
       unsubEngagementTasks();
+      unsubWorkActivityEvents();
     };
   }, [user]);
 
@@ -2802,6 +3003,10 @@ export default function AdminEngagementDashboard() {
     }, [engagementTasks, user, userLookup]);
 
 
+  const activeWorkActivityEvents = useMemo(() => {
+    return workActivityEvents.filter(item => !isDeletedRecord(item));
+  }, [workActivityEvents]);
+
   const assignedOptions = useMemo(() => {
     return getMembersForTeam(teamDirectory, team).map(member => ({
       value: member.key,
@@ -2810,6 +3015,69 @@ export default function AdminEngagementDashboard() {
       team: member.team
     }));
   }, [teamDirectory, team]);
+
+  const filteredOperationalActivity = useMemo(() => {
+    const searchValue = search.trim().toLowerCase();
+
+    return activeWorkActivityEvents
+      .filter(item => {
+        const classification = classifyOperationalActivity(item);
+        if (!classification.trackable) return false;
+
+        const identity = getOperationalIdentity(item, userLookup);
+        const matchesAssigned = assignedTo === "all" || identity.key === assignedTo;
+        const matchesTeam =
+          team === "all" ||
+          (!identity.isUnmapped && teamMatchesScope(identity.team, team));
+        const matchesDate = isDateInRange(
+          getWorkEventDate(item),
+          period,
+          fromDate,
+          toDateValue
+        );
+        const matchesSearch = searchValue ? getSearchText(item).includes(searchValue) : true;
+
+        return matchesAssigned && matchesTeam && matchesDate && matchesSearch;
+      })
+      .sort((a, b) => (toDate(getWorkEventDate(b))?.getTime() || 0) - (toDate(getWorkEventDate(a))?.getTime() || 0));
+  }, [
+    activeWorkActivityEvents,
+    assignedTo,
+    team,
+    userLookup,
+    period,
+    fromDate,
+    toDateValue,
+    search
+  ]);
+
+  const operationalActivityMetrics = useMemo(() => {
+    return calculateOperationalActivityMetrics(filteredOperationalActivity);
+  }, [filteredOperationalActivity]);
+
+  const operationalDrilldownRows = useMemo(() => {
+    if (!activityDrilldown?.type) return [];
+    if (activityDrilldown.type === "all") return uniqueOperationalRows(filteredOperationalActivity);
+    if (activityDrilldown.type === "completed") {
+      return uniqueOperationalRows(
+        filteredOperationalActivity.filter(item =>
+          isOperationalCompletionEvent(item, classifyOperationalActivity(item))
+        )
+      );
+    }
+    if (activityDrilldown.type === "quote_work") {
+      return uniqueOperationalRows(
+        filteredOperationalActivity.filter(item =>
+          ["quote_creation", "quote_follow_up"].includes(classifyOperationalActivity(item).activityType)
+        )
+      );
+    }
+    return uniqueOperationalRows(
+      filteredOperationalActivity.filter(item =>
+        classifyOperationalActivity(item).activityType === activityDrilldown.type
+      )
+    );
+  }, [activityDrilldown, filteredOperationalActivity]);
 
   const outcomeOptions = useMemo(() => {
     const values = new Map(
@@ -3418,6 +3686,20 @@ export default function AdminEngagementDashboard() {
         a.name.localeCompare(b.name)
       );
 
+    const pickUniqueAgentRows = (agentIds, predicate = () => true) => {
+      const map = new Map();
+      filteredEngagements.forEach(item => {
+        const agentKey = agentRelationshipIndex.resolveAgentKey(item);
+        if (!agentKey || !agentIds.has(agentKey) || !predicate(item)) return;
+        if (!map.has(agentKey)) map.set(agentKey, item);
+      });
+      return Array.from(map.values()).map(engagementDetailRow);
+    };
+
+    const successfulCallRows = filteredEngagements
+      .filter(item => getChannel(getRecordChannel(item)) === "call" && isSuccessfulConnection(item))
+      .map(engagementDetailRow);
+
     return {
       newAgentsCalled: companyNewCalledAgentIds.size,
       newAgentsConnected: companyNewConnectedAgentIds.size,
@@ -3426,6 +3708,14 @@ export default function AdminEngagementDashboard() {
       invalidNumber: companyInvalidAgentIds.size,
       businessShutDown: companyBusinessShutAgentIds.size,
       wrongDetails: companyWrongDetailsAgentIds.size,
+      newAgentsCalledRows: pickUniqueAgentRows(companyNewCalledAgentIds, item => getChannel(getRecordChannel(item)) === "call"),
+      newAgentsConnectedRows: pickUniqueAgentRows(companyNewConnectedAgentIds, item => getChannel(getRecordChannel(item)) === "call" && isSuccessfulConnection(item)),
+      existingAgentsConnectedRows: pickUniqueAgentRows(companyExistingConnectedAgentIds, item => getChannel(getRecordChannel(item)) === "call" && isSuccessfulConnection(item)),
+      totalAgentsConnectedRows: pickUniqueAgentRows(companyConnectedAgentIds, item => getChannel(getRecordChannel(item)) === "call" && isSuccessfulConnection(item)),
+      callConnectedRows: successfulCallRows,
+      invalidNumberRows: pickUniqueAgentRows(companyInvalidAgentIds, item => String(item?.outcomeCode || item?.outcomeLabel || "").trim().toLowerCase().replace(/[\s-]+/g, "_") === "invalid_number"),
+      businessShutDownRows: pickUniqueAgentRows(companyBusinessShutAgentIds, item => ["business_shut_down", "not_in_business"].includes(String(item?.outcomeCode || item?.outcomeLabel || "").trim().toLowerCase().replace(/[\s-]+/g, "_"))),
+      wrongDetailsRows: pickUniqueAgentRows(companyWrongDetailsAgentIds, item => String(item?.outcomeCode || item?.outcomeLabel || "").trim().toLowerCase().replace(/[\s-]+/g, "_") === "wrong_details"),
       teamRows
     };
   }, [
@@ -3440,6 +3730,7 @@ export default function AdminEngagementDashboard() {
   const engagementActivitySummary = useMemo(() => {
     const summary = {
       calls: 0,
+      callConnected: 0,
       whatsapp: 0,
       emails: 0,
       meetings: 0
@@ -3447,8 +3738,10 @@ export default function AdminEngagementDashboard() {
 
     filteredEngagements.forEach(item => {
       const recordChannel = getChannel(getRecordChannel(item));
-      if (recordChannel === "call") summary.calls += 1;
-      else if (recordChannel === "whatsapp") summary.whatsapp += 1;
+      if (recordChannel === "call") {
+        summary.calls += 1;
+        if (isSuccessfulConnection(item)) summary.callConnected += 1;
+      } else if (recordChannel === "whatsapp") summary.whatsapp += 1;
       else if (recordChannel === "email") summary.emails += 1;
       else if (recordChannel === "meeting") summary.meetings += 1;
     });
@@ -3482,22 +3775,34 @@ export default function AdminEngagementDashboard() {
       return matchesTeam && isDateInRange(getAgentCreatedDate(agent), period, fromDate, toDateValue);
     });
 
+    const quoteRows = teamScopedLeads.filter(lead =>
+      isQuoteSentLead(lead) &&
+      isDateInRange(getLeadActivityDate(lead), period, fromDate, toDateValue)
+    );
+    const convertedRows = teamScopedLeads.filter(lead =>
+      isWonLead(lead) &&
+      isDateInRange(getLeadActivityDate(lead), period, fromDate, toDateValue)
+    );
+
     return {
       newAgentProfiles: periodAgents.length,
       queriesReceived: periodLeads.length,
-      quotesShared: teamScopedLeads.filter(lead =>
-        isQuoteSentLead(lead) &&
-        isDateInRange(getLeadActivityDate(lead), period, fromDate, toDateValue)
-      ).length,
-      converted: teamScopedLeads.filter(lead =>
-        isWonLead(lead) &&
-        isDateInRange(getLeadActivityDate(lead), period, fromDate, toDateValue)
-      ).length,
+      quotesShared: quoteRows.length,
+      converted: convertedRows.length,
       activeQueries: periodLeads.filter(isActiveQueryLead).length,
       hotLeads: periodLeads.filter(isHotLead).length,
       paymentPending: periodLeads.filter(isPaymentPendingLead).length,
       revisionPending: periodLeads.filter(isRevisionPendingLead).length,
-      quoteSent: periodLeads.filter(isQuoteSentLead).length
+      quoteSent: periodLeads.filter(isQuoteSentLead).length,
+      newAgentProfileRows: periodAgents.map(agentDetailRow),
+      queryRows: periodLeads.map(leadDetailRow),
+      quoteRows: quoteRows.map(leadDetailRow),
+      convertedRows: convertedRows.map(leadDetailRow),
+      activeQueryRows: periodLeads.filter(isActiveQueryLead).map(leadDetailRow),
+      hotLeadRows: periodLeads.filter(isHotLead).map(leadDetailRow),
+      paymentPendingRows: periodLeads.filter(isPaymentPendingLead).map(leadDetailRow),
+      revisionPendingRows: periodLeads.filter(isRevisionPendingLead).map(leadDetailRow),
+      quoteSentRows: periodLeads.filter(isQuoteSentLead).map(leadDetailRow)
     };
   }, [
     activeLeads,
@@ -3595,6 +3900,7 @@ export default function AdminEngagementDashboard() {
 
       return {
         total: rows.length,
+        agentRows: rows.map(agentDetailRow),
 
         rows: Array.from(
           byDay.entries()
@@ -3617,70 +3923,32 @@ export default function AdminEngagementDashboard() {
 
   const dataQuality =
     useMemo(() => {
+      const missingPrimarySpocRows = filteredTravelAgents.filter(agent => !getPrimarySpoc(agent));
+      const missingPhoneRows = filteredTravelAgents.filter(agent => !hasAgentPhone(agent));
+      const missingEmailRows = filteredTravelAgents.filter(agent => !hasAgentEmail(agent));
+      const unassignedRows = filteredTravelAgents.filter(agent => getAssignedKey(agent) === "unassigned");
+      const cadenceDisabledRows = filteredTravelAgents.filter(agent => agent?.cadenceAutoManaged === false);
+      const missingNextTaskRows = filteredTravelAgents.filter(agent => agent?.cadenceAutoManaged !== false && !agent?.nextEngagementTaskId);
+      const invalidNumberRows = filteredTravelAgents.filter(agent => normalizeTravelAgentStatus(agent?.status || agent?.agentStatus, agent?.active) === "invalid_number");
+      const businessShutDownRows = filteredTravelAgents.filter(agent => normalizeTravelAgentStatus(agent?.status || agent?.agentStatus, agent?.active) === "business_shut_down");
+
       return {
-        missingPrimarySpoc:
-          filteredTravelAgents.filter(
-            agent =>
-              !getPrimarySpoc(
-                agent
-              )
-          ).length,
-
-        missingPhone:
-          filteredTravelAgents.filter(
-            agent =>
-              !hasAgentPhone(
-                agent
-              )
-          ).length,
-
-        missingEmail:
-          filteredTravelAgents.filter(
-            agent =>
-              !hasAgentEmail(
-                agent
-              )
-          ).length,
-
-        unassigned:
-          filteredTravelAgents.filter(
-            agent =>
-              getAssignedKey(
-                agent
-              ) === "unassigned"
-          ).length,
-
-        cadenceDisabled:
-          filteredTravelAgents.filter(
-            agent =>
-              agent?.cadenceAutoManaged ===
-              false
-          ).length,
-
-        missingNextTask:
-          filteredTravelAgents.filter(
-            agent => {
-              return (
-                agent?.cadenceAutoManaged !==
-                false &&
-                !agent?.nextEngagementTaskId
-              );
-            }
-          ).length,
-
-        invalidNumberStatus:
-          filteredTravelAgents.filter(
-            agent =>
-              normalizeTravelAgentStatus(agent?.status || agent?.agentStatus, agent?.active) ===
-              "invalid_number"
-          ).length,
-
-        businessShutDownStatus:
-          filteredTravelAgents.filter(
-            agent =>
-              normalizeTravelAgentStatus(agent?.status || agent?.agentStatus, agent?.active) ===
-              "business_shut_down"
-          ).length
+        missingPrimarySpoc: missingPrimarySpocRows.length,
+        missingPhone: missingPhoneRows.length,
+        missingEmail: missingEmailRows.length,
+        unassigned: unassignedRows.length,
+        cadenceDisabled: cadenceDisabledRows.length,
+        missingNextTask: missingNextTaskRows.length,
+        invalidNumberStatus: invalidNumberRows.length,
+        businessShutDownStatus: businessShutDownRows.length,
+        missingPrimarySpocRows: missingPrimarySpocRows.map(agentDetailRow),
+        missingPhoneRows: missingPhoneRows.map(agentDetailRow),
+        missingEmailRows: missingEmailRows.map(agentDetailRow),
+        unassignedRows: unassignedRows.map(agentDetailRow),
+        cadenceDisabledRows: cadenceDisabledRows.map(agentDetailRow),
+        missingNextTaskRows: missingNextTaskRows.map(agentDetailRow),
+        invalidNumberRows: invalidNumberRows.map(agentDetailRow),
+        businessShutDownRows: businessShutDownRows.map(agentDetailRow)
       };
     }, [filteredTravelAgents]);
 
@@ -4137,7 +4405,17 @@ export default function AdminEngagementDashboard() {
         followUpRequired,
         noNextAction,
         overdue,
-        noLeadCreated
+        noLeadCreated,
+        healthyRows: filteredEngagements.filter(item => {
+          const requiresFollowUp = item?.requiresFollowUp === true || item?.followUpRequired === true || item?.needsFollowUp === true;
+          const hasDate = hasExplicitFollowUpDate(item);
+          const overdueItem = requiresFollowUp && hasDate && isOverdueDate(getFollowUpDate(item));
+          return !requiresFollowUp && !overdueItem;
+        }).map(engagementDetailRow),
+        followUpRequiredRows: filteredEngagements.filter(item => item?.requiresFollowUp === true || item?.followUpRequired === true || item?.needsFollowUp === true).map(engagementDetailRow),
+        noNextActionRows: filteredEngagements.filter(item => isMissingEngagementFollowUpDate(item)).map(engagementDetailRow),
+        overdueRows: filteredEngagements.filter(item => isPendingEngagementDocumentFollowUp(item) && isOverdueDate(getFollowUpDate(item))).map(engagementDetailRow),
+        noLeadCreatedRows: filteredEngagements.filter(item => !item?.leadId).map(engagementDetailRow)
       };
     }, [filteredEngagements]);
 
@@ -4217,30 +4495,16 @@ export default function AdminEngagementDashboard() {
 
       return {
         totalEngagements,
-
-        leadsCreated:
-          leadsFromEngagement.length,
-
-        quotedLeads:
-          quotedLeads.length,
-
-        convertedLeads:
-          convertedLeads.length,
-
-        leadCreationRate: percent(
-          leadsFromEngagement.length,
-          totalEngagements
-        ),
-
-        quoteRate: percent(
-          quotedLeads.length,
-          leadsFromEngagement.length
-        ),
-
-        conversionRate: percent(
-          convertedLeads.length,
-          leadsFromEngagement.length
-        )
+        leadsCreated: leadsFromEngagement.length,
+        quotedLeads: quotedLeads.length,
+        convertedLeads: convertedLeads.length,
+        leadCreationRate: percent(leadsFromEngagement.length, totalEngagements),
+        quoteRate: percent(quotedLeads.length, leadsFromEngagement.length),
+        conversionRate: percent(convertedLeads.length, leadsFromEngagement.length),
+        engagementRows: filteredEngagements.map(engagementDetailRow),
+        leadRows: leadsFromEngagement.map(leadDetailRow),
+        quotedLeadRows: quotedLeads.map(leadDetailRow),
+        convertedLeadRows: convertedLeads.map(leadDetailRow)
       };
     }, [
       filteredEngagements,
@@ -4645,6 +4909,7 @@ export default function AdminEngagementDashboard() {
                   value={metrics.total}
                   icon={Activity}
                   tone="slate"
+                  onClick={() => setDashboardDrilldown({ title: "Engagements", helper: "All Engagement records matching the current filters.", rows: filteredEngagements.map(engagementDetailRow) })}
                 />
 
                 <CommandMetric
@@ -4652,6 +4917,7 @@ export default function AdminEngagementDashboard() {
                   value={connectionIntelligence.newAgentsConnected}
                   icon={UserPlus}
                   tone="blue"
+                  onClick={() => setDashboardDrilldown({ title: "New Agents Reached", helper: "Unique first successful Travel Agent connections in the selected period.", rows: connectionIntelligence.newAgentsConnectedRows })}
                 />
 
                 <CommandMetric
@@ -4659,6 +4925,7 @@ export default function AdminEngagementDashboard() {
                   value={taskMetrics.today}
                   icon={CalendarDays}
                   tone="amber"
+                  onClick={() => setDashboardDrilldown({ title: "Tasks Today", helper: "Exact open Engagement tasks due today.", rows: filteredEngagementTasks.filter(item => isOpenEngagementTask(item) && getTaskBucket(item) === "today").map(taskDetailRow) })}
                 />
 
                 <CommandMetric
@@ -4670,6 +4937,7 @@ export default function AdminEngagementDashboard() {
                       ? "red"
                       : "emerald"
                   }
+                  onClick={() => setDashboardDrilldown({ title: "Overdue Tasks", helper: "Exact pending tasks beyond their due date.", rows: filteredEngagementTasks.filter(item => isOpenEngagementTask(item) && getTaskBucket(item) === "overdue").map(taskDetailRow) })}
                 />
               </div>
             </div>
@@ -4832,6 +5100,7 @@ export default function AdminEngagementDashboard() {
               helper="Travel-agent profiles created in this period."
               icon={BriefcaseBusiness}
               tone="slate"
+              onClick={() => setDashboardDrilldown({ title: "New Agents Added", helper: "Travel Agent profiles created in the selected reporting period.", rows: businessPulse.newAgentProfileRows })}
             />
 
             <BusinessMetricCard
@@ -4840,6 +5109,7 @@ export default function AdminEngagementDashboard() {
               helper="Unique agents whose first call by the team member happened in this period."
               icon={PhoneCall}
               tone="blue"
+              onClick={() => setDashboardDrilldown({ title: "New Agents Called", helper: "Exact Travel Agents whose first call by the performer happened in this period.", rows: connectionIntelligence.newAgentsCalledRows })}
             />
 
             <BusinessMetricCard
@@ -4848,6 +5118,7 @@ export default function AdminEngagementDashboard() {
               helper="Unique agents successfully connected by the team member for the first time in this period."
               icon={UserPlus}
               tone="violet"
+              onClick={() => setDashboardDrilldown({ title: "New Agents Connected", helper: "First successful Travel Agent connections in this period.", rows: connectionIntelligence.newAgentsConnectedRows })}
             />
 
             <BusinessMetricCard
@@ -4856,6 +5127,7 @@ export default function AdminEngagementDashboard() {
               helper="Unique agents successfully contacted again after a prior connection."
               icon={UserCheck}
               tone="emerald"
+              onClick={() => setDashboardDrilldown({ title: "Existing Agents Contacted", helper: "Existing Travel Agent relationships successfully contacted again.", rows: connectionIntelligence.existingAgentsConnectedRows })}
             />
 
             <BusinessMetricCard
@@ -4864,6 +5136,7 @@ export default function AdminEngagementDashboard() {
               helper="Deduplicated unique travel agents reached in this period."
               icon={PhoneCall}
               tone="blue"
+              onClick={() => setDashboardDrilldown({ title: "Total Unique Contacted", helper: "Unique Travel Agents successfully reached in the selected period.", rows: connectionIntelligence.totalAgentsConnectedRows })}
             />
 
             <BusinessMetricCard
@@ -4872,6 +5145,7 @@ export default function AdminEngagementDashboard() {
               helper="Lead records created in this period."
               icon={MessageCircle}
               tone="blue"
+              onClick={() => setDashboardDrilldown({ title: "Leads Generated", helper: "Exact Lead records created in the selected period.", rows: businessPulse.queryRows })}
             />
 
             <BusinessMetricCard
@@ -4880,6 +5154,7 @@ export default function AdminEngagementDashboard() {
               helper="Leads where a quotation was sent in this period."
               icon={FileText}
               tone="amber"
+              onClick={() => setDashboardDrilldown({ title: "Quotes Sent", helper: "Exact Leads where quotation activity was sent in this period.", rows: businessPulse.quoteRows })}
             />
 
             <BusinessMetricCard
@@ -4888,6 +5163,7 @@ export default function AdminEngagementDashboard() {
               helper="Leads converted or won in this period."
               icon={CircleDollarSign}
               tone="emerald"
+              onClick={() => setDashboardDrilldown({ title: "Converted Leads", helper: "Exact converted/won Leads in the selected period.", rows: businessPulse.convertedRows })}
             />
           </div>
 
@@ -4910,6 +5186,16 @@ export default function AdminEngagementDashboard() {
                 helper="All call activities, including repeat calls."
                 icon={PhoneCall}
                 tone="blue"
+                onClick={() => setDashboardDrilldown({ title: "Calls Made", helper: "Every call Engagement record in the selected filters.", rows: filteredEngagements.filter(item => getChannel(getRecordChannel(item)) === "call").map(engagementDetailRow) })}
+              />
+
+              <BusinessMetricCard
+                label="Call Connected"
+                value={engagementActivitySummary.callConnected}
+                helper="Successful connected call records, including repeat calls to the same Travel Agent."
+                icon={PhoneCall}
+                tone="emerald"
+                onClick={() => setDashboardDrilldown({ title: "Call Connected", helper: "Every successful connected call record. Travel Agent Name, performer, time and outcome are shown.", rows: connectionIntelligence.callConnectedRows })}
               />
 
               <BusinessMetricCard
@@ -4918,6 +5204,7 @@ export default function AdminEngagementDashboard() {
                 helper="WhatsApp engagement activities logged."
                 icon={MessageCircle}
                 tone="emerald"
+                onClick={() => setDashboardDrilldown({ title: "WhatsApp Engagements", helper: "Exact WhatsApp Engagement records.", rows: filteredEngagements.filter(item => getChannel(getRecordChannel(item)) === "whatsapp").map(engagementDetailRow) })}
               />
 
               <BusinessMetricCard
@@ -4926,6 +5213,7 @@ export default function AdminEngagementDashboard() {
                 helper="Meeting engagement records logged in this period."
                 icon={CalendarClock}
                 tone="violet"
+                onClick={() => setDashboardDrilldown({ title: "Meetings", helper: "Exact meeting Engagement records in the selected period.", rows: filteredEngagements.filter(item => getChannel(getRecordChannel(item)) === "meeting").map(engagementDetailRow) })}
               />
 
               <BusinessMetricCard
@@ -4934,6 +5222,7 @@ export default function AdminEngagementDashboard() {
                 helper="Cadence tasks completed in this period."
                 icon={CheckCircle2}
                 tone="emerald"
+                onClick={() => setDashboardDrilldown({ title: "Completed Engagement Tasks", helper: "Exact cadence/follow-up tasks completed in the selected period.", rows: filteredEngagementTasks.filter(item => getTaskStatus(item) === "completed" && isDateInRange(item?.completedAt, period, fromDate, toDateValue)).map(taskDetailRow) })}
               />
 
               <BusinessMetricCard
@@ -4942,6 +5231,7 @@ export default function AdminEngagementDashboard() {
                 helper="Unique agents marked Invalid Number in this period."
                 icon={AlertTriangle}
                 tone="red"
+                onClick={() => setDashboardDrilldown({ title: "Invalid Number", helper: "Travel Agents marked Invalid Number from Engagement activity.", rows: connectionIntelligence.invalidNumberRows })}
               />
 
               <BusinessMetricCard
@@ -4950,6 +5240,7 @@ export default function AdminEngagementDashboard() {
                 helper="Unique agents marked Business Shut Down in this period."
                 icon={BriefcaseBusiness}
                 tone="amber"
+                onClick={() => setDashboardDrilldown({ title: "Business Shut Down", helper: "Travel Agents marked Business Shut Down / Not in Business.", rows: connectionIntelligence.businessShutDownRows })}
               />
 
               <BusinessMetricCard
@@ -4958,23 +5249,57 @@ export default function AdminEngagementDashboard() {
                 helper="Unique agents reported with wrong details in this period."
                 icon={AlertTriangle}
                 tone="red"
+                onClick={() => setDashboardDrilldown({ title: "Wrong Details", helper: "Travel Agents reported with wrong contact/profile details.", rows: connectionIntelligence.wrongDetailsRows })}
               />
             </div>
           </div>
         </section>
 
+        {/* LEAD & OPERATIONS ACTIVITY */}
+        <section className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">Lead & Operations Activity</h2>
+              <p className="mt-1 text-xs text-slate-500">Lead & Operations execution activity captured from actual CRM actions. Date, Team, Performer and Search filters apply. Click any KPI for the exact activity list.</p>
+            </div>
+            <span className="rounded-full border border-violet-100 bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700">Execution Workstream</span>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            <BusinessMetricCard label="Work Actions" value={operationalActivityMetrics.workActions} helper="Unique operational work units captured from real CRM activity." icon={Activity} tone="blue" onClick={() => setActivityDrilldown({ type: "all", title: "All Lead & Operations Activity" })} />
+            <BusinessMetricCard label="Quote Work" value={operationalActivityMetrics.quoteWork} helper="Initial quotation creation and quote activity." icon={FileText} tone="blue" onClick={() => setActivityDrilldown({ type: "quote_work", title: "Quote Work" })} />
+            <BusinessMetricCard label="Re-Quote" value={operationalActivityMetrics.requoteWork} helper="Quotation revisions, including Rev 2 and above." icon={RotateCcw} tone="amber" onClick={() => setActivityDrilldown({ type: "requote_follow_up", title: "Re-Quote Activity" })} />
+            <BusinessMetricCard label="Lead Follow-up" value={operationalActivityMetrics.leadFollowUps} helper="Post-handover Lead follow-up activity." icon={PhoneCall} tone="violet" onClick={() => setActivityDrilldown({ type: "lead_follow_up", title: "Lead Follow-up Activity" })} />
+            <BusinessMetricCard label="Vendor Coordination" value={operationalActivityMetrics.vendorCoordination} helper="Vendor rates, responses and confirmation activity." icon={Workflow} tone="amber" onClick={() => setActivityDrilldown({ type: "vendor_coordination", title: "Vendor Coordination" })} />
+            <BusinessMetricCard label="Supplier Coordination" value={operationalActivityMetrics.supplierCoordination} helper="Supplier execution and confirmation activity." icon={Users} tone="emerald" onClick={() => setActivityDrilldown({ type: "supplier_coordination", title: "Supplier Coordination" })} />
+            <BusinessMetricCard label="Group Coordination" value={operationalActivityMetrics.groupCoordination} helper="On-ground group coordination activity." icon={Users} tone="emerald" onClick={() => setActivityDrilldown({ type: "group_coordination", title: "Group Coordination" })} />
+            <BusinessMetricCard label="Ticket Editing" value={operationalActivityMetrics.ticketEditing} helper="Ticket correction and editing work." icon={ListChecks} tone="violet" onClick={() => setActivityDrilldown({ type: "ticket_editing", title: "Ticket Editing" })} />
+            <BusinessMetricCard label="Payment / Operations" value={operationalActivityMetrics.paymentWork} helper="Agent/vendor payment and related operations activity." icon={CircleDollarSign} tone="amber" onClick={() => setActivityDrilldown({ type: "payment_management", title: "Payment / Operations Activity" })} />
+            <BusinessMetricCard label="Completed Work" value={operationalActivityMetrics.completedWork} helper="Operational work units completed in the selected period." icon={CheckCircle2} tone="emerald" onClick={() => setActivityDrilldown({ type: "completed", title: "Completed Lead & Operations Work" })} />
+          </div>
+        </section>
+
         {/* ACTION CENTER */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-900">
-              Priority Business Action Center
-            </h2>
-
-            <p className="mt-1 text-xs text-slate-500">
-              Focus the team on revenue-critical tasks before routine
-              relationship calls.
-            </p>
-          </div>
+          <button
+            type="button"
+            onClick={() => setDashboardDrilldown({
+              title: "Priority Business Action Center",
+              helper: "Combined priority tasks and Leads requiring management attention.",
+              rows: [
+                ...filteredEngagementTasks.filter(item => isOpenEngagementTask(item) && ["today", "overdue"].includes(getTaskBucket(item))).map(taskDetailRow),
+                ...businessPulse.paymentPendingRows,
+                ...businessPulse.hotLeadRows,
+                ...businessPulse.revisionPendingRows,
+                ...businessPulse.activeQueryRows
+              ]
+            })}
+            className="group block w-full text-left"
+          >
+            <h2 className="text-sm font-semibold text-slate-900 group-hover:text-blue-700">Priority Business Action Center</h2>
+            <p className="mt-1 text-xs text-slate-500">Focus the team on revenue-critical tasks before routine relationship calls.</p>
+            <p className="mt-1 text-[11px] font-semibold text-blue-600 opacity-0 transition group-hover:opacity-100">Click to view exact priority records</p>
+          </button>
 
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
             <ActionCard
@@ -4983,9 +5308,7 @@ export default function AdminEngagementDashboard() {
               helper="Automatic cadence and lead tasks due today."
               icon={CalendarDays}
               tone="blue"
-              onClick={() =>
-                setTaskBucket("today")
-              }
+              onClick={() => setDashboardDrilldown({ title: "Tasks Due Today", helper: "Exact open tasks due today.", rows: filteredEngagementTasks.filter(item => isOpenEngagementTask(item) && getTaskBucket(item) === "today").map(taskDetailRow) })}
             />
 
             <ActionCard
@@ -4994,9 +5317,7 @@ export default function AdminEngagementDashboard() {
               helper="Pending actions beyond their due date."
               icon={Timer}
               tone="red"
-              onClick={() =>
-                setTaskBucket("overdue")
-              }
+              onClick={() => setDashboardDrilldown({ title: "Overdue Tasks", helper: "Exact pending tasks beyond their due date.", rows: filteredEngagementTasks.filter(item => isOpenEngagementTask(item) && getTaskBucket(item) === "overdue").map(taskDetailRow) })}
             />
 
             <ActionCard
@@ -5008,13 +5329,7 @@ export default function AdminEngagementDashboard() {
               helper="Highest-priority revenue follow-ups."
               icon={CircleDollarSign}
               tone="amber"
-              onClick={() => {
-                setSearch(
-                  "payment pending"
-                );
-
-                setTaskBucket("all");
-              }}
+              onClick={() => setDashboardDrilldown({ title: "Payment Pending", helper: "Leads requiring payment follow-up.", rows: businessPulse.paymentPendingRows })}
             />
 
             <ActionCard
@@ -5025,10 +5340,7 @@ export default function AdminEngagementDashboard() {
               helper="Daily call and WhatsApp attention required."
               icon={Flame}
               tone="red"
-              onClick={() => {
-                setSearch("hot lead");
-                setTaskBucket("all");
-              }}
+              onClick={() => setDashboardDrilldown({ title: "Hot Leads", helper: "Hot Leads requiring priority attention.", rows: businessPulse.hotLeadRows })}
             />
 
             <ActionCard
@@ -5040,10 +5352,7 @@ export default function AdminEngagementDashboard() {
               helper="Revised quotation follow-ups pending."
               icon={Workflow}
               tone="violet"
-              onClick={() => {
-                setSearch("revision");
-                setTaskBucket("all");
-              }}
+              onClick={() => setDashboardDrilldown({ title: "Revision Pending", helper: "Leads requiring Re-Quote / quotation revision follow-up.", rows: businessPulse.revisionPendingRows })}
             />
 
             <ActionCard
@@ -5055,11 +5364,7 @@ export default function AdminEngagementDashboard() {
               helper="Open lead opportunities across the team."
               icon={MessageCircle}
               tone="emerald"
-              onClick={() =>
-                setFollowUpSource(
-                  "lead"
-                )
-              }
+              onClick={() => setDashboardDrilldown({ title: "Active Queries", helper: "Open Lead opportunities across the team.", rows: businessPulse.activeQueryRows })}
             />
           </div>
         </section>
@@ -5072,6 +5377,7 @@ export default function AdminEngagementDashboard() {
             setTaskBucket
           }
           counts={taskMetrics}
+          onViewAll={() => setDashboardDrilldown({ title: "Engagement Task Queue", helper: "Exact tasks in the currently selected task bucket.", rows: visibleTaskQueue.map(taskDetailRow) })}
         />
 
         {/* NEW AGENT CONNECTION INTELLIGENCE */}
@@ -5081,6 +5387,7 @@ export default function AdminEngagementDashboard() {
               icon={UserCheck}
               title={period === "today" ? "Today's Team Agent Activity" : "Team Agent Activity"}
               description="Relationship-based activity. New means the team member is contacting that Travel Agent for the first time, even if the agent profile already existed in the CRM. Existing means the team member had connected with that agent before the selected period."
+              onHeaderClick={() => setDashboardDrilldown({ title: period === "today" ? "Today's Team Agent Activity" : "Team Agent Activity", helper: "Exact Engagement activity behind the team relationship table.", rows: filteredEngagements.map(engagementDetailRow) })}
               rightContent={
                 <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
                   {connectionIntelligence.totalAgentsConnected} company-wide unique
@@ -5100,6 +5407,7 @@ export default function AdminEngagementDashboard() {
             icon={UserPlus}
             title="New-Agent Onboarding"
             description="Current Day 0 to Day 10 sequence position."
+            onHeaderClick={() => setDashboardDrilldown({ title: "New-Agent Onboarding", helper: "Travel Agents currently moving through the new-agent cadence.", rows: newAgentOnboarding.agentRows || [] })}
           >
             <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-violet-700">
@@ -5132,6 +5440,7 @@ export default function AdminEngagementDashboard() {
             icon={Users}
             title="Agent Portfolio"
             description="Relationship segments from the travel-agent master."
+            onHeaderClick={() => setDashboardDrilldown({ title: "Agent Portfolio", helper: "All Travel Agents in the current Admin scope.", rows: filteredTravelAgents.map(agentDetailRow) })}
           >
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               <HealthCard
@@ -5140,6 +5449,7 @@ export default function AdminEngagementDashboard() {
                 helper="Visible agent profiles."
                 icon={Users}
                 tone="slate"
+                onClick={() => setDashboardDrilldown({ title: "Total Agents", helper: "All Travel Agents in the current Admin scope.", rows: filteredTravelAgents.map(agentDetailRow) })}
               />
 
               <HealthCard
@@ -5151,6 +5461,7 @@ export default function AdminEngagementDashboard() {
                 helper="Onboarding cadence."
                 icon={UserPlus}
                 tone="violet"
+                onClick={() => setDashboardDrilldown({ title: "New Agents", helper: "Travel Agents in the New Agent segment.", rows: filteredTravelAgents.filter(item => normalizeStatus(item?.engagementSegment || item?.relationshipStage || item?.lifecycleStatus) === "new_agent").map(agentDetailRow) })}
               />
 
               <HealthCard
@@ -5161,6 +5472,7 @@ export default function AdminEngagementDashboard() {
                 helper="High-frequency relationship."
                 icon={CheckCircle2}
                 tone="emerald"
+                onClick={() => setDashboardDrilldown({ title: "Regular Business Agents", helper: "Travel Agents in the Regular Business segment.", rows: filteredTravelAgents.filter(item => normalizeStatus(item?.engagementSegment || item?.relationshipStage || item?.lifecycleStatus) === "regular_business").map(agentDetailRow) })}
               />
 
               <HealthCard
@@ -5169,6 +5481,7 @@ export default function AdminEngagementDashboard() {
                 helper="Weekly campaign and query push."
                 icon={Activity}
                 tone="blue"
+                onClick={() => setDashboardDrilldown({ title: "Warm Irregular Agents", helper: "Travel Agents in the Warm Irregular segment.", rows: filteredTravelAgents.filter(item => normalizeStatus(item?.engagementSegment || item?.relationshipStage || item?.lifecycleStatus) === "warm_irregular").map(agentDetailRow) })}
               />
 
               <HealthCard
@@ -5179,6 +5492,7 @@ export default function AdminEngagementDashboard() {
                 helper="Reactivation required."
                 icon={Clock3}
                 tone="amber"
+                onClick={() => setDashboardDrilldown({ title: "Inactive Agents", helper: "Travel Agents currently marked Inactive.", rows: filteredTravelAgents.filter(item => normalizeStatus(item?.engagementSegment || item?.relationshipStage || item?.lifecycleStatus) === "inactive").map(agentDetailRow) })}
               />
 
               <HealthCard
@@ -5187,6 +5501,7 @@ export default function AdminEngagementDashboard() {
                 helper="Low recent response."
                 icon={AlertTriangle}
                 tone="red"
+                onClick={() => setDashboardDrilldown({ title: "Cold Agents", helper: "Travel Agents currently in the Cold segment.", rows: filteredTravelAgents.filter(item => normalizeStatus(item?.engagementSegment || item?.relationshipStage || item?.lifecycleStatus) === "cold").map(agentDetailRow) })}
               />
             </div>
           </SectionCard>
@@ -5195,12 +5510,14 @@ export default function AdminEngagementDashboard() {
             icon={AlertTriangle}
             title="Agent Data Quality & Cadence Risks"
             description="Profile gaps that reduce successful calling and automatic task creation."
+            onHeaderClick={() => setDashboardDrilldown({ title: "Agent Data Quality & Cadence Risks", helper: "Travel Agent profiles with one or more data/cadence risks.", rows: filteredTravelAgents.filter(agent => !getPrimarySpoc(agent) || !hasAgentPhone(agent) || !hasAgentEmail(agent) || getAssignedKey(agent) === "unassigned" || agent?.cadenceAutoManaged === false || (agent?.cadenceAutoManaged !== false && !agent?.nextEngagementTaskId)).map(agentDetailRow) })}
           >
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <HealthCard
                 label="Invalid Number (Current)"
                 value={dataQuality.invalidNumberStatus}
                 helper="Travel agents currently marked Invalid Number."
+                onClick={() => setDashboardDrilldown({ title: "Invalid Number (Current)", helper: "Exact Travel Agent records behind this data-quality KPI.", rows: dataQuality.invalidNumberRows })}
                 icon={AlertTriangle}
                 tone="red"
               />
@@ -5209,6 +5526,7 @@ export default function AdminEngagementDashboard() {
                 label="Business Shut (Current)"
                 value={dataQuality.businessShutDownStatus}
                 helper="Travel agents currently marked Business Shut Down."
+                onClick={() => setDashboardDrilldown({ title: "Business Shut (Current)", helper: "Exact Travel Agent records behind this data-quality KPI.", rows: dataQuality.businessShutDownRows })}
                 icon={BriefcaseBusiness}
                 tone="red"
               />
@@ -5220,6 +5538,7 @@ export default function AdminEngagementDashboard() {
                     .missingPrimarySpoc
                 }
                 helper="No primary contact."
+                onClick={() => setDashboardDrilldown({ title: "Missing SPOC", helper: "Exact Travel Agent records behind this data-quality KPI.", rows: dataQuality.missingPrimarySpocRows })}
                 icon={UserCheck}
                 tone="red"
               />
@@ -5230,6 +5549,7 @@ export default function AdminEngagementDashboard() {
                   dataQuality.missingPhone
                 }
                 helper="Cannot call or WhatsApp."
+                onClick={() => setDashboardDrilldown({ title: "Missing Phone", helper: "Exact Travel Agent records behind this data-quality KPI.", rows: dataQuality.missingPhoneRows })}
                 icon={PhoneCall}
                 tone="amber"
               />
@@ -5240,6 +5560,7 @@ export default function AdminEngagementDashboard() {
                   dataQuality.missingEmail
                 }
                 helper="Email communication unavailable."
+                onClick={() => setDashboardDrilldown({ title: "Missing Email", helper: "Exact Travel Agent records behind this data-quality KPI.", rows: dataQuality.missingEmailRows })}
                 icon={MessageCircle}
                 tone="amber"
               />
@@ -5250,6 +5571,7 @@ export default function AdminEngagementDashboard() {
                   dataQuality.unassigned
                 }
                 helper="No relationship owner."
+                onClick={() => setDashboardDrilldown({ title: "Unassigned Travel Agents", helper: "Exact Travel Agent records behind this data-quality KPI.", rows: dataQuality.unassignedRows })}
                 icon={Users}
                 tone="violet"
               />
@@ -5261,6 +5583,7 @@ export default function AdminEngagementDashboard() {
                     .cadenceDisabled
                 }
                 helper="Automatic follow-up stopped."
+                onClick={() => setDashboardDrilldown({ title: "Cadence Disabled", helper: "Exact Travel Agent records behind this data-quality KPI.", rows: dataQuality.cadenceDisabledRows })}
                 icon={Workflow}
                 tone="red"
               />
@@ -5272,6 +5595,7 @@ export default function AdminEngagementDashboard() {
                     .missingNextTask
                 }
                 helper="Cadence enabled but no task."
+                onClick={() => setDashboardDrilldown({ title: "Missing Next Task", helper: "Exact Travel Agent records behind this data-quality KPI.", rows: dataQuality.missingNextTaskRows })}
                 icon={ListChecks}
                 tone="red"
               />
@@ -5297,6 +5621,7 @@ export default function AdminEngagementDashboard() {
               label="Healthy"
               value={engagementHealth.healthy}
               helper="No pending risk detected."
+              onClick={() => setDashboardDrilldown({ title: "Healthy Engagements", helper: "Exact Engagement records behind this health KPI.", rows: engagementHealth.healthyRows })}
               icon={CheckCircle2}
               tone="emerald"
             />
@@ -5305,6 +5630,7 @@ export default function AdminEngagementDashboard() {
               label="Follow-up Required"
               value={engagementHealth.followUpRequired}
               helper="Next action expected."
+              onClick={() => setDashboardDrilldown({ title: "Follow-up Required", helper: "Exact Engagement records behind this health KPI.", rows: engagementHealth.followUpRequiredRows })}
               icon={CalendarDays}
               tone="blue"
             />
@@ -5313,6 +5639,7 @@ export default function AdminEngagementDashboard() {
               label="No Next Action"
               value={engagementHealth.noNextAction}
               helper="Follow-up required but no date."
+              onClick={() => setDashboardDrilldown({ title: "No Next Action", helper: "Exact Engagement records behind this health KPI.", rows: engagementHealth.noNextActionRows })}
               icon={AlertTriangle}
               tone="red"
             />
@@ -5321,6 +5648,7 @@ export default function AdminEngagementDashboard() {
               label="Overdue"
               value={engagementHealth.overdue}
               helper="Follow-up date has passed."
+              onClick={() => setDashboardDrilldown({ title: "Overdue Engagement Follow-ups", helper: "Exact Engagement records behind this health KPI.", rows: engagementHealth.overdueRows })}
               icon={Clock3}
               tone="amber"
             />
@@ -5329,6 +5657,7 @@ export default function AdminEngagementDashboard() {
               label="No Lead Created"
               value={engagementHealth.noLeadCreated}
               helper="Engagements without lead linkage."
+              onClick={() => setDashboardDrilldown({ title: "No Lead Created", helper: "Exact Engagement records behind this health KPI.", rows: engagementHealth.noLeadCreatedRows })}
               icon={Users}
               tone="violet"
             />
@@ -5355,6 +5684,7 @@ export default function AdminEngagementDashboard() {
               helper="Total filtered engagement activity."
               percentValue={100}
               tone="blue"
+              onClick={() => setDashboardDrilldown({ title: "Engagements in Funnel", helper: "All filtered Engagement records entering the funnel.", rows: conversionFunnel.engagementRows })}
             />
 
             <FunnelCard
@@ -5363,6 +5693,7 @@ export default function AdminEngagementDashboard() {
               helper={`${conversionFunnel.leadCreationRate}% of engagements created leads.`}
               percentValue={conversionFunnel.leadCreationRate}
               tone="violet"
+              onClick={() => setDashboardDrilldown({ title: "Leads Created from Engagement", helper: "Leads linked to the filtered Engagement activity.", rows: conversionFunnel.leadRows })}
             />
 
             <FunnelCard
@@ -5371,6 +5702,7 @@ export default function AdminEngagementDashboard() {
               helper={`${conversionFunnel.quoteRate}% of engagement leads moved to quote.`}
               percentValue={conversionFunnel.quoteRate}
               tone="amber"
+              onClick={() => setDashboardDrilldown({ title: "Quoted Leads", helper: "Engagement-sourced Leads that moved to quotation.", rows: conversionFunnel.quotedLeadRows })}
             />
 
             <FunnelCard
@@ -5379,6 +5711,7 @@ export default function AdminEngagementDashboard() {
               helper={`${conversionFunnel.conversionRate}% converted from engagement leads.`}
               percentValue={conversionFunnel.conversionRate}
               tone="emerald"
+              onClick={() => setDashboardDrilldown({ title: "Converted Leads", helper: "Engagement-sourced Leads that converted/won.", rows: conversionFunnel.convertedLeadRows })}
             />
           </div>
         </section>
@@ -5389,12 +5722,14 @@ export default function AdminEngagementDashboard() {
             icon={Users}
             title="Agent Warmth"
             description="Relationship temperature based on recent engagement and lead activity."
+            onHeaderClick={() => setDashboardDrilldown({ title: "Agent Warmth", helper: "One latest relationship record per Travel Agent used in warmth analysis.", rows: warmthDetailRows(agentWarmth.rows) })}
           >
             <div className="grid grid-cols-2 gap-3">
               <HealthCard
                 label="Hot"
                 value={agentWarmth.hot}
                 helper="Active in 7 days."
+                onClick={() => setDashboardDrilldown({ title: "Hot Agents", helper: "Travel Agent relationship records in this warmth segment.", rows: warmthDetailRows(agentWarmth.rows, "hot") })}
                 icon={CheckCircle2}
                 tone="emerald"
               />
@@ -5403,6 +5738,7 @@ export default function AdminEngagementDashboard() {
                 label="Warm"
                 value={agentWarmth.warm}
                 helper="Active in 30 days."
+                onClick={() => setDashboardDrilldown({ title: "Warm Agents", helper: "Travel Agent relationship records in this warmth segment.", rows: warmthDetailRows(agentWarmth.rows, "warm") })}
                 icon={Activity}
                 tone="blue"
               />
@@ -5411,6 +5747,7 @@ export default function AdminEngagementDashboard() {
                 label="Cold"
                 value={agentWarmth.cold}
                 helper="No recent activity."
+                onClick={() => setDashboardDrilldown({ title: "Cold Agents", helper: "Travel Agent relationship records in this warmth segment.", rows: warmthDetailRows(agentWarmth.rows, "cold") })}
                 icon={Clock3}
                 tone="amber"
               />
@@ -5419,6 +5756,7 @@ export default function AdminEngagementDashboard() {
                 label="Dormant"
                 value={agentWarmth.dormant}
                 helper="60+ days inactive."
+                onClick={() => setDashboardDrilldown({ title: "Dormant Agents", helper: "Travel Agent relationship records in this warmth segment.", rows: warmthDetailRows(agentWarmth.rows, "dormant") })}
                 icon={AlertTriangle}
                 tone="red"
               />
@@ -5429,6 +5767,7 @@ export default function AdminEngagementDashboard() {
             icon={BarChart3}
             title="Outcome Performance"
             description="Most common outcomes from logged engagement activity."
+            onHeaderClick={() => setDashboardDrilldown({ title: "Outcome Performance", helper: "All Engagement records behind the outcome summary.", rows: filteredEngagements.map(engagementDetailRow) })}
           >
             <SmallRankList
               items={outcomePerformance}
@@ -5440,9 +5779,10 @@ export default function AdminEngagementDashboard() {
             icon={Share2}
             title="Asset Performance"
             description="Understand whether shared assets are supporting lead creation."
+            onHeaderClick={() => setDashboardDrilldown({ title: "Asset Performance", helper: "Engagement records where assets were shared.", rows: filteredEngagements.filter(item => getAssetCount(item) > 0).map(engagementDetailRow) })}
           >
             <div className="grid grid-cols-1 gap-3">
-              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+              <button type="button" onClick={() => setDashboardDrilldown({ title: "Asset Share Impact", helper: "Engagement records where assets were shared and could contribute to Lead creation.", rows: filteredEngagements.filter(item => getAssetCount(item) > 0).map(engagementDetailRow) })} className="w-full rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md">
                 <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
                   Asset Share Impact
                 </p>
@@ -5456,7 +5796,7 @@ export default function AdminEngagementDashboard() {
                   {assetPerformance.engagementsWithAssets} asset-sharing
                   engagements.
                 </p>
-              </div>
+              </button>
 
               <SmallRankList
                 items={assetPerformance.topAssets}
@@ -5474,6 +5814,7 @@ export default function AdminEngagementDashboard() {
             description="Follow-ups lined up for today from leads and engagements."
             items={todaysFollowUpItems}
             emptyText="No follow-ups due today."
+            onViewAll={() => setDashboardDrilldown({ title: "Today's Follow-up Queue", helper: "Every Lead and Engagement follow-up due today.", rows: todaysFollowUpItems.map(followUpDetailRow) })}
           />
 
           <FollowUpQueue
@@ -5482,6 +5823,7 @@ export default function AdminEngagementDashboard() {
             description="Pending follow-ups that crossed their due date."
             items={overdueFollowUpItems}
             emptyText="No overdue follow-ups."
+            onViewAll={() => setDashboardDrilldown({ title: "Overdue Follow-up Queue", helper: "Every Lead and Engagement follow-up currently overdue.", rows: overdueFollowUpItems.map(followUpDetailRow) })}
           />
         </section>
 
@@ -5493,6 +5835,7 @@ export default function AdminEngagementDashboard() {
             helper="Filtered engagement records."
             icon={MessageCircle}
             tone="blue"
+            onClick={() => setDashboardDrilldown({ title: "Total Engagements", helper: "All Engagement records matching the current filters.", rows: filteredEngagements.map(engagementDetailRow) })}
           />
 
           <StatCard
@@ -5501,6 +5844,7 @@ export default function AdminEngagementDashboard() {
             helper="Unique agent coverage."
             icon={Users}
             tone="emerald"
+            onClick={() => setDashboardDrilldown({ title: "Agents Engaged", helper: "Unique Travel Agents covered by filtered Engagement activity.", rows: uniqueEngagementAgentDetailRows(filteredEngagements) })}
           />
 
           <StatCard
@@ -5509,6 +5853,7 @@ export default function AdminEngagementDashboard() {
             helper="Destination interest signals."
             icon={MapPin}
             tone="violet"
+            onClick={() => setDashboardDrilldown({ title: "Destination Engagements", helper: "Engagement records contributing destination interest signals.", rows: filteredEngagements.filter(item => getDestinationName(item) && getDestinationName(item) !== "No Destination").map(engagementDetailRow) })}
           />
 
           <StatCard
@@ -5517,6 +5862,7 @@ export default function AdminEngagementDashboard() {
             helper="Total assets shared in engagement."
             icon={Share2}
             tone="amber"
+            onClick={() => setDashboardDrilldown({ title: "Asset Shares", helper: "Engagement records where assets were shared.", rows: filteredEngagements.filter(item => getAssetCount(item) > 0).map(engagementDetailRow) })}
           />
 
           <StatCard
@@ -5525,6 +5871,7 @@ export default function AdminEngagementDashboard() {
             helper={formatDateTime(metrics.lastEngagementDate)}
             icon={Clock3}
             tone="slate"
+            onClick={() => setDashboardDrilldown({ title: "Last Engagement", helper: "Most recent Engagement record matching the current filters.", rows: filteredEngagements.length ? [engagementDetailRow([...filteredEngagements].sort((a, b) => (toDate(getCreatedDate(b))?.getTime() || 0) - (toDate(getCreatedDate(a))?.getTime() || 0))[0])] : [] })}
           />
         </section>
 
@@ -5593,6 +5940,7 @@ export default function AdminEngagementDashboard() {
             icon={MessageCircle}
             title="Engagement by Channel"
             description="Distribution of outreach activity by communication channel."
+            onHeaderClick={() => setDashboardDrilldown({ title: "Engagement by Channel", helper: "Exact Engagement records behind the channel chart.", rows: filteredEngagements.map(engagementDetailRow) })}
           >
             <EngagementByChannelChart engagements={filteredEngagements} />
           </SectionCard>
@@ -5601,6 +5949,7 @@ export default function AdminEngagementDashboard() {
             icon={MapPin}
             title="Engagement by Destination"
             description="Destination-wise engagement visibility and demand signals."
+            onHeaderClick={() => setDashboardDrilldown({ title: "Engagement by Destination", helper: "Exact Engagement records behind the destination chart.", rows: filteredEngagements.map(engagementDetailRow) })}
           >
             <EngagementByDestinationChart engagements={filteredEngagements} />
           </SectionCard>
@@ -5611,6 +5960,7 @@ export default function AdminEngagementDashboard() {
           icon={UserCheck}
           title="Team Engagement Performance"
           description="Engagement activity, channel usage, lead creation, and follow-up health by team member."
+          onHeaderClick={() => setDashboardDrilldown({ title: "Team Engagement Performance", helper: "Exact Engagement records behind the team performance table.", rows: filteredEngagements.map(engagementDetailRow) })}
           rightContent={
             <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
               {teamEngagementRows.length} members
@@ -5625,6 +5975,7 @@ export default function AdminEngagementDashboard() {
           icon={Users}
           title="Agent Engagement Overview"
           description="Agent-wise activity, communication visibility, and lead linkage."
+          onHeaderClick={() => setDashboardDrilldown({ title: "Agent Engagement Overview", helper: "Exact Engagement records behind the agent overview table.", rows: filteredEngagements.map(engagementDetailRow) })}
           rightContent={
             <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
               {filteredEngagements.length} records
@@ -5639,6 +5990,26 @@ export default function AdminEngagementDashboard() {
           </div>
         </SectionCard>
       </div>
+      <OperationalActivityDrawer
+        open={Boolean(dashboardDrilldown)}
+        title={dashboardDrilldown?.title || "Dashboard Details"}
+        helper={dashboardDrilldown?.helper || "Exact records behind the selected Dashboard card."}
+        rows={dashboardDrilldown?.rows || []}
+        onClose={() => setDashboardDrilldown(null)}
+        leadBasePath="/admin/leads"
+        leads={activeLeads}
+        travelAgents={activeTravelAgents}
+      />
+      <OperationalActivityDrawer
+        open={Boolean(activityDrilldown)}
+        title={activityDrilldown?.title || "Lead & Operations Activity"}
+        helper="Exact performer, Lead, Travel Agent, destination, time, status and note for the selected KPI."
+        rows={operationalDrilldownRows}
+        onClose={() => setActivityDrilldown(null)}
+        leadBasePath="/admin/leads"
+        leads={activeLeads}
+        travelAgents={activeTravelAgents}
+      />
     </main>
   );
 }

@@ -147,7 +147,7 @@ export default function AdminProductivityPulseSummary() {
                   <td className="px-4 py-3 text-right">{item.pulses}</td>
                   <td className="px-4 py-3 text-right"><span className="inline-flex items-center gap-1"><Star className="h-3.5 w-3.5 text-amber-500" />{item.averageRating}</span></td>
                   <td className="px-4 py-3 font-medium text-slate-800">{item.workstream === WORKSTREAMS.LEAD_OPERATIONS ? `${metrics.completedWork ?? 0} completed · ${metrics.workActions ?? 0} actions` : `${metrics.requirements ?? 0} requirements · ${metrics.leadsGenerated ?? 0} leads`}</td>
-                  <td className="px-4 py-3 text-slate-500">{item.workstream === WORKSTREAMS.LEAD_OPERATIONS ? `${metrics.quoteWork ?? 0} quote · ${metrics.requoteWork ?? 0} re-quote · ${metrics.onGroundWork ?? 0} on-ground` : `${metrics.connected ?? 0} connected · ${metrics.uniqueAgents ?? 0} agents · ${metrics.meaningful ?? 0} meaningful`}</td>
+                  <td className="px-4 py-3 text-slate-500">{item.workstream === WORKSTREAMS.LEAD_OPERATIONS ? `${metrics.quoteWork ?? 0} quote · ${metrics.requoteWork ?? 0} re-quote · ${metrics.vendorCoordination ?? 0} vendor · ${metrics.paymentWork ?? 0} payment · ${metrics.onGroundWork ?? 0} on-ground` : `${metrics.connected ?? 0} connected · ${metrics.uniqueAgents ?? 0} agents · ${metrics.meaningful ?? 0} meaningful`}</td>
                   <td className="px-4 py-3 text-right text-slate-500">{formatTime(item.latest?.pulseSlotAt)}</td>
                 </tr>
               );
