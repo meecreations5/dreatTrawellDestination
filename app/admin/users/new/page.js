@@ -38,11 +38,8 @@ const labelClass = "text-xs font-medium text-gray-500";
 const errorText = "mt-1 text-xs text-red-600";
 
 function getTeamAccessText(role) {
-  if (role === "employee") {
-    return "Travel Agents, Engagements, Meetings and Destinations. Qualified Leads can be created from Engagement/Meeting for handover, without direct Lead workspace access.";
-  }
-  if (role === "operation_executive") {
-    return "Travel Agents, Engagements, Meetings, Leads and Destinations, including the Lead & Operations work queue.";
+  if (["employee", "operation_executive"].includes(role)) {
+    return "Full operational User Front: Dashboard, Action Center, Travel Agents, Engagements, Meetings, Leads and Destinations. The role changes KPI/workstream accountability and approved Admin modules, not User Front visibility.";
   }
   return "Dashboard and the standard CRM workspace are available according to the selected role.";
 }

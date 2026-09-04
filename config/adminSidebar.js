@@ -138,7 +138,7 @@ export const adminSidebar = [
         label: "Add Vendor",
         icon: PlusCircle,
         href: "/admin/vendors/new",
-        permission: "admin.vendors"
+        permission: "vendors.create"
       }
     ]
   },
@@ -178,7 +178,7 @@ export const adminSidebar = [
         label: "Categories",
         icon: Folder,
         href: "/admin/template-categories",
-        permission: "admin.communications"
+        permission: "admin.communication_categories"
       }
     ]
   },
