@@ -19,7 +19,7 @@ export default function RoleDefaultsPage() {
           <div>
             <h1 className="text-xl font-semibold text-gray-900">Role Access</h1>
             <p className="mt-1 max-w-3xl text-sm text-gray-500">
-              Role access now follows the actual workstream. Engagement Executives focus on Travel Agent relationships; Lead & Operations Executives manage the Lead pipeline and execution.
+              All active team roles receive the same operational User Front. Roles now define workstream measurement and Admin/management access rather than hiding day-to-day CRM modules.
             </p>
           </div>
         </div>
@@ -28,9 +28,9 @@ export default function RoleDefaultsPage() {
           <div className="flex items-start gap-3">
             <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
             <div>
-              <p className="text-sm font-semibold text-emerald-900">Workstream access is automatic</p>
+              <p className="text-sm font-semibold text-emerald-900">User Front access is automatic for the full team</p>
               <p className="mt-1 text-sm leading-6 text-emerald-700">
-                Engagement / Relationship Executive: Travel Agents, Engagements, Meetings and Destinations. Lead & Operations Executive: Travel Agents, Engagements, Meetings, Leads and Destinations.
+                Dashboard, Action Center, Travel Agents, Engagements, Meetings, Leads, Destinations and Profile are available to every active team user. Workstream roles only change KPI attribution, pulse scoring and management reporting.
               </p>
               <p className="mt-1 text-xs font-medium text-emerald-800">
                 Travel Agents: users can claim an unassigned agent for themselves; Manager/Admin/Super Admin can reassign.

@@ -75,6 +75,7 @@ const VendorQuotesSidePanel = dynamic(() => import("@/components/vendors/VendorQ
 const CustomerQuotationTab = dynamic(() => import("@/components/leads/CustomerQuotationTab"), { ssr: false });
 const QuotationHistory = dynamic(() => import("@/components/leads/QuotationHistory"), { ssr: false });
 const LeadPaymentsTab = dynamic(() => import("@/components/payments/LeadPaymentsTab"), { ssr: false });
+const LeadOperationsActivityPanel = dynamic(() => import("@/components/leads/LeadOperationsActivityPanel"), { ssr: false });
 
 /* =========================
    HELPERS
@@ -1297,7 +1298,7 @@ export default function LeadDetailPage() {
                   </p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 min-w-[260px]">
+                <div className="grid grid-cols-3 gap-2 min-w-[390px]">
                   <button
                     disabled={isClosed}
                     onClick={() => setFollowUpOpen(true)}
@@ -1312,6 +1313,14 @@ export default function LeadDetailPage() {
                     className="rounded-2xl bg-blue-500 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-600 disabled:opacity-50"
                   >
                     Prepare Quote
+                  </button>
+
+                  <button
+                    disabled={isClosed}
+                    onClick={() => setActiveTab("activity")}
+                    className="rounded-2xl border border-white/20 bg-white/10 px-4 py-3 text-sm font-semibold text-white hover:bg-white/15 disabled:opacity-50"
+                  >
+                    + Activity
                   </button>
                 </div>
               </div>
@@ -1412,6 +1421,20 @@ export default function LeadDetailPage() {
           {/* TAB CONTENT */}
           {activeTab === "activity" && (
             <div className="space-y-4">
+              <LeadOperationsActivityPanel
+                lead={{
+                  ...lead,
+                  travelAgentId,
+                  travelAgentName,
+                  destinationName
+                }}
+                disabled={isClosed}
+                onFollowUp={() => setFollowUpOpen(true)}
+                onQuote={openCustomerQuotationTab}
+                onReQuote={() => setActiveTab(quotationCount > 0 ? "quotation_history" : "quotation")}
+                onPaymentWorkspace={() => setActiveTab("payments")}
+              />
+
               <Card className="space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <div>

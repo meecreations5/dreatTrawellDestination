@@ -496,6 +496,7 @@ function getSearchText(item = {}) {
     item?.vendorName,
     item?.supplierName,
     item?.counterpartyName,
+    item?.contactPerson,
     item?.taskTypeLabel,
     item?.eventType,
     item?.createdByName,
@@ -3072,6 +3073,13 @@ export default function AdminEngagementDashboard() {
         )
       );
     }
+    if (activityDrilldown.type === "payment_work") {
+      return uniqueOperationalRows(
+        filteredOperationalActivity.filter(item =>
+          ["payment_follow_up", "payment_management"].includes(classifyOperationalActivity(item).activityType)
+        )
+      );
+    }
     return uniqueOperationalRows(
       filteredOperationalActivity.filter(item =>
         classifyOperationalActivity(item).activityType === activityDrilldown.type
@@ -5274,7 +5282,8 @@ export default function AdminEngagementDashboard() {
             <BusinessMetricCard label="Supplier Coordination" value={operationalActivityMetrics.supplierCoordination} helper="Supplier execution and confirmation activity." icon={Users} tone="emerald" onClick={() => setActivityDrilldown({ type: "supplier_coordination", title: "Supplier Coordination" })} />
             <BusinessMetricCard label="Group Coordination" value={operationalActivityMetrics.groupCoordination} helper="On-ground group coordination activity." icon={Users} tone="emerald" onClick={() => setActivityDrilldown({ type: "group_coordination", title: "Group Coordination" })} />
             <BusinessMetricCard label="Ticket Editing" value={operationalActivityMetrics.ticketEditing} helper="Ticket correction and editing work." icon={ListChecks} tone="violet" onClick={() => setActivityDrilldown({ type: "ticket_editing", title: "Ticket Editing" })} />
-            <BusinessMetricCard label="Payment / Operations" value={operationalActivityMetrics.paymentWork} helper="Agent/vendor payment and related operations activity." icon={CircleDollarSign} tone="amber" onClick={() => setActivityDrilldown({ type: "payment_management", title: "Payment / Operations Activity" })} />
+            <BusinessMetricCard label="Payment Follow-up" value={operationalActivityMetrics.paymentWork} helper="Agent/vendor payment follow-up and related payment operations." icon={CircleDollarSign} tone="amber" onClick={() => setActivityDrilldown({ type: "payment_work", title: "Payment Follow-up Activity" })} />
+            <BusinessMetricCard label="Other Operations" value={operationalActivityMetrics.otherOperations} helper="Other Lead/Operations activities logged by the team." icon={Activity} tone="slate" onClick={() => setActivityDrilldown({ type: "other_operations", title: "Other Operations Activity" })} />
             <BusinessMetricCard label="Completed Work" value={operationalActivityMetrics.completedWork} helper="Operational work units completed in the selected period." icon={CheckCircle2} tone="emerald" onClick={() => setActivityDrilldown({ type: "completed", title: "Completed Lead & Operations Work" })} />
           </div>
         </section>

@@ -95,7 +95,13 @@ export default function OperationalActivityDrawer({
                 const agent = item.travelAgentName || item.agentName || item.companyName || item.metadata?.travelAgentName || linkedLead?.travelAgentName || linkedLead?.agentName || linkedLead?.travelAgent?.name || linkedAgent?.companyName || linkedAgent?.agencyName || linkedAgent?.agentName || linkedAgent?.name || "";
                 const leadCode = item.leadCode || item.metadata?.leadCode || linkedLead?.leadCode || linkedLead?.code || linkedLead?.referenceNo || "";
                 const destination = item.destinationName || item.metadata?.destinationName || linkedLead?.destinationName || linkedLead?.destination || "";
-                const counterparty = item.vendorName || item.supplierName || item.spocName || item.contactPersonName || item.counterpartyName || linkedLead?.spocName || linkedAgent?.primarySpocName || "";
+                const counterparty = item.vendorName || item.supplierName || item.spocName || item.counterpartyName || linkedLead?.spocName || linkedAgent?.primarySpocName || "";
+                const contactPerson = item.contactPerson || item.contactPersonName || "";
+                const result = String(item.result || item.activityResult || "").trim().replaceAll("_", " ");
+                const waitingReason = item.waitingReason || "";
+                const nextAction = item.nextAction || "";
+                const paymentAmount = Number(item.paymentAmount || 0);
+                const paymentDirection = String(item.paymentDirection || "").trim().replaceAll("_", " ");
                 const directHref = String(item.href || "").trim();
                 const directHrefLabel = item.hrefLabel || "Open Details";
                 const displayTitle = agent || leadCode || counterparty || item.title || item.taskTypeLabel || classification.activityTypeLabel || "Activity";
@@ -139,10 +145,35 @@ export default function OperationalActivityDrawer({
                           <p className="mt-0.5 font-semibold text-slate-700">{destination}</p>
                         </div>
                       ) : null}
-                      {counterparty ? (
+                      {counterparty || contactPerson ? (
                         <div className="rounded-xl bg-slate-50 px-3 py-2">
                           <span className="text-slate-400">Party / Contact</span>
-                          <p className="mt-0.5 font-semibold text-slate-700">{counterparty}</p>
+                          <p className="mt-0.5 font-semibold text-slate-700">{counterparty || contactPerson}</p>
+                          {counterparty && contactPerson && contactPerson !== counterparty ? <p className="mt-0.5 text-slate-500">Contact: {contactPerson}</p> : null}
+                        </div>
+                      ) : null}
+                      {result ? (
+                        <div className="rounded-xl bg-slate-50 px-3 py-2">
+                          <span className="text-slate-400">Result</span>
+                          <p className="mt-0.5 font-semibold capitalize text-slate-700">{result}</p>
+                        </div>
+                      ) : null}
+                      {nextAction ? (
+                        <div className="rounded-xl bg-slate-50 px-3 py-2">
+                          <span className="text-slate-400">Next Action</span>
+                          <p className="mt-0.5 font-semibold text-slate-700">{nextAction}</p>
+                        </div>
+                      ) : null}
+                      {waitingReason ? (
+                        <div className="rounded-xl bg-amber-50 px-3 py-2">
+                          <span className="text-amber-600">Waiting For</span>
+                          <p className="mt-0.5 font-semibold text-amber-800">{waitingReason}</p>
+                        </div>
+                      ) : null}
+                      {paymentAmount > 0 || paymentDirection ? (
+                        <div className="rounded-xl bg-slate-50 px-3 py-2">
+                          <span className="text-slate-400">Payment</span>
+                          <p className="mt-0.5 font-semibold capitalize text-slate-700">{paymentDirection || "Payment follow-up"}{paymentAmount > 0 ? ` - INR ${paymentAmount.toLocaleString("en-IN")}` : ""}</p>
                         </div>
                       ) : null}
                     </div>

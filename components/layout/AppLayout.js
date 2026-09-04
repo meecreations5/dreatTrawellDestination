@@ -405,7 +405,7 @@ export default function AppLayout({ children }) {
 
         {/* BOTTOM BAR */}
         <div className="bg-white/95 backdrop-blur border-t border-gray-200">
-          <div className="flex justify-around py-3">
+          <div className="flex overflow-x-auto py-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {visibleNav.map(module => {
               const Icon = module.icon;
               const active = pathname?.startsWith(module.base);
@@ -421,7 +421,7 @@ export default function AppLayout({ children }) {
                       router.push(module.base);
                     }
                   }}
-                  className="relative flex items-center justify-center w-full"
+                  className="relative flex min-w-[64px] flex-1 items-center justify-center"
                 >
                   {active && (
                     <span className="absolute -top-1 w-1.5 h-1.5 bg-blue-600 rounded-full" />

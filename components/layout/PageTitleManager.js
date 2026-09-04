@@ -16,6 +16,7 @@ const EXACT_TITLES = {
   "/engagements/my": "My Engagements",
   "/leads": "Leads",
   "/leads/my": "My Leads",
+  "/destination-library": "Destinations",
   "/leads/create": "Create Lead",
   "/meetings": "Meetings",
   "/travel-agents": "Travel Agents",

@@ -1096,7 +1096,9 @@ export default function EngagementForm({
                 {QUICK_CALL_RESULTS.map(result => (
                   <QuickResultButton
                     key={result.key}
-                    {...result}
+                    label={result.label}
+                    icon={result.icon}
+                    tone={result.tone}
                     active={form.callResult === result.key || (!form.callResult && form.outcomeCode === result.key)}
                     onClick={() => applyQuickCallResult(result.key)}
                   />

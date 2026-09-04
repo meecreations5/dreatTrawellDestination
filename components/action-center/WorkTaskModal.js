@@ -154,10 +154,10 @@ export default function WorkTaskModal({
             <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Activity</label>
             <select value={activityType} onChange={event => setActivityType(event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-100">
               <optgroup label="Lead Activity">
-                {WORK_TASK_TYPES.filter(item => item.group === "lead").map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
+                {WORK_TASK_TYPES.filter(item => item.group === "lead" && item.capture !== "automatic" && !item.hidden).map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
               </optgroup>
               <optgroup label="On-ground Activity">
-                {WORK_TASK_TYPES.filter(item => item.group === "on_ground").map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
+                {WORK_TASK_TYPES.filter(item => item.group === "on_ground" && item.capture !== "automatic" && !item.hidden).map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
               </optgroup>
             </select>
           </div>

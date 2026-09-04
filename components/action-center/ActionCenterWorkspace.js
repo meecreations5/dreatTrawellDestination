@@ -867,7 +867,7 @@ export default function ActionCenterWorkspace({
               </select>
               <select value={queueType} onChange={event => setQueueType(event.target.value)} className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
                 <option value="all">All Activity Types</option>
-                {WORK_TASK_TYPES.filter(item => queueGroup === "all" || item.group === queueGroup).map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
+                {WORK_TASK_TYPES.filter(item => !item.hidden && (queueGroup === "all" || item.group === queueGroup)).map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
                 {(queueGroup === "all" || queueGroup === "engagement") ? <option value="engagement_follow_up">Engagement Follow-up</option> : null}
               </select>
               {adminMode ? (

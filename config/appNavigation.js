@@ -4,7 +4,9 @@ import {
   Target,
   User,
   CalendarClock,
-  ListTodo
+  ListTodo,
+  PlaneTakeoff,
+  Map
 } from "lucide-react";
 
 export const APP_NAV = [
@@ -34,11 +36,25 @@ export const APP_NAV = [
 
 
   /* =========================
+     TRAVEL AGENTS
+  ========================== */
+  {
+    id: "travel-agents",
+    label: "Travel Agents",
+    icon: PlaneTakeoff,
+    base: "/travel-agents",
+    routes: ["/travel-agents", "/travel-agents/[agentId]"],
+    showInNav: true,
+    permission: "travel_agents.view"
+  },
+
+
+  /* =========================
      ENGAGEMENTS
   ========================== */
   {
     id: "engagements",
-    label: "Engagement",
+    label: "Engagements",
     icon: MessageSquare,
     base: "/engagements/my",
     routes: [
@@ -57,10 +73,6 @@ export const APP_NAV = [
       {
         label: "My Engagements",
         href: "/engagements/my"
-      },
-      {
-        label: "By Travel Agent",
-        href: "/travel-agents"
       }
     ]
   },
@@ -109,6 +121,20 @@ export const APP_NAV = [
       }
     ]
   },
+
+  /* =========================
+     DESTINATIONS
+  ========================== */
+  {
+    id: "destinations",
+    label: "Destinations",
+    icon: Map,
+    base: "/destination-library",
+    routes: ["/destination-library"],
+    showInNav: true,
+    permission: "destinations.view"
+  },
+
 
   /* =========================
      PROFILE

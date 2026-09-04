@@ -1843,7 +1843,8 @@ export default function TeamEngagementDashboardPage() {
           item?.note,
           item?.vendorName,
           item?.supplierName,
-          item?.counterpartyName
+          item?.counterpartyName,
+          item?.contactPerson
         ]
           .filter(Boolean)
           .join(" ")
@@ -1875,6 +1876,13 @@ export default function TeamEngagementDashboardPage() {
       return uniqueOperationalRows(
         filteredWorkEvents.filter(item =>
           ["quote_creation", "quote_follow_up"].includes(classifyOperationalActivity(item).activityType)
+        )
+      );
+    }
+    if (activityDrilldown.type === "payment_work") {
+      return uniqueOperationalRows(
+        filteredWorkEvents.filter(item =>
+          ["payment_follow_up", "payment_management"].includes(classifyOperationalActivity(item).activityType)
         )
       );
     }
@@ -2862,7 +2870,8 @@ export default function TeamEngagementDashboardPage() {
               <MetricCard icon={Users} label="Supplier Coordination" value={operationalActivityMetrics.supplierCoordination} helper="Supplier operational coordination." tone="emerald" onClick={() => setActivityDrilldown({ type: "supplier_coordination", title: "Supplier Coordination" })} />
               <MetricCard icon={Users} label="Group Coordination" value={operationalActivityMetrics.groupCoordination} helper="On-ground group coordination." tone="emerald" onClick={() => setActivityDrilldown({ type: "group_coordination", title: "Group Coordination" })} />
               <MetricCard icon={ListChecks} label="Ticket Editing" value={operationalActivityMetrics.ticketEditing} helper="Ticket correction/editing work." tone="violet" onClick={() => setActivityDrilldown({ type: "ticket_editing", title: "Ticket Editing" })} />
-              <MetricCard icon={CircleDollarSign} label="Payment / Ops" value={operationalActivityMetrics.paymentWork} helper="Agent/vendor payment and operations activity." tone="amber" onClick={() => setActivityDrilldown({ type: "payment_management", title: "Payment / Operations Activity" })} />
+              <MetricCard icon={CircleDollarSign} label="Payment Follow-up" value={operationalActivityMetrics.paymentWork} helper="Agent/vendor payment follow-up and payment operations." tone="amber" onClick={() => setActivityDrilldown({ type: "payment_work", title: "Payment Follow-up Activity" })} />
+              <MetricCard icon={Activity} label="Other Operations" value={operationalActivityMetrics.otherOperations} helper="Other Lead/Operations work logged by the team." tone="slate" onClick={() => setActivityDrilldown({ type: "other_operations", title: "Other Operations Activity" })} />
               <MetricCard icon={CheckCircle2} label="Completed Work" value={operationalActivityMetrics.completedWork} helper="Completed operational work units." tone="emerald" onClick={() => setActivityDrilldown({ type: "completed", title: "Completed Lead & Operations Work" })} />
             </div>
           </section>

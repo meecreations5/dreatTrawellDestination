@@ -87,7 +87,8 @@ function normalizeRole(data = {}) {
   if (rawRole) {
     const role = rawRole.toLowerCase().replace(/[\s-]+/g, "_");
     if (["super_admin", "admin", "manager", "employee", "operation_executive", "associate", "partner", "finance"].includes(role)) return role;
-    if (["team", "sales", "operations_executive"].includes(role)) return "employee";
+    if (role === "operations_executive") return "operation_executive";
+    if (["team", "sales"].includes(role)) return "employee";
     return "employee";
   }
   if (data.isSuperAdmin === true) return "super_admin";

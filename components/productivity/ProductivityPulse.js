@@ -42,6 +42,7 @@ const EMPTY_METRICS = {
   groupCoordination: 0,
   ticketEditing: 0,
   paymentWork: 0,
+  otherOperations: 0,
   leadsGenerated: 0
 };
 
@@ -457,7 +458,7 @@ export default function ProductivityPulse() {
               </div>
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Execution Mix</p>
-                <p className="mt-1 text-sm font-semibold text-slate-800">{metricValue(pulse.intervalMetrics.vendorCoordination)} vendor · {metricValue(pulse.intervalMetrics.paymentWork)} payment · {metricValue(pulse.intervalMetrics.leadWork)} Lead actions</p>
+                <p className="mt-1 text-sm font-semibold text-slate-800">{metricValue(pulse.intervalMetrics.vendorCoordination)} vendor · {metricValue(pulse.intervalMetrics.paymentWork)} payment · {metricValue(pulse.intervalMetrics.otherOperations)} other · {metricValue(pulse.intervalMetrics.leadWork)} Lead actions</p>
               </div>
             </>
           ) : (
@@ -536,6 +537,10 @@ export default function ProductivityPulse() {
                     <option value="lead_followups">Lead Follow-ups</option>
                     <option value="vendor_coordination">Vendor Coordination</option>
                     <option value="supplier_coordination">Supplier Coordination</option>
+                    <option value="group_coordination">Group Coordination</option>
+                    <option value="ticket_editing">Ticket Editing</option>
+                    <option value="payment_follow_up">Payment Follow-up</option>
+                    <option value="other_operations">Other Operations Activity</option>
                     <option value="on_ground">On-ground Operations</option>
                   </>
                 ) : (
