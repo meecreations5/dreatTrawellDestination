@@ -2308,8 +2308,7 @@ export default function DocumentsPage() {
 
                             <button
                               onClick={() => deleteAsset(asset)}
-                              disabled={!canDeleteDocuments}
-                              disabled={isDeleting}
+                              disabled={!canDeleteDocuments || isDeleting}
                               className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-60"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
@@ -2357,8 +2356,7 @@ export default function DocumentsPage() {
 
                                 <button
                                   onClick={() => uploadNewVersion(asset)}
-                                  disabled={!canUploadDocuments}
-                                  disabled={isUploading}
+                                  disabled={!canUploadDocuments || isUploading}
                                   className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-60"
                                 >
                                   <UploadCloud className="h-3.5 w-3.5" />

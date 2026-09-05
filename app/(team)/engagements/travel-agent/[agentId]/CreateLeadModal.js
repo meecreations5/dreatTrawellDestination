@@ -38,7 +38,7 @@ export default function CreateLeadModal({ engagement, onClose }) {
         query(
           collection(db, "users"),
           where("active", "==", true),
-          where("role", "in", ["team", "employee", "admin", "manager", "operation_executive"])
+          where("role", "in", ["team", "employee", "operation_executive", "operations_executive", "admin", "manager", "super_admin"])
         )
       );
 
@@ -46,7 +46,15 @@ export default function CreateLeadModal({ engagement, onClose }) {
         snap.docs
           .map(d => ({ uid: d.id, ...d.data() }))
           .filter(member => ["operation_executive", "manager", "admin", "super_admin"].includes(resolveUserRole(member)))
-          .map(member => ({ uid: member.uid, name: member.name, email: member.email, role: member.role, accessRole: member.accessRole }))
+          .map(member => ({
+            uid: member.uid,
+            name: member.name,
+            email: member.email,
+            role: member.role,
+            accessRole: member.accessRole,
+            roleProfile: member.roleProfile,
+            active: member.active !== false
+          }))
       );
     };
 
@@ -120,8 +128,12 @@ export default function CreateLeadModal({ engagement, onClose }) {
         assignedUser: assignee,
         createdUser: {
           uid: user.uid,
-          email: user.email,
-          name: user.name
+          email: user.email || "",
+          name: user.name || user.displayName || user.email || "",
+          role: user.role || "",
+          accessRole: user.accessRole || "",
+          roleProfile: user.roleProfile || "",
+          active: user.active !== false
         },
         travelStartDate,
         travelEndDate,

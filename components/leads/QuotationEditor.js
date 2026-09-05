@@ -57,6 +57,7 @@ import {
 } from "@/lib/logLeadAction";
 
 import SelectableChip from "@/components/ui/SelectableChip";
+import QuotationVendorPricingSelector from "@/components/leads/QuotationVendorPricingSelector";
 
 import {
   buildEmailSignatureHtml,
@@ -921,6 +922,54 @@ function getInitialPricingSnapshot(initialQuotation, lead) {
   };
 }
 
+function normalizeEditorPricingMode(value = "") {
+  const mode = cleanString(value);
+  if (["vendor_quote", "vendor_final", "vendor_draft"].includes(mode)) {
+    return "vendor_quote";
+  }
+  if (mode === "multi_vendor") return "multi_vendor";
+  if (mode === "manual_cost") return "manual_cost";
+  return "direct";
+}
+
+function normalizePricingQuoteIds(value = []) {
+  return (Array.isArray(value) ? value : [])
+    .map(item => cleanString(item))
+    .filter(Boolean)
+    .sort();
+}
+
+function buildPricingFingerprint(pricing = {}) {
+  return JSON.stringify({
+    mode: cleanString(pricing.quotationPricingMode || "direct"),
+    vendorCostingMode:
+      cleanString(pricing.vendorCostingMode) === "multi_vendor"
+        ? "multi_vendor"
+        : "single_vendor",
+    selectedVendorQuoteId: cleanString(pricing.selectedVendorQuoteId),
+    selectedVendorRequestId: cleanString(pricing.selectedVendorRequestId),
+    selectedVendorQuoteIds: normalizePricingQuoteIds(
+      pricing.selectedVendorQuoteIds
+    ),
+    selectedVendorCost:
+      pricing.selectedVendorCost === null ||
+      pricing.selectedVendorCost === undefined ||
+      pricing.selectedVendorCost === ""
+        ? null
+        : Number(pricing.selectedVendorCost),
+    totalSelectedVendorCost:
+      pricing.totalSelectedVendorCost === null ||
+      pricing.totalSelectedVendorCost === undefined ||
+      pricing.totalSelectedVendorCost === ""
+        ? null
+        : Number(pricing.totalSelectedVendorCost),
+    selectedVendorCurrency: cleanString(
+      pricing.selectedVendorCurrency || "INR"
+    ),
+    selectedVendorName: cleanString(pricing.selectedVendorName)
+  });
+}
+
 /* =========================
   STRUCTURED QUOTATION HELPERS
 ========================= */
@@ -1513,6 +1562,80 @@ async function updateQuotationSentStatus({
   }
 }
 
+async function markQuotationSuperseded({
+  leadId,
+  quotationId,
+  replacementQuotationId = "",
+  replacementRevision = null,
+  user
+}) {
+  if (!leadId || !quotationId || quotationId === replacementQuotationId) return;
+
+  try {
+    await updateDoc(
+      doc(db, "leads", leadId, "quotations", quotationId),
+      {
+        status: "superseded",
+        isDraft: false,
+        isFinalQuotation: false,
+        supersededAt: serverTimestamp(),
+        supersededByQuotationId: replacementQuotationId || "",
+        supersededByRevision:
+          replacementRevision === null || replacementRevision === undefined
+            ? null
+            : Number(replacementRevision),
+        supersededByUid: user?.uid || "",
+        supersededByName:
+          user?.displayName || user?.name || user?.email || "",
+        updatedAt: serverTimestamp()
+      }
+    );
+  } catch (error) {
+    console.warn("Previous quotation draft could not be marked superseded:", error);
+  }
+}
+
+async function clearOtherFinalQuotations({
+  leadId,
+  quotationId,
+  user
+}) {
+  if (!leadId || !quotationId) return;
+
+  try {
+    const snap = await getDocs(collection(db, "leads", leadId, "quotations"));
+    const updates = snap.docs
+      .filter(item => {
+        if (item.id === quotationId) return false;
+        const data = item.data() || {};
+        return data.isFinalQuotation === true || data.status === "final";
+      })
+      .map(item => {
+        const data = item.data() || {};
+        const wasSent = Boolean(
+          data.sentAt ||
+            (Array.isArray(data.sentVia) && data.sentVia.length) ||
+            (Array.isArray(data.sendVia) && data.sendVia.length)
+        );
+
+        return updateDoc(item.ref, {
+          isFinalQuotation: false,
+          status: wasSent ? "sent" : "superseded",
+          previousFinalSupersededAt: serverTimestamp(),
+          previousFinalSupersededByQuotationId: quotationId,
+          previousFinalSupersededByUid: user?.uid || "",
+          previousFinalSupersededByName:
+            user?.displayName || user?.name || user?.email || "",
+          updatedAt: serverTimestamp()
+        });
+      });
+
+    if (updates.length) await Promise.all(updates);
+  } catch (error) {
+    console.warn("Older final quotation flags could not be cleared:", error);
+  }
+}
+
 async function finalizeQuotationDispatch({
   leadId,
   quotationId,
@@ -1533,6 +1656,7 @@ async function finalizeQuotationDispatch({
         {
           status: isFinalQuotation ? "final" : "sent",
           isDraft: false,
+          isFinalQuotation: Boolean(isFinalQuotation),
           sentVia: arrayUnion(...completedChannels),
           sentAt: serverTimestamp(),
           sentByUid: user?.uid || "",
@@ -1554,6 +1678,14 @@ async function finalizeQuotationDispatch({
         updatedAt: serverTimestamp()
       })
     ]);
+
+    if (isFinalQuotation) {
+      await clearOtherFinalQuotations({
+        leadId,
+        quotationId,
+        user
+      });
+    }
 
     return true;
   } catch (error) {
@@ -2039,6 +2171,47 @@ export default function QuotationEditor({
     return getInitialPricingSnapshot(initialQuotation, lead);
   }, [initialQuotation, lead]);
 
+  const [quotationPricingMode, setQuotationPricingMode] = useState(
+    normalizeEditorPricingMode(initialPricingSnapshot.quotationPricingMode)
+  );
+  const [vendorQuoteFinalized, setVendorQuoteFinalized] = useState(
+    Boolean(initialPricingSnapshot.vendorQuoteFinalized)
+  );
+  const [vendorCostingMode, setVendorCostingMode] = useState(
+    initialPricingSnapshot.vendorCostingMode || "single_vendor"
+  );
+  const [selectedVendorQuotes, setSelectedVendorQuotes] = useState(() =>
+    Array.isArray(initialPricingSnapshot.selectedVendorQuotes)
+      ? initialPricingSnapshot.selectedVendorQuotes
+      : []
+  );
+  const [selectedVendorQuoteIds, setSelectedVendorQuoteIds] = useState(() =>
+    Array.isArray(initialPricingSnapshot.selectedVendorQuoteIds)
+      ? initialPricingSnapshot.selectedVendorQuoteIds
+      : []
+  );
+  const [totalSelectedVendorCost, setTotalSelectedVendorCost] = useState(() => {
+    const value = initialPricingSnapshot.totalSelectedVendorCost;
+    return value === null || value === undefined || value === ""
+      ? null
+      : Number(value);
+  });
+  const [selectedVendorName, setSelectedVendorName] = useState(
+    initialPricingSnapshot.selectedVendorName || ""
+  );
+  const [selectedVendorQuoteId, setSelectedVendorQuoteId] = useState(
+    initialPricingSnapshot.selectedVendorQuoteId || ""
+  );
+  const [selectedVendorRequestId, setSelectedVendorRequestId] = useState(
+    initialPricingSnapshot.selectedVendorRequestId || ""
+  );
+  const [selectedVendorCurrency, setSelectedVendorCurrency] = useState(
+    initialPricingSnapshot.selectedVendorCurrency || "INR"
+  );
+  const [pricingBaseline, setPricingBaseline] = useState(() =>
+    buildPricingFingerprint(initialPricingSnapshot)
+  );
+
   useEffect(() => {
     const leadId = lead?.id || lead?.leadId || "";
     if (!user?.uid || !leadId) return;
@@ -2082,14 +2255,6 @@ export default function QuotationEditor({
     });
   }, [user?.uid, lead?.id, lead?.leadId]);
 
-  const selectedVendorName = initialPricingSnapshot.selectedVendorName;
-  const selectedVendorQuoteId = initialPricingSnapshot.selectedVendorQuoteId;
-  const selectedVendorRequestId =
-    initialPricingSnapshot.selectedVendorRequestId;
-
-  const selectedVendorCurrency =
-    initialPricingSnapshot.selectedVendorCurrency || "INR";
-
   const customerQuoteCurrency =
     quotationData?.packageDetails?.currency ||
     selectedVendorCurrency ||
@@ -2097,36 +2262,42 @@ export default function QuotationEditor({
 
   const internalQuoteCurrency = "INR";
 
-  const quotationPricingMode =
-    initialPricingSnapshot.quotationPricingMode || "direct";
+  const vendorCostLocked = quotationPricingMode !== "manual_cost";
 
-  const vendorQuoteFinalized =
-    Boolean(initialPricingSnapshot.vendorQuoteFinalized);
+  const currentPricingFingerprint = useMemo(
+    () =>
+      buildPricingFingerprint({
+        quotationPricingMode,
+        vendorCostingMode,
+        vendorQuoteFinalized,
+        selectedVendorQuotes,
+        selectedVendorQuoteIds,
+        totalSelectedVendorCost,
+        selectedVendorCost: vendorCost,
+        selectedVendorCurrency,
+        selectedVendorName,
+        selectedVendorQuoteId,
+        selectedVendorRequestId
+      }),
+    [
+      quotationPricingMode,
+      vendorCostingMode,
+      vendorQuoteFinalized,
+      selectedVendorQuotes,
+      selectedVendorQuoteIds,
+      totalSelectedVendorCost,
+      vendorCost,
+      selectedVendorCurrency,
+      selectedVendorName,
+      selectedVendorQuoteId,
+      selectedVendorRequestId
+    ]
+  );
 
-  const vendorCostingMode =
-    initialPricingSnapshot.vendorCostingMode || "single_vendor";
-
-  const selectedVendorQuotes =
-    Array.isArray(initialPricingSnapshot.selectedVendorQuotes)
-      ? initialPricingSnapshot.selectedVendorQuotes
-      : [];
-
-  const selectedVendorQuoteIds =
-    Array.isArray(initialPricingSnapshot.selectedVendorQuoteIds)
-      ? initialPricingSnapshot.selectedVendorQuoteIds
-      : [];
-
-  const totalSelectedVendorCost =
-    initialPricingSnapshot.totalSelectedVendorCost === null ||
-      initialPricingSnapshot.totalSelectedVendorCost === undefined ||
-      initialPricingSnapshot.totalSelectedVendorCost === ""
-      ? null
-      : Number(initialPricingSnapshot.totalSelectedVendorCost);
-
-  const vendorCostLocked = Boolean(
-    selectedVendorQuoteId ||
-    selectedVendorRequestId ||
-    selectedVendorName
+  const vendorPricingChangedFromDraft = Boolean(
+    draftQuotationId &&
+      pricingBaseline &&
+      currentPricingFingerprint !== pricingBaseline
   );
 
   const selectedQuotationAssets = useMemo(() => {
@@ -2425,6 +2596,38 @@ export default function QuotationEditor({
 
     const pricing = getInitialPricingSnapshot(initialQuotation, lead);
 
+    setQuotationPricingMode(
+      normalizeEditorPricingMode(pricing.quotationPricingMode)
+    );
+    setVendorQuoteFinalized(Boolean(pricing.vendorQuoteFinalized));
+    setVendorCostingMode(
+      pricing.vendorCostingMode === "multi_vendor"
+        ? "multi_vendor"
+        : "single_vendor"
+    );
+    setSelectedVendorQuotes(
+      Array.isArray(pricing.selectedVendorQuotes)
+        ? pricing.selectedVendorQuotes
+        : []
+    );
+    setSelectedVendorQuoteIds(
+      Array.isArray(pricing.selectedVendorQuoteIds)
+        ? pricing.selectedVendorQuoteIds
+        : []
+    );
+    setTotalSelectedVendorCost(
+      pricing.totalSelectedVendorCost === null ||
+        pricing.totalSelectedVendorCost === undefined ||
+        pricing.totalSelectedVendorCost === ""
+        ? null
+        : Number(pricing.totalSelectedVendorCost)
+    );
+    setSelectedVendorName(pricing.selectedVendorName || "");
+    setSelectedVendorQuoteId(pricing.selectedVendorQuoteId || "");
+    setSelectedVendorRequestId(pricing.selectedVendorRequestId || "");
+    setSelectedVendorCurrency(pricing.selectedVendorCurrency || "INR");
+    setPricingBaseline(buildPricingFingerprint(pricing));
+
     if (!initialQuotation) {
       setQuotationData(
         createDefaultQuotationData(
@@ -2644,6 +2847,146 @@ export default function QuotationEditor({
     customerAmountNumber > 0 && grossProfit !== null
       ? (grossProfit / customerAmountNumber) * 100
       : null;
+
+  const normalizeSelectedVendorQuoteForQuotation = quote => ({
+    vendorId: cleanString(quote?.vendorId),
+    vendorName: cleanString(quote?.vendorName),
+    vendorCode: cleanString(quote?.vendorCode),
+    vendorRequestId: cleanString(quote?.vendorRequestId),
+    vendorQuoteId: cleanString(quote?.vendorQuoteId || quote?.id),
+    serviceType: cleanString(quote?.serviceType || quote?.vendorType || "other"),
+    serviceLabel: cleanString(
+      quote?.serviceLabel ||
+        quote?.vendorTypeLabel ||
+        quote?.vendorType ||
+        "Vendor Cost"
+    ),
+    currency: cleanString(quote?.currency || "INR") || "INR",
+    amount:
+      quote?.amount === null || quote?.amount === undefined || quote?.amount === ""
+        ? Number(quote?.vendorCost || quote?.price || 0)
+        : Number(quote.amount),
+    revision: Number(quote?.revision || 1),
+    referenceText: cleanString(quote?.referenceText),
+    referenceFileUrl: cleanString(quote?.referenceFileUrl),
+    referenceFileName: cleanString(quote?.referenceFileName)
+  });
+
+  const applyDirectPricing = () => {
+    setQuotationPricingMode("direct");
+    setVendorCostingMode("single_vendor");
+    setVendorQuoteFinalized(false);
+    setSelectedVendorQuotes([]);
+    setSelectedVendorQuoteIds([]);
+    setTotalSelectedVendorCost(null);
+    setSelectedVendorName("");
+    setSelectedVendorQuoteId("");
+    setSelectedVendorRequestId("");
+    setSelectedVendorCurrency("INR");
+    setVendorCost("");
+  };
+
+  const applyManualPricing = () => {
+    setQuotationPricingMode("manual_cost");
+    setVendorCostingMode("single_vendor");
+    setVendorQuoteFinalized(false);
+    setSelectedVendorQuotes([]);
+    setSelectedVendorQuoteIds([]);
+    setTotalSelectedVendorCost(null);
+    setSelectedVendorName("Manual Cost");
+    setSelectedVendorQuoteId("");
+    setSelectedVendorRequestId("");
+  };
+
+  const applySingleVendorPrice = quote => {
+    const amount = Number(
+      quote?.amount ?? quote?.vendorCost ?? quote?.price ?? 0
+    );
+    const currency = cleanString(quote?.currency || "INR") || "INR";
+
+    setQuotationPricingMode("vendor_quote");
+    setVendorCostingMode("single_vendor");
+    setVendorQuoteFinalized(Boolean(quote?.vendorQuoteFinalized || quote?.isFinal || quote?.selected));
+    setSelectedVendorQuotes([]);
+    setSelectedVendorQuoteIds([]);
+    setTotalSelectedVendorCost(null);
+    setSelectedVendorName(cleanString(quote?.vendorName || "Vendor"));
+    setSelectedVendorQuoteId(cleanString(quote?.vendorQuoteId || quote?.id));
+    setSelectedVendorRequestId(cleanString(quote?.vendorRequestId));
+    setSelectedVendorCurrency(currency);
+    setVendorCost(Number.isFinite(amount) ? String(amount) : "");
+  };
+
+  const applyMultiVendorPrices = quotes => {
+    const normalized = (Array.isArray(quotes) ? quotes : [])
+      .map(normalizeSelectedVendorQuoteForQuotation)
+      .filter(item => item.vendorQuoteId && Number.isFinite(item.amount));
+
+    const total = normalized.reduce(
+      (sum, item) => sum + Number(item.amount || 0),
+      0
+    );
+    const currency = normalized[0]?.currency || "INR";
+
+    setQuotationPricingMode("multi_vendor");
+    setVendorCostingMode("multi_vendor");
+    setVendorQuoteFinalized(false);
+    setSelectedVendorQuotes(normalized);
+    setSelectedVendorQuoteIds(normalized.map(item => item.vendorQuoteId));
+    setTotalSelectedVendorCost(normalized.length ? total : null);
+    setSelectedVendorName(normalized.length ? "Multiple Vendors" : "");
+    setSelectedVendorQuoteId("");
+    setSelectedVendorRequestId("");
+    setSelectedVendorCurrency(currency);
+    setVendorCost(normalized.length ? String(total) : "");
+  };
+
+  const handlePricingModeChange = mode => {
+    if (mode === "direct") {
+      applyDirectPricing();
+      return;
+    }
+
+    if (mode === "manual_cost") {
+      applyManualPricing();
+      return;
+    }
+
+    if (mode === "multi_vendor") {
+      setQuotationPricingMode("multi_vendor");
+      setVendorCostingMode("multi_vendor");
+      setVendorQuoteFinalized(false);
+      setSelectedVendorName(selectedVendorQuotes.length ? "Multiple Vendors" : "");
+      setSelectedVendorQuoteId("");
+      setSelectedVendorRequestId("");
+      if (selectedVendorQuotes.length) {
+        const total = selectedVendorQuotes.reduce(
+          (sum, item) => sum + Number(item.amount || 0),
+          0
+        );
+        setTotalSelectedVendorCost(total);
+        setVendorCost(String(total));
+      } else {
+        setTotalSelectedVendorCost(null);
+        setVendorCost("");
+      }
+      return;
+    }
+
+    if (quotationPricingMode !== "vendor_quote") {
+      setVendorQuoteFinalized(false);
+      setSelectedVendorQuotes([]);
+      setSelectedVendorQuoteIds([]);
+      setTotalSelectedVendorCost(null);
+      setSelectedVendorName("");
+      setSelectedVendorQuoteId("");
+      setSelectedVendorRequestId("");
+      setVendorCost("");
+    }
+
+    setQuotationPricingMode("vendor_quote");
+    setVendorCostingMode("single_vendor");
+  };
 
 
   function shouldShowPackageDetails(type) {
@@ -3416,6 +3759,12 @@ export default function QuotationEditor({
     if (saving || savingDraft || autoSaving || autoSavingRef.current) return;
     if (!lead?.id || isLegacyQuotation) return;
 
+    /*
+      When vendor pricing changes on an existing draft, preserve that draft.
+      The explicit Save Draft / Send action will create the next revision.
+    */
+    if (vendorPricingChangedFromDraft) return;
+
     const selectedSignatureBaseUser =
       selectedSignatureUser || currentUserOption;
 
@@ -3644,12 +3993,34 @@ export default function QuotationEditor({
       const whatsappSignatureText =
         buildWhatsAppSignatureText(signatureUserWithBranding);
 
-      const result = await saveQuotationDraft({
+      const signaturePayload = {
+        uid: getMemberUid(signatureUser),
+        name: getMemberName(signatureUser),
+        email: getMemberEmail(signatureUser),
+        mobile: getMemberMobile(signatureUser),
+        role: getMemberRole(signatureUser),
+
+        companyName: branding.companyName || "",
+        companyLogoUrl: branding.companyLogoUrl || "",
+        websiteUrl: branding.websiteUrl || "",
+        emailAssetBaseUrl: branding.emailAssetBaseUrl || "",
+        facebookUrl: branding.facebookUrl || "",
+        instagramUrl: branding.instagramUrl || "",
+        linkedinUrl: branding.linkedinUrl || "",
+        youtubeUrl: branding.youtubeUrl || "",
+        supportEmail: branding.supportEmail || "",
+        supportMobile: branding.supportMobile || "",
+        emailFooterLine: branding.emailFooterLine || "",
+        quotationClosingLine: branding.quotationClosingLine || "",
+        emailDisclaimer: branding.emailDisclaimer || "",
+        whatsappFooterLine: branding.whatsappFooterLine || "",
+
+        signatureHtml: emailSignatureHtml,
+        signatureText: whatsappSignatureText
+      };
+
+      const commonDraftPayload = {
         leadId: lead.id,
-
-        quotationId: draftQuotationId,
-        revision: draftRevision,
-
         itineraryHtml: finalItineraryHtml,
         quotationData: finalQuotationData,
 
@@ -3666,7 +4037,6 @@ export default function QuotationEditor({
 
         quotationPricingMode,
         vendorQuoteFinalized,
-
         vendorCostingMode,
         selectedVendorQuotes,
         selectedVendorQuoteIds,
@@ -3677,12 +4047,11 @@ export default function QuotationEditor({
           marginPercent === null || marginPercent === undefined
             ? null
             : Number(marginPercent.toFixed(2)),
-
         pricingVisibleToCustomer: false,
-
         note,
 
         sharedAssets: safeSelectedQuotationAssets,
+        quotationAssets: safeSelectedQuotationAssets,
         sharedAssetIds: safeSharedAssetIds,
         sharedAssetTitles: safeSharedAssetTitles,
         assetShareCount: safeSelectedQuotationAssets.length,
@@ -3690,41 +4059,46 @@ export default function QuotationEditor({
         assetLinksText: safeQuotationAssetLinksText,
         assetLinksHtml: safeQuotationAssetLinksHtml,
 
-        signatureUser: {
-          uid: getMemberUid(signatureUser),
-          name: getMemberName(signatureUser),
-          email: getMemberEmail(signatureUser),
-          mobile: getMemberMobile(signatureUser),
-          role: getMemberRole(signatureUser),
-
-          companyName: branding.companyName || "",
-          companyLogoUrl: branding.companyLogoUrl || "",
-          websiteUrl: branding.websiteUrl || "",
-          emailAssetBaseUrl: branding.emailAssetBaseUrl || "",
-          facebookUrl: branding.facebookUrl || "",
-          instagramUrl: branding.instagramUrl || "",
-          linkedinUrl: branding.linkedinUrl || "",
-          youtubeUrl: branding.youtubeUrl || "",
-          supportEmail: branding.supportEmail || "",
-          supportMobile: branding.supportMobile || "",
-          emailFooterLine: branding.emailFooterLine || "",
-          quotationClosingLine: branding.quotationClosingLine || "",
-          emailDisclaimer: branding.emailDisclaimer || "",
-          whatsappFooterLine: branding.whatsappFooterLine || "",
-
-          signatureHtml: emailSignatureHtml,
-          signatureText: whatsappSignatureText
-        },
-
+        signatureUser: signaturePayload,
         user
-      });
+      };
+
+      const sourceDraftQuotationId = vendorPricingChangedFromDraft
+        ? draftQuotationId
+        : "";
+
+      const result = sourceDraftQuotationId
+        ? await createQuotationRevision({
+            ...commonDraftPayload,
+            sourceQuotationId: sourceDraftQuotationId,
+            sendVia: [],
+            isFinalQuotation: false
+          })
+        : await saveQuotationDraft({
+            ...commonDraftPayload,
+            quotationId: draftQuotationId,
+            revision: draftRevision
+          });
+
+      if (sourceDraftQuotationId && result?.quotationId) {
+        await markQuotationSuperseded({
+          leadId: lead.id,
+          quotationId: sourceDraftQuotationId,
+          replacementQuotationId: result.quotationId,
+          replacementRevision: result.revision,
+          user
+        });
+      }
 
       setDraftQuotationId(result.quotationId || "");
       setDraftRevision(result.revision || null);
+      setPricingBaseline(currentPricingFingerprint);
 
       alert(
         result.revision
-          ? `Draft saved successfully - Rev ${result.revision}`
+          ? sourceDraftQuotationId
+            ? `Vendor pricing changed. New draft revision created - Rev ${result.revision}`
+            : `Draft saved successfully - Rev ${result.revision}`
           : "Draft saved successfully"
       );
     } catch (error) {
@@ -4135,8 +4509,11 @@ export default function QuotationEditor({
       ].filter(Boolean);
 
       let quotationResult;
+      const sourceDraftQuotationId = vendorPricingChangedFromDraft
+        ? draftQuotationId
+        : "";
 
-      if (draftQuotationId) {
+      if (draftQuotationId && !sourceDraftQuotationId) {
         quotationResult = await updateExistingDraftAsSent({
           quotationId: draftQuotationId,
           revision: draftRevision,
@@ -4185,8 +4562,15 @@ export default function QuotationEditor({
           sendVia,
           isFinalQuotation,
           deferSentStatus: true,
+          sourceQuotationId:
+            sourceDraftQuotationId ||
+            initialQuotation?.sourceQuotationId ||
+            initialQuotation?.id ||
+            initialQuotation?.quotationId ||
+            "",
 
           sharedAssets: selectedQuotationAssets,
+          quotationAssets: selectedQuotationAssets,
           sharedAssetIds: selectedQuotationAssets
             .map(asset => asset.assetId)
             .filter(Boolean),
@@ -4230,6 +4614,19 @@ export default function QuotationEditor({
         });
       }
 
+      if (sourceDraftQuotationId && quotationResult?.quotationId) {
+        await markQuotationSuperseded({
+          leadId: lead.id,
+          quotationId: sourceDraftQuotationId,
+          replacementQuotationId: quotationResult.quotationId,
+          replacementRevision: quotationResult.revision,
+          user
+        });
+        setDraftQuotationId(quotationResult.quotationId);
+        setDraftRevision(quotationResult.revision || null);
+        setPricingBaseline(currentPricingFingerprint);
+      }
+
       const revision =
         typeof quotationResult === "object"
           ? quotationResult?.revision
@@ -4242,6 +4639,14 @@ export default function QuotationEditor({
 
       if (!quotationId) {
         throw new Error("Quotation was saved but no quotation ID was returned.");
+      }
+
+      if (isFinalQuotation) {
+        await clearOtherFinalQuotations({
+          leadId: lead.id,
+          quotationId,
+          user
+        });
       }
 
       const finalItineraryHtmlWithAssets = [
@@ -4685,10 +5090,16 @@ export default function QuotationEditor({
       quotationAssetLinksText,
       quotationAssetLinksHtml,
 
+      quotationPricingMode,
+      vendorQuoteFinalized,
       vendorCostingMode,
       selectedVendorQuotes,
       selectedVendorQuoteIds,
-      totalSelectedVendorCost
+      totalSelectedVendorCost,
+      selectedVendorName,
+      selectedVendorQuoteId,
+      selectedVendorRequestId,
+      selectedVendorCurrency
     });
   }, [
     isLegacyQuotation,
@@ -4703,10 +5114,16 @@ export default function QuotationEditor({
     quotationAssetLinksText,
     quotationAssetLinksHtml,
 
+    quotationPricingMode,
+    vendorQuoteFinalized,
     vendorCostingMode,
     selectedVendorQuotes,
     selectedVendorQuoteIds,
-    totalSelectedVendorCost
+    totalSelectedVendorCost,
+    selectedVendorName,
+    selectedVendorQuoteId,
+    selectedVendorRequestId,
+    selectedVendorCurrency
   ]);
 
   useEffect(() => {
@@ -6998,15 +7415,52 @@ export default function QuotationEditor({
                 )}
               </div>
 
+              {canViewVendorCost && (
+                <QuotationVendorPricingSelector
+                  lead={lead}
+                  mode={quotationPricingMode}
+                  selectedVendorQuoteId={selectedVendorQuoteId}
+                  selectedVendorQuoteIds={selectedVendorQuoteIds}
+                  currentVendorName={selectedVendorName}
+                  currentVendorCost={hasVendorCost ? vendorCostNumber : null}
+                  currentVendorCurrency={selectedVendorCurrency}
+                  vendorQuoteFinalized={vendorQuoteFinalized}
+                  onModeChange={handlePricingModeChange}
+                  onUseDirect={applyDirectPricing}
+                  onUseManual={applyManualPricing}
+                  onUseSingleQuote={applySingleVendorPrice}
+                  onUseMultiQuotes={applyMultiVendorPrices}
+                  onFinalizedQuote={quote =>
+                    applySingleVendorPrice({
+                      ...quote,
+                      vendorQuoteFinalized: true,
+                      selected: true,
+                      isFinal: true
+                    })
+                  }
+                />
+              )}
+
+              {vendorPricingChangedFromDraft && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800">
+                  <p className="font-semibold">
+                    Vendor pricing changed from Draft Rev {draftRevision || "—"}
+                  </p>
+                  <p className="mt-1 leading-5">
+                    The current draft will be preserved. Save Draft or Send will create the next quotation revision with this new vendor cost.
+                  </p>
+                </div>
+              )}
+
               {canViewVendorCost && (selectedVendorName || hasVendorCost) && (
                 <div className="bg-green-50 border border-green-100 rounded-lg p-4 space-y-3">
                   <div>
                     <p className="text-sm font-semibold text-gray-900">
-                      Final Vendor Pricing
+                      Selected Vendor Pricing
                     </p>
 
                     <p className="text-xs text-gray-500">
-                      Pulled from selected vendor quote.
+                      Cost basis currently linked to this quotation.
                     </p>
                   </div>
 
@@ -7088,7 +7542,7 @@ export default function QuotationEditor({
 
                     {vendorCostLocked && (
                       <p className="text-[11px] text-green-700">
-                        Vendor cost is locked from final selected vendor quote.
+                        Vendor cost is controlled by the pricing selection above. Choose Manual Cost to type a value directly.
                       </p>
                     )}
                   </>

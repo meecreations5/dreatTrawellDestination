@@ -404,7 +404,7 @@ async function loadTeamUsers() {
       query(
         collection(db, "users"),
         where("active", "==", true),
-        where("role", "in", ["team", "admin", "manager", "employee", "operation_executive"])
+        where("role", "in", ["team", "employee", "operation_executive", "operations_executive", "admin", "manager", "super_admin"])
       )
     );
 
@@ -841,7 +841,11 @@ export default function CreateLeadModal({ engagement, onClose }) {
         createdUser: {
           uid: user.uid,
           email: user.email || "",
-          name: getDisplayName(user)
+          name: getDisplayName(user),
+          role: user.role || "",
+          accessRole: user.accessRole || "",
+          roleProfile: user.roleProfile || "",
+          active: user.active !== false
         },
         clientReference,
         travelStartDate,

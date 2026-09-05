@@ -224,7 +224,7 @@ async function loadTeamUsers() {
       query(
         collection(db, "users"),
         where("active", "==", true),
-        where("role", "in", ["employee", "operation_executive", "admin", "manager"])
+        where("role", "in", ["team", "employee", "operation_executive", "operations_executive", "admin", "manager", "super_admin"])
       )
     );
 
@@ -735,7 +735,7 @@ export default function ManualLeadCreatePage() {
     } catch (err) {
       console.error("Manual lead creation failed:", err);
       setFormError(
-        "Lead could not be created. Please check the details and try again."
+        err?.message || "Lead could not be created. Please check the details and try again."
       );
     } finally {
       setSaving(false);

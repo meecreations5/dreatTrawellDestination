@@ -34,6 +34,7 @@ import {
   isLeadOwnedByUser
 } from "@/lib/leadOwnership";
 import { LEAD_STAGE_OPTIONS, normalizeLeadStage } from "@/lib/leadStages";
+import { canAccess } from "@/lib/rolePermissions";
 
 import CardSkeleton from "@/components/ui/CardSkeleton";
 import EmptyState from "@/components/ui/EmptyState";
@@ -1042,27 +1043,39 @@ export default function LeadDashboardPage() {
         {/* ================= BANNER ================= */}
         <section className="rounded-3xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700  overflow-hidden">
           <div className="p-5 md:p-6">
-            <div className="flex items-start gap-4">
-              <div className="h-12 w-12 rounded-2xl bg-white/15 text-white flex items-center justify-center shrink-0">
-                <BarChart3 size={24} />
-              </div>
-
-              <div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white/90 mb-3">
-                  <Target size={14} />
-                  Lead Analytics
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div className="flex items-start gap-4">
+                <div className="h-12 w-12 rounded-2xl bg-white/15 text-white flex items-center justify-center shrink-0">
+                  <BarChart3 size={24} />
                 </div>
 
-                <h1 className="text-2xl font-semibold tracking-tight text-white">
-                  Lead Dashboard
-                </h1>
+                <div>
+                  <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-white/90 mb-3">
+                    <Target size={14} />
+                    Lead Analytics
+                  </div>
 
-                <p className="mt-1 text-sm text-blue-100 max-w-3xl leading-6">
-                  Track your total leads, created leads, assigned leads,
-                  delegated leads, won deals, lost deals and follow-up health
-                  from one dashboard.
-                </p>
+                  <h1 className="text-2xl font-semibold tracking-tight text-white">
+                    Lead Dashboard
+                  </h1>
+
+                  <p className="mt-1 text-sm text-blue-100 max-w-3xl leading-6">
+                    Track your total leads, created leads, assigned leads,
+                    delegated leads, won deals, lost deals and follow-up health
+                    from one dashboard.
+                  </p>
+                </div>
               </div>
+
+              {canAccess(user, "leads.create") ? (
+                <Link
+                  href="/leads/create"
+                  className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-white/20 bg-white px-4 text-sm font-semibold text-blue-700 shadow-sm transition hover:bg-blue-50"
+                >
+                  <UserPlus size={16} />
+                  Create Lead
+                </Link>
+              ) : null}
             </div>
           </div>
         </section>

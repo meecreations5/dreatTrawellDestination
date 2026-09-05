@@ -40,6 +40,7 @@ import { canResendQuotation, resendQuotation } from "@/lib/resendQuotation";
 import Card from "@/components/ui/Card";
 import QuotationAssetSummary from "@/components/leads/QuotationAssetSummary";
 import { generateQuotationPdf } from "@/lib/quotationPdf";
+import { markQuotationFinal } from "@/lib/markQuotationFinal";
 
 /* =========================
    HELPERS
@@ -369,6 +370,16 @@ function createRevisionSeed(quotation) {
     isFinalQuotation: false,
 
     sourceQuotationId: quotation?.id || quotation?.quotationId || "",
+
+    metadata: {
+      ...(quotation?.metadata || {}),
+      quotationId: "",
+      revision: null,
+      status: "draft",
+      isDraft: true,
+      isFinalQuotation: false,
+      sourceQuotationId: quotation?.id || quotation?.quotationId || ""
+    },
 
     sharedAssets: quotation?.sharedAssets || quotation?.quotationAssets || [],
     quotationAssets: quotation?.quotationAssets || quotation?.sharedAssets || [],
@@ -706,10 +717,12 @@ function QuotationDetailsModal({
   onDeleteDraft,
   onResend,
   onGeneratePdf,
+  onMarkFinal,
   canDeleteDraft = false,
   canResend = false,
   deleting = false,
-  resending = false
+  resending = false,
+  finalizing = false
 }) {
   if (!quotation) return null;
 
@@ -996,10 +1009,12 @@ function QuotationCard({
   onDeleteDraft,
   onResend,
   onGeneratePdf,
+  onMarkFinal,
   canDeleteDraft = false,
   canResend = false,
   deleting = false,
-  resending = false
+  resending = false,
+  finalizing = false
 }) {
   const amount = getQuotationAmount(quotation);
   const vendorCost = getVendorCost(quotation);
@@ -1096,6 +1111,27 @@ function QuotationCard({
                   Edit Draft
                 </button>
 
+                <button
+                  type="button"
+                  onClick={() => onCreateRevision?.(createRevisionSeed(quotation))}
+                  className="inline-flex items-center gap-2 rounded-xl border border-purple-200 bg-white px-3 py-2 text-xs font-semibold text-purple-700 hover:bg-purple-50"
+                >
+                  <Copy size={14} />
+                  Create Revision
+                </button>
+
+                {!quotation.isFinalQuotation && quotation.status !== "final" && (
+                  <button
+                    type="button"
+                    onClick={() => onMarkFinal?.(quotation)}
+                    disabled={finalizing}
+                    className="inline-flex items-center gap-2 rounded-xl border border-green-200 bg-white px-3 py-2 text-xs font-semibold text-green-700 hover:bg-green-50 disabled:opacity-60"
+                  >
+                    {finalizing ? <Loader2 size={14} className="animate-spin" /> : <Trophy size={14} />}
+                    Mark Final
+                  </button>
+                )}
+
                 {canDeleteDraft && (
                   <button
                     type="button"
@@ -1130,6 +1166,18 @@ function QuotationCard({
                   <Copy size={14} />
                   Create Revision
                 </button>
+
+                {!quotation.isFinalQuotation && quotation.status !== "final" && (
+                  <button
+                    type="button"
+                    onClick={() => onMarkFinal?.(quotation)}
+                    disabled={finalizing}
+                    className="inline-flex items-center gap-2 rounded-xl border border-green-200 bg-white px-3 py-2 text-xs font-semibold text-green-700 hover:bg-green-50 disabled:opacity-60"
+                  >
+                    {finalizing ? <Loader2 size={14} className="animate-spin" /> : <Trophy size={14} />}
+                    Mark Final
+                  </button>
+                )}
               </>
             )}
           </div>
@@ -1226,6 +1274,9 @@ export default function QuotationHistory({
   const [resendingId, setResendingId] = useState("");
   const [resendError, setResendError] = useState("");
   const [resendSuccess, setResendSuccess] = useState("");
+  const [finalizingId, setFinalizingId] = useState("");
+  const [finalizeError, setFinalizeError] = useState("");
+  const [finalizeSuccess, setFinalizeSuccess] = useState("");
   const [resendChannels, setResendChannels] = useState({
     email: false,
     whatsapp: false
@@ -1350,6 +1401,37 @@ export default function QuotationHistory({
     }
   };
 
+  const handleMarkFinal = async quotation => {
+    if (!quotation || !leadId || !user) return;
+
+    const quotationId = quotation.id || quotation.quotationId;
+    if (!quotationId) return;
+
+    const confirmed = window.confirm(
+      `Mark Quotation Rev ${quotation.revision || "—"} as Final? Any older Final quotation will remain in history but will no longer be marked Final.`
+    );
+    if (!confirmed) return;
+
+    setFinalizingId(quotationId);
+    setFinalizeError("");
+    setFinalizeSuccess("");
+
+    try {
+      await markQuotationFinal({
+        leadId,
+        quotationId,
+        user
+      });
+      setFinalizeSuccess(
+        `Quotation Rev ${quotation.revision || "—"} marked as Final.`
+      );
+    } catch (error) {
+      setFinalizeError(error?.message || "Unable to mark quotation as Final.");
+    } finally {
+      setFinalizingId("");
+    }
+  };
+
   const stats = useMemo(() => {
     const total = quotations.length;
 
@@ -1449,6 +1531,18 @@ export default function QuotationHistory({
         </div>
       )}
 
+      {finalizeError && (
+        <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {finalizeError}
+        </div>
+      )}
+
+      {finalizeSuccess && (
+        <div className="rounded-2xl border border-green-100 bg-green-50 px-4 py-3 text-sm font-medium text-green-700">
+          {finalizeSuccess}
+        </div>
+      )}
+
       {loading ? (
         <div className="space-y-3">
           {[1, 2, 3].map(item => (
@@ -1472,10 +1566,12 @@ export default function QuotationHistory({
               onDeleteDraft={setDeleteTarget}
               onResend={openResend}
               onGeneratePdf={handleGeneratePdf}
+              onMarkFinal={handleMarkFinal}
               canDeleteDraft={canDeleteQuotationDraft(quotation, user)}
               canResend={canResendQuotation(quotation)}
               deleting={deletingId === (quotation.id || quotation.quotationId)}
               resending={resendingId === (quotation.id || quotation.quotationId)}
+              finalizing={finalizingId === (quotation.id || quotation.quotationId)}
             />
           ))}
         </div>
