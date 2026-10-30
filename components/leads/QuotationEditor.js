@@ -3203,7 +3203,41 @@ export default function QuotationEditor({
     });
   };
 
+  // Currency selections must never silently relabel a numeric customer price.
+  // INR costing and GP stay separate and are not changed by this conversion.
   const updatePackageCurrency = value => {
+    const previousCurrency = quotationData.packageDetails?.currency || "USD";
+    if (value === previousCurrency) return;
+    const details = quotationData.packageDetails || {};
+    const packagePrice = details.packagePricing || {};
+    const affected = [packagePrice, details.landPricing?.pvt, details.landPricing?.sic,
+      ...safeArray(quotationData.hotelInclusions).filter(row => !row.currency || row.currency === previousCurrency)]
+      .filter(Boolean)
+      .some(item => ["adultCost", "childCost", "amount", "price", "cost"].some(key =>
+        item[key] !== null && item[key] !== undefined && String(item[key]).trim() !== ""));
+    let factor = 1;
+    if (affected) {
+      const answer = window.prompt(
+        `Convert customer-facing amounts from ${previousCurrency} to ${value}.\nEnter how many ${previousCurrency} equal 1 ${value} (e.g. if 1 SGD = 70 INR, enter 70).\nCancel to keep existing currency and prices unchanged.`
+      );
+      if (answer === null) return;
+      const rate = Number(answer);
+      if (!Number.isFinite(rate) || rate <= 0) {
+        window.alert("Enter a valid positive exchange rate. Currency was not changed.");
+        return;
+      }
+      factor = 1 / rate;
+    }
+    const convertPrices = item => {
+      if (!item) return item;
+      const updated = { ...item };
+      for (const key of ["adultCost", "childCost", "amount", "price", "cost"]) {
+        if (updated[key] === null || updated[key] === undefined || String(updated[key]).trim() === "") continue;
+        const number = Number(String(updated[key]).replace(/,/g, ""));
+        if (Number.isFinite(number)) updated[key] = String(Math.round(number * factor * 100) / 100);
+      }
+      return updated;
+    };
     setQuotationData(prev => {
       const previousCurrency =
         prev.packageDetails?.currency ||
@@ -3218,7 +3252,7 @@ export default function QuotationEditor({
           currency: value,
 
           packagePricing: {
-            ...(prev.packageDetails?.packagePricing || {}),
+            ...convertPrices(prev.packageDetails?.packagePricing || {}),
             currency: value
           },
 
@@ -3234,7 +3268,8 @@ export default function QuotationEditor({
             ...(prev.packageDetails?.landPricing || createDefaultLandPricing(value)),
 
             pvt: {
-              ...(prev.packageDetails?.landPricing?.pvt || {}),
+              ...(!prev.packageDetails?.landPricing?.pvt?.currency || prev.packageDetails.landPricing.pvt.currency === previousCurrency
+                ? convertPrices(prev.packageDetails?.landPricing?.pvt || {}) : (prev.packageDetails?.landPricing?.pvt || {})),
               currency:
                 !prev.packageDetails?.landPricing?.pvt?.currency ||
                   prev.packageDetails?.landPricing?.pvt?.currency === previousCurrency
@@ -3243,7 +3278,8 @@ export default function QuotationEditor({
             },
 
             sic: {
-              ...(prev.packageDetails?.landPricing?.sic || {}),
+              ...(!prev.packageDetails?.landPricing?.sic?.currency || prev.packageDetails.landPricing.sic.currency === previousCurrency
+                ? convertPrices(prev.packageDetails?.landPricing?.sic || {}) : (prev.packageDetails?.landPricing?.sic || {})),
               currency:
                 !prev.packageDetails?.landPricing?.sic?.currency ||
                   prev.packageDetails?.landPricing?.sic?.currency === previousCurrency
@@ -3254,7 +3290,7 @@ export default function QuotationEditor({
         },
 
         hotelInclusions: safeArray(prev.hotelInclusions).map(row => ({
-          ...row,
+          ...(!row.currency || row.currency === previousCurrency ? convertPrices(row) : row),
           currency:
             !row.currency || row.currency === previousCurrency
               ? value

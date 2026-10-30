@@ -367,6 +367,18 @@ function AgentTabs({ filters, setFilters, stats }) {
       icon: Clock3
     },
     {
+      label: "0 Engagement",
+      value: "zero_engagement",
+      count: stats.noActivity,
+      icon: SearchX
+    },
+    {
+      label: "Unassigned",
+      value: "unassigned",
+      count: stats.unassigned,
+      icon: UserCheck
+    },
+    {
       label: "High Leads",
       value: "high_leads",
       count: stats.highLeadAgents,
@@ -1148,6 +1160,7 @@ export default function UserTravelAgentsPage() {
       totalAgents: scopedAgents.length,
       engaged,
       noActivity,
+      unassigned: scopedAgents.filter(agent => !isTravelAgentAssigned(agent)).length,
       staleFollowUps,
       totalLeads,
       highLeadAgents,
@@ -1203,6 +1216,9 @@ export default function UserTravelAgentsPage() {
 
       if (filters.potential !== "all" && normalizeTravelAgentPotential(agent) !== filters.potential) return false;
       if (!matchesLocation(getTravelAgentLocationParts(agent), filters)) return false;
+
+      if (filters.engagement === "zero_engagement" && last) return false;
+      if (filters.engagement === "unassigned" && isTravelAgentAssigned(agent)) return false;
 
       if (filters.engagement === "engaged" && !last) {
         return false;

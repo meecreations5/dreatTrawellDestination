@@ -1,0 +1,8 @@
+DreamTrawell targeted change set - 29 October 2026
+
+1. Travel Agent page: Added "0 Engagement" and "Unassigned" quick-filter tabs with counts. No-engagement means no engagement record in the current engagement collection. Unassigned uses existing assignment identity helper. Both filters operate on the full list before pagination.
+2. Quotation Editor: Changing customer-facing package currency with existing numeric package/land/hotel price fields now requires an explicit conversion rate (old currency units per 1 new currency). Cancel or invalid rate leaves currency and amounts unchanged. Internal INR vendor cost and GP calculations remain untouched.
+
+Important: Currency conversion is limited to fields affected by the package currency selector. Independent currency selectors on individual pricing rows still need separate validation. Existing historical quotations are not migrated. A full functional Firebase/Next.js build was not run because dependencies are not installed in this upload. Test sending PDF/email/WhatsApp with INR to SGD and other currencies before deploying.
+
+Security: the full ZIP excludes .env files, .git, and node_modules to avoid exposing credentials. Keep your existing local .env.local file when installing.

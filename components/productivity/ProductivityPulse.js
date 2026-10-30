@@ -338,7 +338,7 @@ export default function ProductivityPulse() {
     const onBreak = isScheduledBreak(clock, effectiveSettings.workSchedule);
 
     return (
-      <div className="fixed bottom-4 right-4 z-[1200] hidden rounded-full border border-slate-200 bg-white/95 px-3 py-2 text-xs font-semibold text-slate-600 shadow-lg backdrop-blur sm:flex sm:items-center sm:gap-2">
+      <div className="fixed bottom-[80px] right-4 z-[1200] hidden rounded-full border border-slate-200 bg-white/95 px-3 py-2 text-xs font-semibold text-slate-600 shadow-lg backdrop-blur sm:flex sm:items-center sm:gap-2">
         <Clock3 className="h-3.5 w-3.5 text-blue-600" />
         {onBreak ? "Pulse paused for break" : "Next productivity pulse"}: {formatTime(nextSlot)}
       </div>
