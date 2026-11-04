@@ -22,6 +22,15 @@ function clean(value = "") {
   return String(value || "").trim();
 }
 
+function getTravelStyles(destination = {}) {
+  const value = destination.travelStyles;
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (value && typeof value === "object") {
+    return Object.entries(value).filter(([, enabled]) => enabled === true).map(([name]) => name);
+  }
+  return [];
+}
+
 function searchable(destination = {}) {
   return [
     destination.name,
@@ -31,7 +40,7 @@ function searchable(destination = {}) {
     destination.description,
     destination.bestTimeToVisit,
     destination.idealTripDuration,
-    ...(Array.isArray(destination.travelStyles) ? destination.travelStyles : [])
+    ...getTravelStyles(destination)
   ]
     .filter(Boolean)
     .join(" ")
@@ -246,7 +255,7 @@ function InfoPill({ label, value }) {
 function DestinationDrawer({ destination, onClose }) {
   const activityCount = getActivityCount(destination);
   const locations = Array.isArray(destination.locations) ? destination.locations : [];
-  const travelStyles = Array.isArray(destination.travelStyles) ? destination.travelStyles.filter(Boolean) : [];
+  const travelStyles = getTravelStyles(destination);
 
   return (
     <div className="fixed inset-0 z-[1200] flex justify-end bg-slate-950/35" onClick={onClose}>
@@ -297,6 +306,24 @@ function DestinationDrawer({ destination, onClose }) {
                   <div key={location.id || location.name || index} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2.5">
                     <span className="text-sm font-medium text-slate-700">{location.name || `Location ${index + 1}`}</span>
                     <span className="text-xs text-slate-400">{Array.isArray(location.activities) ? location.activities.length : 0} activities</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {((destination.activities || []).length > 0 || locations.some(location => (location.activities || []).length > 0)) ? (
+            <section className="rounded-2xl border border-slate-200 p-4">
+              <h3 className="text-sm font-semibold text-slate-900">Activities for Training</h3>
+              <div className="mt-3 space-y-3">
+                {[
+                  ...(Array.isArray(destination.activities) ? destination.activities.map(activity => ({ ...activity, locationName: "" })) : []),
+                  ...locations.flatMap(location => (Array.isArray(location.activities) ? location.activities.map(activity => ({ ...activity, locationName: location.name || "" })) : []))
+                ].filter(activity => activity.active !== false).slice(0, 30).map((activity, index) => (
+                  <div key={activity.id || index} className="rounded-xl bg-slate-50 p-3">
+                    <p className="text-sm font-medium text-slate-800">{activity.title || activity.name || "Activity"}{activity.locationName ? ` · ${activity.locationName}` : ""}</p>
+                    {activity.description ? <p className="mt-1 line-clamp-3 text-xs leading-5 text-slate-600">{activity.description}</p> : null}
+                    <p className="mt-1 text-xs text-slate-500">{[activity.timing?.duration, activity.timing?.startTime && `Starts ${activity.timing.startTime}`, activity.timing?.pickupTime && `Pickup ${activity.timing.pickupTime}`].filter(Boolean).join(" · ")}</p>
                   </div>
                 ))}
               </div>

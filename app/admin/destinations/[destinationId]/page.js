@@ -124,6 +124,7 @@ export default function DestinationOverviewPage() {
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   const dirtyRef = useRef(false);
 
@@ -203,6 +204,7 @@ export default function DestinationOverviewPage() {
   const markDirty = () => {
     dirtyRef.current = true;
     setSaveError("");
+    setSaveSuccess(false);
   };
 
   const update = (key, value) => {
@@ -449,10 +451,13 @@ export default function DestinationOverviewPage() {
     if (saving) return;
     const requiredPermission = isNew ? "destinations.create" : "destinations.edit";
     if (!canAccess(user, requiredPermission)) {
-      setSaveError("You do not have permission to save this destination.");
+      setSaveError("Your role does not have permission to save this destination. Ask an admin to check access.");
       return;
     }
-    if (!validate()) return;
+    if (!validate()) {
+      setSaveError("Please complete the required fields highlighted in the form.");
+      return;
+    }
 
     try {
       setSaving(true);
@@ -520,6 +525,7 @@ export default function DestinationOverviewPage() {
       await updateDoc(doc(db, "destinations", destinationId), payload);
 
       dirtyRef.current = false;
+      setSaveSuccess(true);
 
       setForm(prev => ({
         ...prev,
@@ -527,7 +533,11 @@ export default function DestinationOverviewPage() {
       }));
     } catch (error) {
       console.error(error);
-      setSaveError("Unable to save destination. Please try again.");
+      setSaveError(error?.code === "permission-denied"
+        ? "Firestore denied this update. Your database security rules must allow destination edits for this role."
+        : error?.code === "resource-exhausted"
+          ? "Destination is too large for one Firestore document. Reduce large embedded content or media."
+          : `Unable to save destination: ${error?.message || "Please try again."}`);
     } finally {
       setSaving(false);
     }
@@ -666,6 +676,10 @@ export default function DestinationOverviewPage() {
             ))}
           </div>
         </section>
+
+        {saveSuccess && !saveError && (
+          <div role="status" className="rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">Destination saved successfully.</div>
+        )}
 
         {saveError && (
           <div className="flex items-center gap-3 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
