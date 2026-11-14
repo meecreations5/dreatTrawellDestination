@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:activation": "node --test tests/activation-and-permissions.test.mjs",
+    "test:intelligence": "node --test tests/engagement-intelligence.test.mjs",
+    "test:crm": "node --test tests/activation-and-permissions.test.mjs tests/engagement-intelligence.test.mjs tests/engagement-voice.test.mjs"
   },
   "dependencies": {
     "firebase": "^12.7.0",

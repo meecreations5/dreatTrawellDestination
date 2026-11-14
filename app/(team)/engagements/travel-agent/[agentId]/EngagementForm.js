@@ -33,6 +33,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { canAccessRecord } from "@/lib/rolePermissions";
 import EngagementChip from "@/components/engagement/EngagementChip";
 import AssetPickerModal from "@/components/documents/AssetPickerModal";
+import VoiceNoteTextarea from "@/components/engagement/VoiceNoteTextarea";
+import { appendVoiceNote } from "@/lib/engagementVoiceText";
 
 import {
   ENGAGEMENT_OUTCOME_OPTIONS,
@@ -48,6 +50,7 @@ import {
   getEngagementConnectionStatus
 } from "@/lib/engagementProductivity";
 import { alignToWorkSchedule, DEFAULT_WORK_SCHEDULE } from "@/lib/workSchedule";
+import { COMMUNICATION_PURPOSES, AGENT_RESPONSE_OPTIONS } from "@/lib/engagementIntelligenceTaxonomy";
 
 /* =========================
    OPTIONS
@@ -114,6 +117,8 @@ function getInitialForm() {
     direction: "outbound",
 
     message: "",
+    communicationPurpose: "",
+    agentResponseStatus: "not_confirmed",
 
     destinationRefId: "",
     destinationName: "",
@@ -244,6 +249,7 @@ export default function EngagementForm({
   const [form, setForm] = useState(null);
 
   const [saving, setSaving] = useState(false);
+  const [voicePending, setVoicePending] = useState({ message: false, customRemark: false });
   const [showAssets, setShowAssets] = useState(false);
   const [showInternalNote, setShowInternalNote] = useState(false);
   const [showAdvancedFollowUp, setShowAdvancedFollowUp] = useState(false);
@@ -538,6 +544,10 @@ export default function EngagementForm({
   };
 
   const submit = async () => {
+    if (voicePending.message || voicePending.customRemark) {
+      alert("Please finish or resolve the voice transcription before saving this engagement.");
+      return;
+    }
     if (!canAccessRecord(user, "engagements.create", agent, "travel_agent")) {
       alert("You do not have permission to create an engagement for this travel agent.");
       return;
@@ -664,6 +674,10 @@ export default function EngagementForm({
         subject,
 
         message: messageText,
+        communicationPurpose: form.communicationPurpose || "",
+        agentResponseStatus: form.channel === "email" || form.channel === "whatsapp"
+          ? (form.direction === "inbound" ? "replied" : form.agentResponseStatus || "not_confirmed")
+          : "not_applicable",
         messageText,
         messageHtml: null,
 
@@ -1259,17 +1273,47 @@ export default function EngagementForm({
             </select>
           </Field>
 
+          <Field label="Communication / Discussion Purpose">
+            <select
+              className="mui-input"
+              value={form.communicationPurpose}
+              onChange={e => setForm({ ...form, communicationPurpose: e.target.value })}
+            >
+              <option value="">Select purpose (recommended)</option>
+              {COMMUNICATION_PURPOSES.map(item => (
+                <option key={item.value} value={item.value}>{item.label}</option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-slate-500">Helps identify valuable conversations versus general promotions in the engagement report.</p>
+          </Field>
+
+          {(form.channel === "email" || form.channel === "whatsapp") && (
+            <Field label="Agent's Response">
+              {form.direction === "inbound" ? (
+                <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">Incoming communication is recorded as a documented agent reply.</p>
+              ) : (
+                <select
+                  className="mui-input"
+                  value={form.agentResponseStatus}
+                  onChange={e => setForm({ ...form, agentResponseStatus: e.target.value })}
+                >
+                  {AGENT_RESPONSE_OPTIONS.map(item => (
+                    <option key={item.value} value={item.value}>{item.label}</option>
+                  ))}
+                </select>
+              )}
+              <p className="mt-1 text-xs text-slate-500">Only mark a reply when the agent actually responded. Outgoing messages alone do not earn relationship points.</p>
+            </Field>
+          )}
+
           <Field label={summaryLabel}>
-            <textarea
-              className="mui-input min-h-[110px]"
+            <VoiceNoteTextarea
               value={form.message}
-              placeholder={`Write ${summaryLabel.toLowerCase()}...`}
-              onChange={e =>
-                setForm({
-                  ...form,
-                  message: e.target.value
-                })
-              }
+              placeholder={`Write ${summaryLabel.toLowerCase()} or dictate it...`}
+              onChange={text => setForm(prev => ({ ...prev, message: text }))}
+              onAppend={text => setForm(prev => ({ ...prev, message: appendVoiceNote(prev.message, text) }))}
+              onBusyChange={busy => setVoicePending(prev => ({ ...prev, message: busy }))}
+              disabled={saving}
             />
           </Field>
         </SectionCard>
@@ -1506,16 +1550,14 @@ export default function EngagementForm({
           open={showInternalNote}
           onToggle={() => setShowInternalNote(prev => !prev)}
         >
-          <textarea
-            className="mui-input min-h-[80px]"
+          <VoiceNoteTextarea
+            minHeight="80px"
             value={form.customRemark}
             placeholder="Private note for internal team..."
-            onChange={e =>
-              setForm({
-                ...form,
-                customRemark: e.target.value
-              })
-            }
+            onChange={text => setForm(prev => ({ ...prev, customRemark: text }))}
+            onAppend={text => setForm(prev => ({ ...prev, customRemark: appendVoiceNote(prev.customRemark, text) }))}
+            onBusyChange={busy => setVoicePending(prev => ({ ...prev, customRemark: busy }))}
+            disabled={saving}
           />
         </CollapsibleSection>
       </div>

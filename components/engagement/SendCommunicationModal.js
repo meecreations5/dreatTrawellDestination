@@ -37,6 +37,7 @@ import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { sendEmailViaBrevo } from "@/lib/sendEmailViaBrevo";
 import { sendWhatsAppWeb } from "@/lib/whatsapp";
+import { COMMUNICATION_PURPOSES } from "@/lib/engagementIntelligenceTaxonomy";
 
 import { getBrandingSettings } from "@/lib/brandingSettings";
 import {
@@ -1092,6 +1093,7 @@ export default function SendCommunicationModal({
     spocIndex: 0,
     channel: "email",
     templateId: "",
+    communicationPurpose: "",
 
     subject: "",
     body: "",
@@ -3054,6 +3056,15 @@ ${
         direction:
           "outbound",
 
+        communicationPurpose:
+          form.communicationPurpose || engagement?.communicationPurpose || "",
+
+        agentResponseStatus:
+          "not_confirmed",
+
+        deliveryEvidence:
+          isEmail ? "provider_accepted" : "whatsapp_handoff_unverified",
+
         subject:
           isEmail
             ? finalSubject || null
@@ -4085,6 +4096,21 @@ ${
                   title="Step 3: Review & Send"
                   description="Edit message, confirm assets and send the communication."
                 />
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <label className="mb-2 block text-xs font-semibold text-slate-600">Communication Purpose</label>
+                  <select
+                    className="w-full rounded-lg border border-slate-300 bg-white p-2 text-sm"
+                    value={form.communicationPurpose || ""}
+                    onChange={event => setForm(previous => ({ ...previous, communicationPurpose: event.target.value }))}
+                  >
+                    <option value="">Select purpose (recommended)</option>
+                    {COMMUNICATION_PURPOSES.map(item => (
+                      <option key={item.value} value={item.value}>{item.label}</option>
+                    ))}
+                  </select>
+                  <p className="mt-2 text-xs text-slate-500">Outgoing messages do not count as agent replies unless a reply is separately recorded.</p>
+                </div>
 
                 {!selectedTemplate && (
                   <section className="space-y-2">

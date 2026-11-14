@@ -5,7 +5,8 @@ import AdminGuard from "@/components/AdminGuard";
 import {
   ADMIN_MODULES,
   ROLE_OPTIONS,
-  getAdminModulesForRole
+  getAdminModulesForRole,
+  getRoleAccessDefaults
 } from "@/lib/rolePermissions";
 
 export default function RoleDefaultsPage() {
@@ -43,6 +44,14 @@ export default function RoleDefaultsPage() {
           {ROLE_OPTIONS.map(role => {
             const allowedKeys = getAdminModulesForRole(role.value);
             const modules = ADMIN_MODULES.filter(module => allowedKeys.includes(module.key));
+            const roleActions = getRoleAccessDefaults(role.value);
+            const communicationActions = [
+              ["communications.view", "View"],
+              ["communications.create", "Create"],
+              ["communications.edit", "Edit"],
+              ["communications.send", "Send"],
+              ["communications.delete", "Delete"]
+            ].filter(([key]) => roleActions[key]?.allowed);
 
             return (
               <section key={role.value} className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
@@ -70,6 +79,19 @@ export default function RoleDefaultsPage() {
                     <p className="mt-2 text-sm text-gray-500">No Admin workspace access.</p>
                   )}
                 </div>
+                {allowedKeys.includes("communications") && (
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Communication Template Actions</p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {communicationActions.map(([key, label]) => (
+                        <span key={key} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700">{label}</span>
+                      ))}
+                    </div>
+                    {role.value === "employee" && (
+                      <p className="mt-2 text-xs text-slate-500">Can create and edit templates. Deletion and default-template synchronization remain Admin-only.</p>
+                    )}
+                  </div>
+                )}
               </section>
             );
           })}

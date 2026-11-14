@@ -16,6 +16,7 @@ import { sendEmailViaBrevo } from "@/lib/sendEmailViaBrevo";
 import { sendWhatsAppWeb } from "@/lib/whatsapp";
 
 import EngagementChip from "@/components/engagement/EngagementChip";
+import { COMMUNICATION_PURPOSES } from "@/lib/engagementIntelligenceTaxonomy";
 
 /* =========================
    TEMPLATE COMPILER
@@ -44,6 +45,7 @@ export default function SendCommunicationModal({ agent, onClose }) {
     channel: "email",
     templateId: "",
     body: "",
+    communicationPurpose: "",
     destinationIds: []
   });
 
@@ -193,10 +195,11 @@ Thank you,
       }
 
       if (form.channel === "whatsapp") {
-        await sendWhatsAppWeb({
+        const opened = sendWhatsAppWeb({
           mobile: spoc.mobile,
           message: finalMessage
         });
+        if (!opened) throw new Error("Could not open WhatsApp. Communication was not logged.");
       }
 
       const primary = selectedDestinations[0];
@@ -208,6 +211,10 @@ Thank you,
         spoc,
 
         channel: form.channel,
+        direction: "outbound",
+        communicationPurpose: form.communicationPurpose || "",
+        agentResponseStatus: "not_confirmed",
+        deliveryEvidence: form.channel === "email" ? "provider_accepted" : "whatsapp_handoff_unverified",
         subject:
           form.channel === "email"
             ? selectedTemplate?.emailSubject || null
@@ -325,6 +332,19 @@ Thank you,
                 />
               ))}
             </div>
+          </Field>
+
+          <Field label="Communication Purpose">
+            <select
+              className="mui-input"
+              value={form.communicationPurpose}
+              onChange={event => setForm({ ...form, communicationPurpose: event.target.value })}
+            >
+              <option value="">Select purpose (recommended)</option>
+              {COMMUNICATION_PURPOSES.map(item => (
+                <option key={item.value} value={item.value}>{item.label}</option>
+              ))}
+            </select>
           </Field>
 
           {/* DESTINATIONS */}

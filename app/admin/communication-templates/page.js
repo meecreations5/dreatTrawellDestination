@@ -223,6 +223,8 @@ export default function CommunicationTemplatesPage() {
   const { user } = useAuth();
   const canCreateTemplate = canAccess(user, "communications.create");
   const canEditTemplate = canAccess(user, "communications.edit");
+  const canDeleteTemplate = canAccess(user, "communications.delete");
+  const canSyncSystemTemplates = canAccess(user, "settings.edit");
 
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -460,8 +462,8 @@ export default function CommunicationTemplatesPage() {
   }
 
   async function softDeleteTemplate(template) {
-    if (!canEditTemplate) {
-      alert("You do not have permission to edit communication templates.");
+    if (!canDeleteTemplate) {
+      alert("Only administrators can delete communication templates.");
       return;
     }
     const confirmed = window.confirm(
@@ -509,7 +511,7 @@ export default function CommunicationTemplatesPage() {
               </div>
 
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <ImportDefaultTemplatesButton />
+                {canSyncSystemTemplates && <ImportDefaultTemplatesButton />}
 
                 {canCreateTemplate && (
                 <button
@@ -672,6 +674,8 @@ export default function CommunicationTemplatesPage() {
             templates={filteredTemplates}
             onToggle={toggleActive}
             onDelete={softDeleteTemplate}
+            canEdit={canEditTemplate}
+            canDelete={canDeleteTemplate}
           />
         ) : (
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -681,6 +685,8 @@ export default function CommunicationTemplatesPage() {
                 template={template}
                 onToggle={() => toggleActive(template)}
                 onDelete={() => softDeleteTemplate(template)}
+                canEdit={canEditTemplate}
+                canDelete={canDeleteTemplate}
               />
             ))}
           </div>
@@ -729,7 +735,7 @@ function StatCard({ label, value, icon }) {
   );
 }
 
-function TemplateCard({ template, onToggle, onDelete }) {
+function TemplateCard({ template, onToggle, onDelete, canEdit = false, canDelete = false }) {
   const channels = getChannels(template);
   const intentCodes = Array.isArray(template.intentCodes)
     ? template.intentCodes
@@ -858,23 +864,23 @@ function TemplateCard({ template, onToggle, onDelete }) {
               Open
             </Link>
 
-            <button
+            {canEdit && <button
               type="button"
               onClick={onToggle}
               className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50"
               title={template.active === false ? "Activate" : "Deactivate"}
             >
               <Archive className="h-4 w-4" />
-            </button>
+            </button>}
 
-            <button
+            {canDelete && <button
               type="button"
               onClick={onDelete}
               className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-red-100 text-red-600 hover:bg-red-50"
               title="Delete"
             >
               <Trash2 className="h-4 w-4" />
-            </button>
+            </button>}
           </div>
         </div>
       </div>
@@ -882,7 +888,7 @@ function TemplateCard({ template, onToggle, onDelete }) {
   );
 }
 
-function TemplatesTable({ templates = [], onToggle, onDelete }) {
+function TemplatesTable({ templates = [], onToggle, onDelete, canEdit = false, canDelete = false }) {
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white ">
       <div className="border-b border-slate-100 bg-[#1d4e89] px-5 py-4 text-white">
@@ -1045,23 +1051,23 @@ function TemplatesTable({ templates = [], onToggle, onDelete }) {
                         <Eye className="h-4 w-4" />
                       </Link>
 
-                      <button
+                      {canEdit && <button
                         type="button"
                         onClick={() => onToggle(template)}
                         className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50"
                         title={template.active === false ? "Activate" : "Deactivate"}
                       >
                         <Archive className="h-4 w-4" />
-                      </button>
+                      </button>}
 
-                      <button
+                      {canDelete && <button
                         type="button"
                         onClick={() => onDelete(template)}
                         className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-red-100 text-red-600 hover:bg-red-50"
                         title="Delete"
                       >
                         <Trash2 className="h-4 w-4" />
-                      </button>
+                      </button>}
                     </div>
                   </td>
                 </tr>

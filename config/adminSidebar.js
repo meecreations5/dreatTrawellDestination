@@ -57,9 +57,15 @@ export const adminSidebar = [
         permission: "admin.travel_agents"
       },
       {
-        label: "Activity Report",
+        label: "Activation & Conversion",
         icon: BarChart3,
         href: "/admin/travel-agents/activity-report",
+        permission: "admin.travel_agents"
+      },
+      {
+        label: "Engagement Intelligence",
+        icon: Target,
+        href: "/admin/travel-agents/engagement-intelligence",
         permission: "admin.travel_agents"
       },
       {

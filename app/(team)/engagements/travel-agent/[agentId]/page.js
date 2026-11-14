@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
+import { buildTravelAgentEngagementIntelligence } from "@/lib/travelAgentEngagementIntelligence";
 
 import EngagementForm from "./EngagementForm";
 import EngagementCard from "@/components/engagement/EngagementCard";
@@ -294,6 +295,14 @@ export default function EngagementPage() {
     };
   }, [engagements]);
 
+  const intelligence = useMemo(() => {
+    if (!agent?.id) return null;
+    const result = buildTravelAgentEngagementIntelligence({
+      travelAgents: [agent], engagements, leadsAvailable: false, now: new Date()
+    });
+    return result.rows[0] || null;
+  }, [agent, engagements]);
+
   const latestEngagement = engagements[0] || null;
 
   const nextFollowUp = useMemo(() => {
@@ -538,6 +547,28 @@ export default function EngagementPage() {
           tone="slate"
         />
       </section>
+
+      {/* ENGAGEMENT-BASED RELATIONSHIP GRADE (separate from booking status) */}
+      {intelligence && (
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold text-slate-900">30-Day Relationship Engagement</span>
+                <span className={`rounded-full px-2 py-1 text-xs font-bold ${
+                  intelligence.grade === "A+" ? "bg-blue-100 text-blue-800" :
+                  intelligence.grade === "A" ? "bg-cyan-50 text-cyan-800" :
+                  intelligence.grade === "B" ? "bg-slate-100 text-slate-700" : "bg-slate-50 text-slate-600"
+                }`}>{intelligence.grade} · {intelligence.score}/100</span>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                Connected calls: {intelligence.connectedCalls} · Outbound WhatsApp/Email: {intelligence.whatsappOutbound + intelligence.emailOutbound} · Documented replies: {intelligence.replyEvents} · Meaningful discussion days: {intelligence.meaningfulDiscussions}
+              </p>
+            </div>
+            <Link href="/admin/travel-agents/engagement-intelligence" className="text-xs font-semibold text-blue-700 hover:underline">View engagement intelligence →</Link>
+          </div>
+        </section>
+      )}
 
       {/* SMART SUMMARY */}
       {(latestEngagement || nextFollowUp) && (
