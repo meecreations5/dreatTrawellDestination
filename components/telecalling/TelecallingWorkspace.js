@@ -12,6 +12,7 @@ import { TELECALL_OUTCOMES, getTelecallOutcome, isAgentUnassigned, isAgentContac
 import { recordTelecall, handoffTelecalledAgent } from "@/lib/telecallingService";
 import VoiceNoteTextarea from "@/components/engagement/VoiceNoteTextarea";
 import { appendVoiceNote } from "@/lib/engagementVoiceText";
+import { getPreferredTelecallingContact, getTelecallingContacts, getTelecallingContactSearchText, hasTelecallingPhone, telephoneHref, emailHref } from "@/lib/telecallingContacts.mjs";
 import {
   buildTelecallerHandoverMessage,
   buildTelecallerHandoverWhatsAppUrl,
@@ -37,6 +38,7 @@ export default function TelecallingWorkspace() {
   const [handoffNotice, setHandoffNotice] = useState("");
   const [copyNotice, setCopyNotice] = useState("");
   const [search, setSearch] = useState("");
+  const [phoneFilter, setPhoneFilter] = useState("with_phone");
   const [view, setView] = useState("queue");
   const [activeId, setActiveId] = useState("");
   const [saving, setSaving] = useState(false);
@@ -77,20 +79,26 @@ export default function TelecallingWorkspace() {
     (!isTelecaller || a.telecallerHandoffByUid === user?.uid)
   ), [agents, isTelecaller, user?.uid]);
   const source = view === "handed" ? handed : queue;
-  const filtered = useMemo(() => source.filter(a => [nameOf(a), a.agentCode, a.city, a.spocs?.[0]?.name, a.spocs?.[0]?.mobile].some(v => String(v || "").toLowerCase().includes(search.trim().toLowerCase())))
-    .sort((a,b) => {
-      const dateA = a.telecallerLastCallAt?.toMillis?.() || 0;
-      const dateB = b.telecallerLastCallAt?.toMillis?.() || 0;
-      return dateA - dateB || nameOf(a).localeCompare(nameOf(b));
-    }), [source, search]);
+  const withPhoneCount = useMemo(() => source.filter(hasTelecallingPhone).length, [source]);
+  const filtered = useMemo(() => source.filter(a => {
+    const hasPhone = hasTelecallingPhone(a);
+    const phoneMatch = phoneFilter === "all" || (phoneFilter === "with_phone" ? hasPhone : !hasPhone);
+    return phoneMatch && getTelecallingContactSearchText(a).includes(search.trim().toLowerCase());
+  }).sort((a,b) => {
+    const dateA = a.telecallerLastCallAt?.toMillis?.() || 0;
+    const dateB = b.telecallerLastCallAt?.toMillis?.() || 0;
+    return dateA - dateB || nameOf(a).localeCompare(nameOf(b));
+  }), [source, search, phoneFilter]);
   const agent = agents.find(item => item.id === activeId);
-  const selectedSpoc = agent?.spocs?.[Number(form.spocIndex)] || agent?.spocs?.find(spoc => spoc.isPrimary) || agent?.spocs?.[0] || {};
-  const handoverPhone = selectedSpoc.whatsapp || selectedSpoc.mobile || selectedSpoc.phone ||
-    agent?.whatsappNumber || agent?.mobile || agent?.phone || agent?.contactNumber || "";
+  const agentContacts = agent ? getTelecallingContacts(agent) : [];
+  const preferredContact = agent ? getPreferredTelecallingContact(agent) : {};
+  const selectedSpoc = agent?.spocs?.[Number(form.spocIndex)] || {};
+  const selectedContact = agentContacts.find(contact => contact.kind === "person" && contact.index === Number(form.spocIndex)) || preferredContact;
+  const handoverPhone = selectedSpoc.whatsapp || selectedContact.phone || preferredContact.phone || agent?.whatsappNumber || "";
   const canPrepareMessage = view === "handed" && agent && canPrepareHandoverWhatsApp(agent) &&
     (!isTelecaller || agent.telecallerHandoffByUid === user?.uid);
   const handoverMessage = canPrepareMessage ? buildTelecallerHandoverMessage({
-    contactName: selectedSpoc.name || selectedSpoc.contactName || "Travel Partner",
+    contactName: selectedContact.kind === "agency" && selectedContact.name === "Agency / office" ? "Travel Partner" : (selectedContact.name || "Travel Partner"),
     managerName: agent.assignedToName
   }) : "";
   const whatsappUrl = canPrepareMessage ? buildTelecallerHandoverWhatsAppUrl({ mobile: handoverPhone, message: handoverMessage }) : "";
@@ -104,8 +112,9 @@ export default function TelecallingWorkspace() {
     setHandoffNotice("");
     setCopyNotice("");
     const row = agents.find(item => item.id === id);
-    const primary = row?.spocs?.findIndex(spoc => spoc.isPrimary) ?? -1;
-    setForm({ spocIndex: String(Math.max(primary, 0)), outcome: "", summary: "", followUpAt: "", assigneeUid: "", reason: "" });
+    const contact = getPreferredTelecallingContact(row);
+    const preferredIndex = contact.kind === "person" ? contact.index : (row?.spocs?.findIndex(spoc => spoc.isPrimary) ?? -1);
+    setForm({ spocIndex: String(Math.max(preferredIndex, 0)), outcome: "", summary: "", followUpAt: "", assigneeUid: "", reason: "" });
   };
 
   const saveCall = async event => {
@@ -170,32 +179,73 @@ export default function TelecallingWorkspace() {
               <button onClick={()=>{setView("queue");setActiveId("");}} className={`rounded-lg px-3 py-2 text-sm font-semibold ${view==="queue"?"bg-blue-700 text-white":"bg-slate-100 text-slate-700"}`}>Call queue</button>
               <button onClick={()=>{setView("handed");setActiveId("");}} className={`rounded-lg px-3 py-2 text-sm font-semibold ${view==="handed"?"bg-blue-700 text-white":"bg-slate-100 text-slate-700"}`}>Handed over</button>
             </div>
-            <label className="relative"><Search size={16} className="absolute left-3 top-3 text-slate-400"/><input aria-label="Search travel agents" className={`${inputClass} pl-9`} placeholder="Search agent, city or phone" value={search} onChange={e=>setSearch(e.target.value)} /></label>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+              <label className="block text-xs font-semibold text-slate-600">Contact number
+                <select aria-label="Filter agents by contact number" className={`${inputClass} mt-1 sm:min-w-[185px]`} value={phoneFilter} onChange={e => { setPhoneFilter(e.target.value); setActiveId(""); }}>
+                  <option value="with_phone">With phone number ({withPhoneCount})</option>
+                  <option value="all">All agents ({source.length})</option>
+                  <option value="missing_phone">Missing phone number ({source.length - withPhoneCount})</option>
+                </select>
+              </label>
+              <label className="relative"><Search size={16} className="absolute left-3 top-3 text-slate-400"/><input aria-label="Search travel agents" className={`${inputClass} pl-9`} placeholder="Search agent, city or phone" value={search} onChange={e=>setSearch(e.target.value)} /></label>
+            </div>
           </div>
-          <div className="max-h-[70vh] overflow-y-auto">
-            {loading ? <div className="p-8 text-sm text-slate-500">Loading agents...</div> : !filtered.length ? <div className="p-8 text-sm text-slate-500">No matching agents.</div> : filtered.map(item => {
-              const spoc = item.spocs?.find(s=>s.isPrimary) || item.spocs?.[0] || {};
-              return <button key={item.id} onClick={()=>chooseAgent(item.id)} className={`block w-full border-b border-slate-100 p-4 text-left transition hover:bg-blue-50 ${activeId === item.id ? "bg-blue-50" : "bg-white"}`}>
-                <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-semibold text-slate-900">{nameOf(item)}</p><p className="mt-1 text-xs text-slate-500">{spoc.name || "No SPOC"} · {spoc.mobile || "Phone missing"} · {item.city || "—"}</p></div><span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${item.telecallerQualification === "qualified" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{view === "handed" ? "Assigned" : item.telecallerQualification === "qualified" ? "Interested" : "Unassigned"}</span></div>
-                <p className="mt-2 text-xs text-slate-500">{item.telecallerLastOutcome ? `Last call: ${getTelecallOutcome(item.telecallerLastOutcome)?.label || item.telecallerLastOutcome}` : "Not contacted"} · {displayDate(item.telecallerLastCallAt)}{item.telecallerFollowUpAt ? ` · Follow-up: ${displayDate(item.telecallerFollowUpAt)}` : ""}</p>
-                {view === "handed" && <p className="mt-1 text-xs font-medium text-blue-700">Assigned to {item.assignedToName || item.assignedToEmail || "team member"}{isTelecaller && (() => { const related = myHandovers.find(h => h.agentId === item.id); return related ? ` · ${handoffStatus(related) === "contacted" ? "First contact completed" : handoffStatus(related) === "accepted" ? "Accepted by executive" : "New assignment sent"}` : ""; })()}</p>}
-              </button>;
+          <p className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-xs text-slate-600" role="status">Showing {filtered.length} of {source.length} agents · {withPhoneCount} with a saved callable number</p>
+          <div className="max-h-[70vh] overflow-y-auto" aria-label="Telecalling agent list">
+            {loading ? <div className="p-8 text-sm text-slate-500">Loading agents...</div> : !filtered.length ? <div className="p-8 text-sm text-slate-500">{phoneFilter === "with_phone" ? "No agents with a saved callable number match your search. Choose All agents or Missing phone number to review the other records." : phoneFilter === "missing_phone" ? "No agents missing a phone number match your search." : "No matching agents."}</div> : filtered.map(item => {
+              const contact = getPreferredTelecallingContact(item);
+              const contactCount = getTelecallingContacts(item).length;
+              const location = item.city || item.address?.city || "—";
+              const phoneLink = isAgentContactable(item) ? telephoneHref(contact.phone) : "";
+              const emailLink = emailHref(contact.email);
+              return <div key={item.id} className={`border-b border-slate-100 p-4 transition hover:bg-blue-50 ${activeId === item.id ? "bg-blue-50" : "bg-white"}`}>
+                <button type="button" onClick={()=>chooseAgent(item.id)} aria-label={`View contact details for ${nameOf(item)}`} className="w-full rounded-lg text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-900">{nameOf(item)}</p>
+                      <p className="mt-1 text-xs text-slate-500">{location} · {item.agentCode || "Travel agent"}</p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${item.telecallerQualification === "qualified" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{view === "handed" ? "Assigned" : item.telecallerQualification === "qualified" ? "Interested" : "Unassigned"}</span>
+                  </div>
+                  <p className="mt-2 text-sm font-medium text-slate-800">Contact: {contact.name || "Not recorded"}{contactCount > 1 ? ` · ${contactCount} contact options` : ""}</p>
+                  <p className="mt-1 text-sm text-slate-700">Phone: <span className="font-semibold text-slate-900">{contact.phone || "Not recorded"}</span>{contact.kind === "agency" ? " · Agency / office" : contact.kind === "extra" ? " · Additional contact" : ""}</p>
+                  {contact.email && <p className="mt-1 break-all text-xs text-slate-600">Email: {contact.email}</p>}
+                  <p className="mt-2 text-xs text-slate-500">{item.telecallerLastOutcome ? `Last call: ${getTelecallOutcome(item.telecallerLastOutcome)?.label || item.telecallerLastOutcome}` : "Not contacted"} · {displayDate(item.telecallerLastCallAt)}{item.telecallerFollowUpAt ? ` · Follow-up: ${displayDate(item.telecallerFollowUpAt)}` : ""}</p>
+                  {view === "handed" && <p className="mt-1 text-xs font-medium text-blue-700">Assigned to {item.assignedToName || item.assignedToEmail || "team member"}{isTelecaller && (() => { const related = myHandovers.find(h => h.agentId === item.id); return related ? ` · ${handoffStatus(related) === "contacted" ? "First contact completed" : handoffStatus(related) === "accepted" ? "Accepted by executive" : "New assignment sent"}` : ""; })()}</p>}
+                </button>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {phoneLink ? <a href={phoneLink} aria-label={`Call ${nameOf(item)} at ${contact.phone}`} className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50"><PhoneCall size={14}/> Call {contact.phone}</a> : <span className="text-xs text-slate-500">{!isAgentContactable(item) ? "Calling restricted by agent status" : "No valid phone number saved"}</span>}
+                  {emailLink && <a href={emailLink} aria-label={`Email ${contact.name || nameOf(item)}`} className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Email contact</a>}
+                  {contactCount > 1 && <button type="button" onClick={()=>chooseAgent(item.id)} className="rounded-lg px-2 py-1.5 text-xs font-semibold text-blue-700 hover:underline">View all contacts</button>}
+                </div>
+              </div>;
             })}
           </div>
         </section>
 
         <aside className="self-start rounded-2xl border border-slate-200 bg-white p-5 shadow-sm xl:sticky xl:top-24">
           {!agent ? <div className="py-10 text-center text-sm text-slate-500">Select a travel agent to log a call or hand over the relationship.</div> : <div className="space-y-5">
-            <div><h2 className="font-semibold text-slate-900">{nameOf(agent)}</h2><p className="text-xs text-slate-500">{agent.agentCode || "Travel agent"}</p>{agent.spocs?.length > 0 && <p className="mt-2 text-sm text-slate-700">{agent.spocs[Number(form.spocIndex)]?.name || "Contact"}: <a className="font-semibold text-blue-700" href={`tel:${String(agent.spocs[Number(form.spocIndex)]?.mobile || "").replace(/[^0-9+]/g, "")}`}>{agent.spocs[Number(form.spocIndex)]?.mobile || "No phone"}</a></p>}
+            <div>
+              <h2 className="font-semibold text-slate-900">{nameOf(agent)}</h2>
+              <p className="text-xs text-slate-500">{agent.agentCode || "Travel agent"} · {agent.city || agent.address?.city || "Location not recorded"}</p>
               {maySeeAdminAgentDetail && <Link href={`/admin/travel-agents/${agent.id}`} className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-blue-700">Agent record <ExternalLink size={13}/></Link>}
             </div>
+            <section className="space-y-3 rounded-xl border border-blue-100 bg-blue-50/40 p-3" aria-label="Travel agent contact details">
+              <h3 className="text-sm font-semibold text-slate-900">Contact details</h3>
+              {!agentContacts.length ? <p className="text-xs text-amber-800">No contact name, phone or email is recorded. Update the Travel Agent Master.</p> : agentContacts.map(contact => <div key={contact.key} className="rounded-lg border border-slate-100 bg-white p-3">
+                <p className="text-sm font-semibold text-slate-900">{contact.name || `Contact ${contact.index + 1}`}{contact.isPrimary ? <span className="ml-2 text-xs font-normal text-blue-700">Primary SPOC</span> : contact.kind === "agency" ? <span className="ml-2 text-xs font-normal text-slate-500">General contact</span> : null}</p>
+                {contact.designation && contact.kind === "person" && <p className="mt-0.5 text-xs text-slate-500">{contact.designation}</p>}
+                {contact.phones?.length ? contact.phones.map((phone, index) => <p key={`${contact.key}-phone-${index}`} className="mt-1 text-sm text-slate-700">{index ? "Other phone" : "Phone"}: {telephoneHref(phone) && isAgentContactable(agent) ? <a className="font-semibold text-blue-700 underline" href={telephoneHref(phone)}>{phone}</a> : <span>{phone}</span>}</p>) : <p className="mt-1 text-sm text-slate-700">Phone: Not recorded</p>}
+                {contact.email && <p className="mt-1 break-all text-xs text-slate-700">Email: {emailHref(contact.email) ? <a className="text-blue-700 underline" href={emailHref(contact.email)}>{contact.email}</a> : contact.email}</p>}
+              </div>)}
+            </section>
             {view === "handed" ? <div className="space-y-4">
               <div className="rounded-xl bg-blue-50 p-3 text-sm text-blue-900">Assigned to <b>{agent.assignedToName || "team member"}</b>. The Relationship Executive will handle ongoing enquiries and follow-ups.</div>
               {canPrepareMessage ? <section className="space-y-3 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3" aria-label="WhatsApp handover message">
                 <div className="flex items-center gap-2 text-sm font-semibold text-emerald-900"><MessageCircle size={17}/> WhatsApp relationship handover</div>
                 <p className="text-xs text-slate-600">Review the message and choose the correct contact before opening WhatsApp.</p>
                 {agent.spocs?.length > 1 && <label className="block text-xs font-medium text-slate-600">Send to contact<select className={`${inputClass} mt-1`} value={form.spocIndex} onChange={e => { setForm(prev => ({ ...prev, spocIndex: e.target.value })); setCopyNotice(""); }}>
-                  {agent.spocs.map((spoc, i) => <option key={i} value={String(i)}>{spoc.name || `Contact ${i + 1}`} - {spoc.whatsapp || spoc.mobile || spoc.phone || "Number missing"}</option>)}
+                  {agent.spocs.map((spoc, i) => <option key={i} value={String(i)}>{spoc.name || `Contact ${i + 1}`} - {spoc.whatsapp || spoc.mobile || spoc.phone || spoc.mobileNumber || "Number missing"}</option>)}
                 </select></label>}
                 <p className="text-xs text-slate-600">WhatsApp: {handoverPhone || "Number missing"}</p>
                 <div className="whitespace-pre-wrap rounded-lg border border-emerald-100 bg-white p-3 text-xs leading-5 text-slate-800">{handoverMessage}</div>

@@ -6,6 +6,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { resolveUserRole } from "@/lib/rolePermissions";
 import { FIRST_CONTACT_OUTCOMES, asMillis, handoffStatus, isHandoffOverdue, isHandoffUnread } from "@/lib/handoffCore.mjs";
 import { acceptAssignedHandoff, recordHandoffFirstContact, subscribeMyHandoffs } from "@/lib/handoffService";
+import { telephoneHref, emailHref } from "@/lib/telecallingContacts.mjs";
 
 function readableDate(value) {
   const time = asMillis(value);
@@ -71,17 +72,26 @@ export default function MyHandoffsWorkspace() {
         <h2 className="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-slate-900">Assigned to me · {records.length}</h2>
         {!records.length ? <p className="p-6 text-sm text-slate-500">No telecaller handovers are assigned to you yet.</p> : records.map(row => {
           const status = handoffStatus(row);
-          return <button type="button" key={row.id} onClick={() => { setSelectedId(row.id); setError(""); setSuccess(""); setForm({ outcome:"", summary:"" }); }} className={`w-full border-b border-slate-100 p-4 text-left hover:bg-blue-50 ${selected?.id === row.id ? "bg-blue-50" : ""}`}>
-            <div className="flex items-start justify-between gap-3"><div className="font-semibold text-slate-900">{row.agentName || "Travel agent"}</div><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${status === "contacted" ? "bg-emerald-100 text-emerald-800" : isHandoffOverdue(row, new Date(now)) ? "bg-rose-100 text-rose-800" : status === "accepted" ? "bg-blue-100 text-blue-800" : "bg-amber-100 text-amber-800"}`}>{isHandoffOverdue(row, new Date(now)) ? "Overdue" : status === "contacted" ? "Contacted" : status === "accepted" ? "Accepted" : "New assignment"}</span></div>
-            <p className="mt-1 text-xs text-slate-600">Assigned by {row.assignedByName || "Telecalling Team"} · {readableDate(row.createdAt)}</p>
-            <p className="mt-1 text-xs text-slate-500">Contact due: {readableDate(row.firstContactDueAt)}</p>
-          </button>;
+          return <div key={row.id} className={`border-b border-slate-100 p-4 hover:bg-blue-50 ${selected?.id === row.id ? "bg-blue-50" : ""}`}>
+            <button type="button" onClick={() => { setSelectedId(row.id); setError(""); setSuccess(""); setForm({ outcome:"", summary:"" }); }} className="w-full rounded-lg text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">
+              <div className="flex items-start justify-between gap-3"><div className="font-semibold text-slate-900">{row.agentName || "Travel agent"}</div><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${status === "contacted" ? "bg-emerald-100 text-emerald-800" : isHandoffOverdue(row, new Date(now)) ? "bg-rose-100 text-rose-800" : status === "accepted" ? "bg-blue-100 text-blue-800" : "bg-amber-100 text-amber-800"}`}>{isHandoffOverdue(row, new Date(now)) ? "Overdue" : status === "contacted" ? "Contacted" : status === "accepted" ? "Accepted" : "New assignment"}</span></div>
+              <p className="mt-1 text-sm text-slate-700">Contact: {row.contactName || "Not recorded"}</p>
+              <p className="mt-1 text-sm font-medium text-slate-800">Phone: {row.contactPhone || "Not recorded"}</p>
+              {row.contactEmail && <p className="mt-1 break-all text-xs text-slate-600">Email: {row.contactEmail}</p>}
+              <p className="mt-2 text-xs text-slate-600">Assigned by {row.assignedByName || "Telecalling Team"} · {readableDate(row.createdAt)}</p>
+              <p className="mt-1 text-xs text-slate-500">Contact due: {readableDate(row.firstContactDueAt)}</p>
+            </button>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {telephoneHref(row.contactPhone) && <a className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700" href={telephoneHref(row.contactPhone)}><PhoneCall size={14}/> Call {row.contactPhone}</a>}
+              {emailHref(row.contactEmail) && <a className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700" href={emailHref(row.contactEmail)}>Email contact</a>}
+            </div>
+          </div>;
         })}
       </section>
       <aside className="self-start space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm lg:sticky lg:top-16">
         {selected ? <>
           <div><h2 className="text-lg font-semibold text-slate-950">{selected.agentName}</h2><p className="mt-1 text-xs text-slate-500">Assigned by {selected.assignedByName} · {readableDate(selected.createdAt)}</p></div>
-          <div className="rounded-xl border border-slate-100 p-3 text-sm text-slate-700"><b>Agent contact</b><p className="mt-1">{selected.contactName || "Primary contact not recorded"}</p>{selected.contactPhone && <p className="mt-1"><a className="font-semibold text-blue-700 underline" href={`tel:${String(selected.contactPhone).replace(/[^0-9+]/g, "")}`}>{selected.contactPhone}</a></p>}{selected.contactEmail && <p className="mt-1">{selected.contactEmail}</p>}</div>
+          <div className="rounded-xl border border-slate-100 p-3 text-sm text-slate-700"><b>Agent contact</b><p className="mt-1">{selected.contactName || "Primary contact not recorded"}</p>{selected.contactPhone && <p className="mt-1">{telephoneHref(selected.contactPhone) ? <a className="font-semibold text-blue-700 underline" href={telephoneHref(selected.contactPhone)}>{selected.contactPhone}</a> : selected.contactPhone}</p>}{selected.contactEmail && <p className="mt-1">{selected.contactEmail}</p>}</div>
           <div className="rounded-xl bg-blue-50 p-3 text-sm text-blue-950"><b>Telecaller notes</b><p className="mt-1 whitespace-pre-wrap">{selected.lastCallSummary || "No call notes captured"}</p><p className="mt-1 text-xs">Handover: {selected.assignmentReason}</p></div>
           <p className="text-sm text-slate-700"><b>First contact due:</b> {readableDate(selected.firstContactDueAt)}</p>
           {handoffStatus(selected) === "assigned" && <button className={`${action} w-full`} disabled={busyId === selected.id} onClick={() => accept(selected)}>{busyId === selected.id ? <Loader2 className="animate-spin" size={16}/> : <UserCheck size={16}/>} Accept handover</button>}
