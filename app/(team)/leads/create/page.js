@@ -43,6 +43,7 @@ import {
 import { db, storage } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { createManualLead } from "@/lib/createManualLead";
+import VoiceNoteTextarea from "@/components/engagement/VoiceNoteTextarea";
 import { canAccess, normalizeRole, resolveUserRole } from "@/lib/rolePermissions";
 import {
   cleanOfficeClipboardText,
@@ -323,6 +324,7 @@ export default function ManualLeadCreatePage() {
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
   const [referenceUploading, setReferenceUploading] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
 
   useEffect(() => {
     if (loading || !user) return;
@@ -515,6 +517,7 @@ export default function ManualLeadCreatePage() {
     Boolean(assignedUser?.uid) &&
     !saving &&
     !referenceUploading &&
+    !voiceBusy &&
     !pageLoading;
 
   useEffect(() => {
@@ -564,6 +567,19 @@ export default function ManualLeadCreatePage() {
 
   const syncReferenceEditorHtml = () => {
     setClientReferenceHtml(referenceEditorRef.current?.innerHTML || "");
+  };
+
+  // Insert the recognised English text into the existing rich-text notes,
+  // without replacing typed formatting or introducing untrusted HTML.
+  const appendReferenceTranscript = text => {
+    const editor = referenceEditorRef.current;
+    if (!editor || !String(text || "").trim()) return;
+    for (const line of String(text).split(/\r?\n/).filter(line => line.trim())) {
+      const paragraph = document.createElement("p");
+      paragraph.textContent = line.trim();
+      editor.appendChild(paragraph);
+    }
+    syncReferenceEditorHtml();
   };
 
   const runReferenceCommand = (command, value = null) => {
@@ -652,6 +668,11 @@ export default function ManualLeadCreatePage() {
   const submit = async event => {
     event.preventDefault();
     setFormError("");
+
+    if (voiceBusy) {
+      setFormError("Finish or resolve voice dictation before creating the lead.");
+      return;
+    }
 
     if (!destination) {
       setFormError("Please select a destination.");
@@ -1252,6 +1273,12 @@ export default function ManualLeadCreatePage() {
                       </div>
                     </div>
 
+                    <VoiceNoteTextarea
+                      controlsOnly
+                      onAppend={appendReferenceTranscript}
+                      onBusyChange={setVoiceBusy}
+                      disabled={saving || referenceUploading}
+                    />
                     <p className="text-[11px] text-gray-500">
                       Use bullets for preferences, hotel names, dates, meal
                       plan, budget, special requests and copied client brief.

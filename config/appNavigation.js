@@ -6,7 +6,9 @@ import {
   CalendarClock,
   ListTodo,
   PlaneTakeoff,
-  Map
+  Map,
+  PhoneCall,
+  BellRing
 } from "lucide-react";
 
 export const APP_NAV = [
@@ -34,6 +36,25 @@ export const APP_NAV = [
     permission: "dashboard.view"
   },
 
+
+  /* =========================
+     TELECALLING
+  ========================== */
+  {
+    id: "telecalling",
+    label: "Telecalling",
+    icon: PhoneCall,
+    base: "/telecalling",
+    routes: ["/telecalling"],
+    showInNav: true,
+    permission: "telecalling.view"
+  },
+
+  {
+    id: "my-handoffs", label: "My Handoffs", icon: BellRing,
+    base: "/my-handoffs", routes: ["/my-handoffs"],
+    showInNav: true, permission: "travel_agents.view"
+  },
 
   /* =========================
      TRAVEL AGENTS

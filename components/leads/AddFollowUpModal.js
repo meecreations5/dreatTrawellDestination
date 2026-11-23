@@ -17,6 +17,8 @@ import {
 import { useAuth } from "@/hooks/useAuth";
 import { logFollowUp } from "@/lib/logFollowUp";
 import { alignToWorkSchedule, DEFAULT_WORK_SCHEDULE } from "@/lib/workSchedule";
+import VoiceNoteTextarea from "@/components/engagement/VoiceNoteTextarea";
+import { appendVoiceNote } from "@/lib/engagementVoiceText";
 
 const channels = [
   {
@@ -119,6 +121,7 @@ export default function AddFollowUpModal({ leadId, onClose }) {
   const [nextFollowUpAt, setNextFollowUpAt] = useState("");
 
   const [saving, setSaving] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
@@ -133,6 +136,11 @@ export default function AddFollowUpModal({ leadId, onClose }) {
   const save = async () => {
     setError("");
     setSuccess("");
+
+    if (voiceBusy) {
+      setError("Finish or resolve the dictated note before saving this follow-up.");
+      return;
+    }
 
     if (!summary.trim()) {
       setError("Conversation summary is required.");
@@ -186,7 +194,7 @@ export default function AddFollowUpModal({ leadId, onClose }) {
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[92vh] overflow-y-auto">
         {/* HEADER */}
         <div className="p-5 border-b border-gray-100 flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
@@ -308,21 +316,14 @@ export default function AddFollowUpModal({ leadId, onClose }) {
               Conversation Summary <span className="text-red-500">*</span>
             </label>
 
-            <textarea
-              rows={4}
+            <VoiceNoteTextarea
+              minHeight="110px"
               value={summary}
               disabled={saving}
-              onChange={e => {
-                setSummary(e.target.value);
-                setError("");
-              }}
-              placeholder="Example: Spoke with agent. Client is interested in 4N Maldives package, wants revised quote with water villa and vegetarian meals."
-              className="
-                w-full border border-gray-200 rounded-lg
-                px-3 py-2 text-sm resize-none
-                focus:outline-none focus:ring-2 focus:ring-blue-100
-                disabled:bg-gray-50 disabled:text-gray-400
-              "
+              onChange={text => { setSummary(text); setError(""); }}
+              onAppend={text => setSummary(prev => appendVoiceNote(prev, text))}
+              onBusyChange={setVoiceBusy}
+              placeholder="Example: Spoke with agent. Client wants a revised Maldives quote. Dictate in English, Hindi or Marathi."
             />
 
             <p className="text-[11px] text-gray-400">
@@ -442,7 +443,7 @@ export default function AddFollowUpModal({ leadId, onClose }) {
           <button
             type="button"
             onClick={save}
-            disabled={saving}
+            disabled={saving || voiceBusy}
             className="
               flex-1 bg-blue-600 text-white rounded-lg
               py-2 text-sm font-medium hover:bg-blue-700

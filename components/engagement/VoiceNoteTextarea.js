@@ -5,15 +5,17 @@ import { Mic, MicOff, Loader2, RotateCcw, Trash2, Languages } from "lucide-react
 import { auth } from "@/lib/firebase";
 import {
   VOICE_LANGUAGES,
+  getVoiceLanguage,
+  getTranslationLanguageName,
   collectRecognitionText,
   getSpeechErrorMessage
 } from "@/lib/engagementVoiceText";
 
 /**
- * A controlled note textarea with optional microphone dictation.
- * EN: speech -> English text directly in the form.
- * HI: speech -> Hindi transcript -> authenticated translation -> English text.
- * The user reviews/edits the ordinary textarea before their existing Save flow.
+ * Optional dictation for an ordinary controlled note, or a rich-text editor.
+ * English is inserted directly. Hindi/Marathi use browser recognition followed
+ * by authenticated text-only Cloud Translation. Original text stays available
+ * for explicit retry / original-language fallback / discard on failure.
  */
 export default function VoiceNoteTextarea({
   value = "",
@@ -22,14 +24,16 @@ export default function VoiceNoteTextarea({
   onBusyChange,
   placeholder = "Write the conversation summary...",
   minHeight = "110px",
-  disabled = false
+  disabled = false,
+  controlsOnly = false
 }) {
   const [supported, setSupported] = useState(null);
   const [language, setLanguage] = useState("en-IN");
   const [phase, setPhase] = useState("idle");
   const [interim, setInterim] = useState("");
-  const [originalHindi, setOriginalHindi] = useState("");
-  const [pendingHindi, setPendingHindi] = useState("");
+  const [originalTranscript, setOriginalTranscript] = useState("");
+  const [originalSource, setOriginalSource] = useState("");
+  const [pendingTranscript, setPendingTranscript] = useState("");
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
 
@@ -62,24 +66,26 @@ export default function VoiceNoteTextarea({
     };
   }, []);
 
-  const translateHindi = async (text) => {
+  const translateToEnglish = async (text, source) => {
     if (!activeRef.current) return;
+    const sourceName = getTranslationLanguageName(source);
     setPhase("translating");
     setError("");
-    setStatus("Converting Hindi speech into English text...");
+    setStatus(`Converting ${sourceName} speech into English text...`);
     busyRef.current?.(true);
     const controller = new AbortController();
     controllerRef.current = controller;
     try {
       const token = await auth?.currentUser?.getIdToken();
       if (!token) throw new Error("Please sign in again before translating.");
+      if (controller.signal.aborted || !activeRef.current) return;
       const response = await fetch("/api/engagement/translate-note", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({ source: "hi", target: "en", text }),
+        body: JSON.stringify({ source, target: "en", text }),
         signal: controller.signal,
         cache: "no-store"
       });
@@ -89,15 +95,14 @@ export default function VoiceNoteTextarea({
       if (!english) throw new Error("Translation returned no text.");
       if (!activeRef.current || controller.signal.aborted) return;
       appendRef.current?.(english);
-      setPendingHindi("");
+      setPendingTranscript("");
       setStatus("English text added. Please review names, dates and package rates before saving.");
       busyRef.current?.(false);
     } catch (err) {
       if (!activeRef.current || controller.signal.aborted) return;
-      setError(err?.message || "Hindi translation failed.");
-      setStatus("Hindi transcript saved temporarily in this form. Retry or choose what to do with it.");
-      // Keep Save disabled until the unresolved dictation is translated,
-      // inserted in Hindi intentionally, or discarded.
+      setError(err?.message || `${sourceName} translation failed.`);
+      setStatus(`${sourceName} transcript saved temporarily in this form. Retry or choose what to do with it.`);
+      // Never let Save silently lose a pending, uncommitted voice note.
       busyRef.current?.(true);
     } finally {
       if (activeRef.current && !controller.signal.aborted) setPhase("idle");
@@ -106,7 +111,7 @@ export default function VoiceNoteTextarea({
   };
 
   const startListening = () => {
-    if (disabled || phase !== "idle" || pendingHindi) return;
+    if (disabled || phase !== "idle" || pendingTranscript) return;
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       setSupported(false);
@@ -114,7 +119,8 @@ export default function VoiceNoteTextarea({
       return;
     }
     const recognition = new SpeechRecognition();
-    recognition.lang = language;
+    const selected = getVoiceLanguage(language);
+    recognition.lang = selected.value;
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
@@ -151,15 +157,16 @@ export default function VoiceNoteTextarea({
         setStatus("No completed speech was captured. Try again or type the note.");
         return;
       }
-      if (language === "en-IN") {
+      if (!selected.source) {
         appendRef.current?.(transcript);
         setStatus("English dictation added. Review the note before saving.");
         setPhase("idle");
         busyRef.current?.(false);
       } else {
-        setOriginalHindi(transcript);
-        setPendingHindi(transcript);
-        void translateHindi(transcript);
+        setOriginalTranscript(transcript);
+        setOriginalSource(selected.source);
+        setPendingTranscript(transcript);
+        void translateToEnglish(transcript, selected.source);
       }
     };
     try {
@@ -183,31 +190,34 @@ export default function VoiceNoteTextarea({
     setStatus("Dictation cancelled.");
     busyRef.current?.(false);
   };
-  const clearHindi = () => {
-    setPendingHindi("");
-    setOriginalHindi("");
+  const clearPending = () => {
+    setPendingTranscript("");
+    setOriginalTranscript("");
+    setOriginalSource("");
     setError("");
-    setStatus("Hindi transcript discarded.");
+    setStatus("Transcript discarded.");
     busyRef.current?.(false);
   };
-  const insertHindi = () => {
-    appendRef.current?.(pendingHindi);
-    setPendingHindi("");
+  const insertOriginal = () => {
+    appendRef.current?.(pendingTranscript);
+    setPendingTranscript("");
     setError("");
-    setStatus("Original Hindi text added. You can edit it before saving.");
+    setStatus(`Original ${getTranslationLanguageName(originalSource)} text added. You can edit it before saving.`);
     busyRef.current?.(false);
   };
 
   return (
     <div className="space-y-2">
-      <textarea
-        className="mui-input min-h-[110px] w-full resize-y leading-relaxed focus:border-blue-500"
-        style={{ minHeight }}
-        value={value}
-        onChange={event => onChange?.(event.target.value)}
-        placeholder={placeholder}
-        disabled={disabled}
-      />
+      {!controlsOnly && (
+        <textarea
+          className="mui-input min-h-[110px] w-full resize-y leading-relaxed focus:border-blue-500"
+          style={{ minHeight }}
+          value={value}
+          onChange={event => onChange?.(event.target.value)}
+          placeholder={placeholder}
+          disabled={disabled}
+        />
+      )}
       <div className="rounded-xl border border-blue-100 bg-gradient-to-r from-blue-50 via-cyan-50/50 to-white p-3">
         <div className="flex flex-wrap items-center gap-2">
           <label className="flex min-w-0 flex-1 items-center gap-2 text-xs font-semibold text-blue-800">
@@ -217,8 +227,8 @@ export default function VoiceNoteTextarea({
               aria-label="Voice input language"
               value={language}
               onChange={event => setLanguage(event.target.value)}
-              disabled={disabled || phase !== "idle" || Boolean(pendingHindi)}
-              className="w-full min-w-0 max-w-[265px] rounded-lg border border-blue-200 bg-white px-2.5 py-2 text-xs font-medium text-slate-700 outline-none focus:border-blue-500 disabled:opacity-60"
+              disabled={disabled || phase !== "idle" || Boolean(pendingTranscript)}
+              className="w-full min-w-0 max-w-[285px] rounded-lg border border-blue-200 bg-white px-2.5 py-2 text-xs font-medium text-slate-700 outline-none focus:border-blue-500 disabled:opacity-60"
             >
               {VOICE_LANGUAGES.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
@@ -232,7 +242,7 @@ export default function VoiceNoteTextarea({
             <button
               type="button"
               onClick={startListening}
-              disabled={disabled || supported !== true || phase !== "idle" || Boolean(pendingHindi)}
+              disabled={disabled || supported !== true || phase !== "idle" || Boolean(pendingTranscript)}
               className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {phase === "translating" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mic className="h-4 w-4" />}
@@ -241,20 +251,20 @@ export default function VoiceNoteTextarea({
           )}
         </div>
         {supported === false && <p role="note" className="mt-2 text-xs text-amber-800">Microphone dictation is unavailable in this browser. Use Chrome or Edge with microphone permission, or type normally.</p>}
-        {phase === "listening" && <p role="status" className="mt-2 text-xs font-semibold text-blue-700">● Listening {language === "hi-IN" ? "in Hindi" : "in English"}... {interim ? <span className="font-normal text-slate-600">{interim}</span> : null}</p>}
+        {phase === "listening" && <p role="status" className="mt-2 text-xs font-semibold text-blue-700">● Listening in {getVoiceLanguage(language).name}... {interim ? <span className="font-normal text-slate-600">{interim}</span> : null}</p>}
         {status && phase !== "listening" && <p role="status" className="mt-2 text-xs text-slate-600">{status}</p>}
         {error && <p role="alert" className="mt-2 text-xs text-rose-700">{error}</p>}
-        {originalHindi && <details className="mt-2 rounded-lg border border-blue-100 bg-white p-2 text-xs text-slate-600" open={Boolean(pendingHindi)}>
-          <summary className="cursor-pointer font-semibold text-blue-700">Original Hindi transcript (review)</summary>
-          <p className="mt-2 whitespace-pre-wrap break-words">{originalHindi}</p>
+        {originalTranscript && <details className="mt-2 rounded-lg border border-blue-100 bg-white p-2 text-xs text-slate-600" open={Boolean(pendingTranscript)}>
+          <summary className="cursor-pointer font-semibold text-blue-700">Original {getTranslationLanguageName(originalSource)} transcript (review)</summary>
+          <p className="mt-2 whitespace-pre-wrap break-words">{originalTranscript}</p>
         </details>}
-        {pendingHindi && phase !== "translating" && <div className="mt-2 flex flex-wrap gap-2">
-          <button type="button" onClick={() => void translateHindi(pendingHindi)} className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-50"><RotateCcw className="h-3.5 w-3.5" /> Retry English</button>
-          <button type="button" onClick={insertHindi} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">Use original Hindi</button>
-          <button type="button" onClick={clearHindi} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 hover:bg-white"><Trash2 className="h-3.5 w-3.5" /> Discard</button>
+        {pendingTranscript && phase !== "translating" && <div className="mt-2 flex flex-wrap gap-2">
+          <button type="button" onClick={() => void translateToEnglish(pendingTranscript, originalSource)} className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-50"><RotateCcw className="h-3.5 w-3.5" /> Retry English</button>
+          <button type="button" onClick={insertOriginal} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">Use original {getTranslationLanguageName(originalSource)}</button>
+          <button type="button" onClick={clearPending} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 hover:bg-white"><Trash2 className="h-3.5 w-3.5" /> Discard</button>
         </div>}
       </div>
-      <p className="text-[11px] leading-4 text-slate-500">Voice entry is optional; check spelling, names and rates. Audio may be processed by your browser’s speech service. Hindi transcripts are sent for text translation, not stored as audio.</p>
+      <p className="text-[11px] leading-4 text-slate-500">Voice entry is optional; verify names, dates and rates before saving. Audio may be processed by your browser's speech service. Hindi/Marathi transcripts are sent as text for translation; audio is not saved in the CRM.</p>
     </div>
   );
 }

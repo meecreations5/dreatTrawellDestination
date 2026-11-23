@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { businessDateKey } from "@/lib/reporting/leadReportingDates.mjs";
 import {
   AlertTriangle,
   Loader2,
@@ -22,6 +23,7 @@ export default function LeadStageCloseModal({
   newStage,
   saving = false,
   error = "",
+  canCorrectWonDate = false,
   onClose,
   onConfirm
 }) {
@@ -29,6 +31,10 @@ export default function LeadStageCloseModal({
   const [lostReason, setLostReason] = useState("");
   const [cancelReason, setCancelReason] = useState("");
   const [localError, setLocalError] = useState("");
+  const [wonDateKey, setWonDateKey] = useState("");
+  const [bookingConfirmationReference, setBookingConfirmationReference] = useState("");
+  const [wonDateCorrectionReason, setWonDateCorrectionReason] = useState("");
+  const todayKey = () => businessDateKey(new Date());
 
   const stageMeta = getLeadStageMeta(newStage);
   const isConverted = isConvertedStage(newStage);
@@ -41,6 +47,9 @@ export default function LeadStageCloseModal({
     setRemark("");
     setLostReason("");
     setCancelReason("");
+    setWonDateKey(todayKey());
+    setBookingConfirmationReference("");
+    setWonDateCorrectionReason("");
     setLocalError("");
   }, [open, newStage]);
 
@@ -95,7 +104,17 @@ export default function LeadStageCloseModal({
       return;
     }
 
+    if (isConverted && wonDateKey !== todayKey() && (
+      !canCorrectWonDate || !bookingConfirmationReference.trim() || wonDateCorrectionReason.trim().length < 8
+    )) {
+      setLocalError("Only Admin may use a past date; booking reference and correction reason are required.");
+      return;
+    }
+
     onConfirm?.({
+      wonDateKey: isConverted ? wonDateKey : "",
+      bookingConfirmationReference: isConverted ? bookingConfirmationReference.trim() : "",
+      wonDateCorrectionReason: isConverted ? wonDateCorrectionReason.trim() : "",
       remark: remark.trim(),
       lostReason: isLost ? lostReason : "",
       cancelReason: isCancelledInvalid ? cancelReason : ""
@@ -168,6 +187,30 @@ export default function LeadStageCloseModal({
                 ? "Use this only for cancelled, duplicate or invalid opportunities. It is not counted as a sales loss."
                 : "Close this lead as Lost with a clear commercial reason."}
           </div>
+
+          {isConverted && (
+            <div className="space-y-3 rounded-xl border border-blue-100 bg-blue-50/50 p-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">Actual booking confirmation date</label>
+                <input type="date" value={wonDateKey} max={todayKey()} disabled={saving || !canCorrectWonDate}
+                  onChange={e => { setWonDateKey(e.target.value); setLocalError(""); }}
+                  className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900" />
+                <p className="mt-1 text-xs text-slate-600">Deals count in this month, not the enquiry creation month. Admin can correct a past confirmation with evidence.</p>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">Booking confirmation reference (recommended)</label>
+                <input value={bookingConfirmationReference} disabled={saving} onChange={e=>setBookingConfirmationReference(e.target.value)}
+                  placeholder="Agent email / booking confirmation ID" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm" />
+              </div>
+              {wonDateKey !== todayKey() && canCorrectWonDate && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">Admin correction reason (required)</label>
+                  <textarea value={wonDateCorrectionReason} disabled={saving} onChange={e=>setWonDateCorrectionReason(e.target.value)}
+                    rows={2} placeholder="Verified confirmation received on the earlier date" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm" />
+                </div>
+              )}
+            </div>
+          )}
 
           {isLost && (
             <div>

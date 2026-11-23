@@ -35,6 +35,7 @@ import {
   getLeadOwner as getLeadOwnerIdentity
 } from "@/lib/leadOwnership";
 import { LEAD_STAGES, isTerminalLeadStage, normalizeLeadStage } from "@/lib/leadStages";
+import { getDealWonEventDate, getQuotationSentEventDate, getLeadCreatedEventDate, isWithinBusinessDates, isCurrentWon } from "@/lib/reporting/leadReportingDates.mjs";
 import {
   findDirectoryMember,
   getMembersForTeam,
@@ -46,6 +47,8 @@ import {
 /* DASHBOARD COMPONENTS */
 import DashboardFilters from "@/components/admin/dashboard/DashboardFilters";
 import DashboardKpiCard from "@/components/admin/dashboard/DashboardKpiCard";
+import ConfirmedBusinessPanel from "@/components/admin/dashboard/ConfirmedBusinessPanel";
+import { summarizeConfirmedBusiness, formatInr } from "@/lib/reporting/businessIntelligence.mjs";
 import LeadsTrendChart from "@/components/admin/dashboard/LeadsTrendChart";
 import LeadsByStageChart from "@/components/admin/dashboard/LeadsByStageChart";
 import TeamPerformanceTable from "@/components/admin/dashboard/TeamPerformanceTable";
@@ -1093,7 +1096,7 @@ export default function AdminDashboardPage() {
      BASE FILTERED LEADS
      Stage / Assigned / Date / Overdue
   ========================== */
-  const baseFilteredLeads = useMemo(() => {
+  const baseScopedLeads = useMemo(() => {
     return activeLeads.filter(lead => {
       if (filters.stage !== "all" && normalizeLeadStage(lead.stage) !== filters.stage) return false;
 
@@ -1134,19 +1137,36 @@ export default function AdminDashboardPage() {
       if (filters.followUp === "upcoming" && (!nextAction || nextAction <= today || isSameDay(nextAction, today))) return false;
       if (filters.followUp === "none" && nextAction) return false;
 
-      const created = getLeadCreatedDate(lead);
-      if (filters.from) {
-        const fromDate = startOfDay(filters.from);
-        if (!created || created < fromDate) return false;
-      }
-      if (filters.to) {
-        const toDateValue = endOfDay(filters.to);
-        if (!created || created > toDateValue) return false;
-      }
-
       return true;
     });
   }, [activeLeads, filters, teamDirectory, userLookup]);
+
+  // Enquiry cohort: filters by creation date. Monthly commercial outcomes below
+  // instead use event dates against the SAME non-date filters.
+  const baseFilteredLeads = useMemo(() => baseScopedLeads.filter(lead =>
+    isWithinBusinessDates(getLeadCreatedEventDate(lead), filters.from, filters.to)
+  ), [baseScopedLeads, filters.from, filters.to]);
+
+  const monthlyOutcomeEvents = useMemo(() => {
+    const won = baseScopedLeads.filter(lead =>
+      isCurrentWon(lead) && isWithinBusinessDates(getDealWonEventDate(lead), filters.from, filters.to)
+    );
+    const quoted = baseScopedLeads.filter(lead =>
+      isWithinBusinessDates(getQuotationSentEventDate(lead), filters.from, filters.to)
+    );
+    const wonFromEarlierLeads = filters.from ? won.filter(lead => {
+      const created = getLeadCreatedEventDate(lead);
+      return created && !isWithinBusinessDates(created, filters.from, filters.to);
+    }) : [];
+    return { won, quoted, wonFromEarlierLeads };
+  }, [baseScopedLeads, filters.from, filters.to]);
+
+  // Same booking-date and reconciled INR financial totals as Management.
+  // Use baseScopedLeads to preserve team/owner/destination filters, NOT the
+  // enquiry-created cohort or quick-view queue.
+  const monthlyBusiness = useMemo(() => summarizeConfirmedBusiness(baseScopedLeads, {
+    from: filters.from, to: filters.to
+  }), [baseScopedLeads, filters.from, filters.to]);
 
   /* =========================
      ACTION COUNTS
@@ -1415,42 +1435,15 @@ export default function AdminDashboardPage() {
         teamLabel={openTravelTeamLabel}
       />
 
-      {/* KPI ROW */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
-        <DashboardKpiCard
-          label="Total Leads"
-          value={metrics.totalLeads}
-          icon={Target}
-        />
-
-        <DashboardKpiCard
-          label="Total Quoted"
-          value={formatCurrency(metrics.totalQuoted)}
-          color="blue"
-          icon={BadgeIndianRupee}
-        />
-
-        <DashboardKpiCard
-          label="Total Won"
-          value={formatCurrency(metrics.totalWonValue)}
-          color="green"
-          icon={Trophy}
-        />
-
-        <DashboardKpiCard
-          label="Avg Deal Size"
-          value={formatCurrency(metrics.avgDeal)}
-          color="purple"
-          icon={TrendingUp}
-        />
-
-        <DashboardKpiCard
-          label="Win Rate"
-          value={`${metrics.winRate}%`}
-          color="amber"
-          icon={CheckCircle2}
-        />
+      {/* Selected-period business outcomes and confirmed INR: same cohort as Management */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <DashboardKpiCard label="New Enquiries" value={metrics.totalLeads} icon={Target} />
+        <DashboardKpiCard label="Quotes Sent · Period" value={monthlyOutcomeEvents.quoted.length} color="blue" icon={Send} />
+        <DashboardKpiCard label="Deals Won · Period" value={monthlyBusiness.totals.wins} color="green" icon={Trophy} />
+        <DashboardKpiCard label="Booked Value · INR" value={formatInr(monthlyBusiness.totals.sellingInr)} color="purple" icon={BadgeIndianRupee} />
+        <DashboardKpiCard label="Expected GP · INR" value={formatInr(monthlyBusiness.totals.grossProfitInr)} color="green" icon={TrendingUp} />
       </div>
+      <ConfirmedBusinessPanel summary={monthlyBusiness} label="Sales Outcomes · Confirmed Bookings" compact />
 
       {/* PIPELINE HEALTH */}
       <PipelineHealth
@@ -1458,6 +1451,17 @@ export default function AdminDashboardPage() {
         activeView={quickView}
         setQuickView={setQuickView}
       />
+
+      {/* Event-date monthly outcome reporting. Distinct from created-lead cohort. */}
+      <section className="rounded-2xl border border-blue-100 bg-white p-4 shadow-sm">
+        <h2 className="text-sm font-bold text-slate-900">Selected-period sales outcomes</h2>
+        <p className="mt-1 text-xs text-slate-600">Leads created in September but confirmed in October count as October deals. Quotes count by actual sent date, not the date a lead was updated. Existing lead-created filters still control the enquiry cohort below.</p>
+        <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-3">
+          <div className="rounded-xl bg-blue-50 p-4"><p className="text-xs text-slate-600">Deals won by confirmation date (one lead = one booking)</p><p className="mt-2 text-2xl font-bold text-blue-900 tabular-nums">{monthlyOutcomeEvents.won.length}</p></div>
+          <div className="rounded-xl bg-blue-50 p-4"><p className="text-xs text-slate-600">Quotations actually sent</p><p className="mt-2 text-2xl font-bold text-blue-900 tabular-nums">{monthlyOutcomeEvents.quoted.length}</p></div>
+          <div className="col-span-2 rounded-xl bg-slate-50 p-4 lg:col-span-1"><p className="text-xs text-slate-600">Earlier enquiries won this period</p><p className="mt-2 text-2xl font-bold text-slate-900 tabular-nums">{monthlyOutcomeEvents.wonFromEarlierLeads.length}</p></div>
+        </div>
+      </section>
 
       {/* SECONDARY INSIGHTS */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-6">
@@ -1471,9 +1475,9 @@ export default function AdminDashboardPage() {
 
         <InsightCard
           icon={CheckCircle2}
-          label="Won Leads"
+          label="Won from selected enquiry cohort"
           value={metrics.wonCount}
-          helper="Closed-won leads in selected filters."
+          helper="Wins among leads created in the selected period, regardless of when won. See event-date outcomes above for monthly closure count."
           tone="green"
         />
 
@@ -1581,8 +1585,7 @@ export default function AdminDashboardPage() {
                 </h2>
 
                 <p className="text-xs text-slate-500">
-                  Owner credit and conversion are separated from current assignee
-                  workload and follow-up responsibility.
+                  Owner credit and conversion for the selected ENQUIRY-CREATION cohort. This is not the selected month's total Deal Won event count; refer to the outcome cards above.
                 </p>
               </div>
             </div>
@@ -1622,7 +1625,7 @@ export default function AdminDashboardPage() {
                 </p>
               </div>
 
-              <RevenueByDestinationChart leads={filteredLeads} />
+              <RevenueByDestinationChart leads={monthlyOutcomeEvents.won} />
             </section>
           </div>
         </>

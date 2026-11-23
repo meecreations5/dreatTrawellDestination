@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
+import HandoffActionAlert from "@/components/handoffs/HandoffActionAlert";
 import { getLeadAging } from "@/lib/leadAging";
 import { normalizeLeadClosingPotential } from "@/lib/leadPotential";
 import {
@@ -815,6 +816,8 @@ export default function ActionCenterWorkspace({
             </button>
           )}
         </header>
+
+        {!adminMode && <HandoffActionAlert user={user}/>}
 
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
           {cards.map(card => {

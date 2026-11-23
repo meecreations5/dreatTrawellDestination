@@ -48,6 +48,10 @@ import {
 import { normalizeTravelAgentStatus } from "@/lib/travelAgentStatus";
 import { ENGAGEMENT_OUTCOME_OPTIONS } from "@/lib/engagementIntentMap";
 import { isSuccessfulEngagementConnection } from "@/lib/engagementProductivity";
+import { getDealWonEventDate, getQuotationSentEventDate, getLeadCreatedEventDate, isCurrentWon, isWithinBusinessDates } from "@/lib/reporting/leadReportingDates.mjs";
+import { buildRelationshipPerformance } from "@/lib/reporting/relationshipPerformance.mjs";
+import { buildTravelAgentEngagementIntelligence } from "@/lib/travelAgentEngagementIntelligence";
+import RelationshipPerformancePanel from "@/components/admin/dashboard/engagements/RelationshipPerformancePanel";
 import { calculateOperationalActivityMetrics, classifyOperationalActivity, getOperationalWorkUnitKey, isOperationalCompletionEvent } from "@/lib/workActivityClassifier";
 
 /* ENGAGEMENT COMPONENTS */
@@ -656,18 +660,8 @@ function getAgentIdentityKeys(agent = {}) {
 }
 
 function getLeadActivityDate(lead = {}) {
-  return (
-    lead?.convertedAt ||
-    lead?.wonAt ||
-    lead?.paymentReceivedAt ||
-    lead?.quoteSentAt ||
-    lead?.quotationSentAt ||
-    lead?.lastQuotationSentAt ||
-    lead?.stageChangedAt ||
-    lead?.updatedAt ||
-    lead?.createdAt ||
-    null
-  );
+  // This timestamp is only for list ordering, NEVER sales event reporting.
+  return lead?.lastActivityAt || lead?.updatedAt || lead?.createdAt || null;
 }
 
 function getWorkEventDate(item = {}) {
@@ -3783,13 +3777,13 @@ export default function AdminEngagementDashboard() {
       return matchesTeam && isDateInRange(getAgentCreatedDate(agent), period, fromDate, toDateValue);
     });
 
+    const eventWindow = getDateRange(period, fromDate, toDateValue);
     const quoteRows = teamScopedLeads.filter(lead =>
-      isQuoteSentLead(lead) &&
-      isDateInRange(getLeadActivityDate(lead), period, fromDate, toDateValue)
+      isWithinBusinessDates(getQuotationSentEventDate(lead), eventWindow.from, eventWindow.to)
     );
     const convertedRows = teamScopedLeads.filter(lead =>
-      isWonLead(lead) &&
-      isDateInRange(getLeadActivityDate(lead), period, fromDate, toDateValue)
+      isCurrentWon(lead) &&
+      isWithinBusinessDates(getDealWonEventDate(lead), eventWindow.from, eventWindow.to)
     );
 
     return {
@@ -4489,34 +4483,30 @@ export default function AdminEngagementDashboard() {
           );
         });
 
-      const quotedLeads =
-        leadsFromEngagement.filter(
-          lead =>
-            isQuoteLead(lead)
-        );
+      const cohortWindow = getDateRange(period, fromDate, toDateValue);
+      const cohortLeads = leadsFromEngagement.filter(lead =>
+        isWithinBusinessDates(getLeadCreatedEventDate(lead), cohortWindow.from, cohortWindow.to)
+      );
 
-      const convertedLeads =
-        leadsFromEngagement.filter(
-          lead =>
-            isWonLead(lead)
-        );
+      const quotedLeads = cohortLeads.filter(lead => Boolean(getQuotationSentEventDate(lead)));
+
+      const convertedLeads = cohortLeads.filter(lead => isCurrentWon(lead));
 
       return {
         totalEngagements,
-        leadsCreated: leadsFromEngagement.length,
+        leadsCreated: cohortLeads.length,
         quotedLeads: quotedLeads.length,
         convertedLeads: convertedLeads.length,
-        leadCreationRate: percent(leadsFromEngagement.length, totalEngagements),
-        quoteRate: percent(quotedLeads.length, leadsFromEngagement.length),
-        conversionRate: percent(convertedLeads.length, leadsFromEngagement.length),
+        leadCreationRate: percent(cohortLeads.length, totalEngagements),
+        quoteRate: percent(quotedLeads.length, cohortLeads.length),
+        conversionRate: percent(convertedLeads.length, cohortLeads.length),
         engagementRows: filteredEngagements.map(engagementDetailRow),
-        leadRows: leadsFromEngagement.map(leadDetailRow),
+        leadRows: cohortLeads.map(leadDetailRow),
         quotedLeadRows: quotedLeads.map(leadDetailRow),
         convertedLeadRows: convertedLeads.map(leadDetailRow)
       };
     }, [
-      filteredEngagements,
-      activeLeads
+      filteredEngagements, activeLeads, period, fromDate, toDateValue
     ]);
 
   const agentWarmth =
@@ -4758,6 +4748,23 @@ export default function AdminEngagementDashboard() {
       filteredEngagements,
       filteredLeads
     ]);
+
+  const relationshipGrades = useMemo(() => buildTravelAgentEngagementIntelligence({
+    travelAgents: activeTravelAgents,
+    engagements: activeEngagements,
+    leads: activeLeads,
+    leadsAvailable: true,
+    now: new Date()
+  }).rows, [activeTravelAgents, activeEngagements, activeLeads]);
+
+  const relationshipPerformance = useMemo(() => buildRelationshipPerformance({
+    travelAgents: activeTravelAgents,
+    engagements: activeEngagements,
+    leads: activeLeads,
+    period: getDateRange(period, fromDate, toDateValue),
+    engagementGrades: relationshipGrades,
+    asOf: new Date()
+  }), [activeTravelAgents, activeEngagements, activeLeads, relationshipGrades, period, fromDate, toDateValue]);
 
   const teamEngagementRows = useMemo(() => {
     const teamMap = new Map();
@@ -5083,6 +5090,9 @@ export default function AdminEngagementDashboard() {
           )}
         </section>
 
+        {/* Relationship performance: event dates, handoff attribution and actions. */}
+        <RelationshipPerformancePanel report={relationshipPerformance} />
+
         {/* SELECTED PERIOD BUSINESS SNAPSHOT */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -5092,7 +5102,7 @@ export default function AdminEngagementDashboard() {
               </h2>
 
               <p className="mt-1 text-xs text-slate-500">
-                Business flow is shown as Agent Added → Agent Contacted → Lead Generated → Quote Sent → Converted. Contact metrics use the engagement filters; lead and quotation metrics use the Global Date + Team scope.
+                These are separate events in the selected period: new agents / leads by created date, quotes by actual dispatch date and conversions by confirmed Deal Won date. Engagement contact metrics use the page filters; commercial metrics use the global Date + Team scope.
               </p>
             </div>
 
@@ -5681,8 +5691,7 @@ export default function AdminEngagementDashboard() {
             </h2>
 
             <p className="mt-1 text-xs text-slate-500">
-              Track how outreach activity converts into leads, quotations, and
-              won business.
+              A fixed enquiry-creation cohort: leads generated from filtered engagement during the selected period. Later quote and win stages reflect their current status; they do not represent this month's quote or win events.
             </p>
           </div>
 
@@ -5708,7 +5717,7 @@ export default function AdminEngagementDashboard() {
             <FunnelCard
               label="Quoted Leads"
               value={conversionFunnel.quotedLeads}
-              helper={`${conversionFunnel.quoteRate}% of engagement leads moved to quote.`}
+              helper={`${conversionFunnel.quoteRate}% of this enquiry cohort has documented sent-quote evidence.`}
               percentValue={conversionFunnel.quoteRate}
               tone="amber"
               onClick={() => setDashboardDrilldown({ title: "Quoted Leads", helper: "Engagement-sourced Leads that moved to quotation.", rows: conversionFunnel.quotedLeadRows })}
@@ -5717,7 +5726,7 @@ export default function AdminEngagementDashboard() {
             <FunnelCard
               label="Converted Leads"
               value={conversionFunnel.convertedLeads}
-              helper={`${conversionFunnel.conversionRate}% converted from engagement leads.`}
+              helper={`${conversionFunnel.conversionRate}% of this enquiry cohort is currently won (any later month).`}
               percentValue={conversionFunnel.conversionRate}
               tone="emerald"
               onClick={() => setDashboardDrilldown({ title: "Converted Leads", helper: "Engagement-sourced Leads that converted/won.", rows: conversionFunnel.convertedLeadRows })}

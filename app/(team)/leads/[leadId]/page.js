@@ -835,6 +835,9 @@ export default function LeadDetailPage() {
         remark: payload?.remark || "",
         lostReason: payload?.lostReason || "",
         cancelReason: payload?.cancelReason || "",
+        wonDateKey: payload?.wonDateKey || "",
+        bookingConfirmationReference: payload?.bookingConfirmationReference || "",
+        wonDateCorrectionReason: payload?.wonDateCorrectionReason || "",
         user
       });
 
@@ -1582,6 +1585,7 @@ export default function LeadDetailPage() {
       )}
 
       <LeadStageCloseModal
+        canCorrectWonDate={["admin", "super_admin"].includes(String(user?.role || "").toLowerCase())}
         open={stageModal.open}
         newStage={stageModal.newStage}
         saving={stageSaving}

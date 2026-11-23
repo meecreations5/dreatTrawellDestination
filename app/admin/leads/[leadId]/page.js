@@ -47,6 +47,7 @@ import LeadTimeline from "@/components/leads/LeadTimeline";
 import AddFollowUpModal from "@/components/leads/AddFollowUpModal";
 import ClientReferenceCard from "@/components/leads/ClientReferenceCard";
 import LeadStageCloseModal from "@/components/leads/LeadStageCloseModal";
+import AdminWonDateCorrection from "@/components/admin/leads/AdminWonDateCorrection";
 
 import LeadStatusChip from "@/components/leads/LeadStatusChip";
 import LeadHealthChip from "@/components/leads/LeadHealthChip";
@@ -76,6 +77,7 @@ const VendorQuotesSidePanel = dynamic(() => import("@/components/vendors/VendorQ
 const CustomerQuotationTab = dynamic(() => import("@/components/leads/CustomerQuotationTab"), { ssr: false });
 const QuotationHistory = dynamic(() => import("@/components/leads/QuotationHistory"), { ssr: false });
 const LeadPaymentsTab = dynamic(() => import("@/components/payments/LeadPaymentsTab"), { ssr: false });
+const LeadInvoicesTab = dynamic(() => import("@/components/invoices/LeadInvoicesTab"), { ssr: false });
 
 /* =========================
    HELPERS
@@ -905,6 +907,12 @@ export default function AdminLeadDetailPage() {
       count: quotationCount
     },
     {
+      value: "invoices",
+      label: "Invoices",
+      icon: ReceiptText,
+      count: "A/R + A/P"
+    },
+    {
       value: "payments",
       label: "Payments",
       icon: Wallet,
@@ -959,6 +967,9 @@ export default function AdminLeadDetailPage() {
         remark: payload?.remark || "",
         lostReason: payload?.lostReason || "",
         cancelReason: payload?.cancelReason || "",
+        wonDateKey: payload?.wonDateKey || "",
+        bookingConfirmationReference: payload?.bookingConfirmationReference || "",
+        wonDateCorrectionReason: payload?.wonDateCorrectionReason || "",
         user
       });
 
@@ -1336,6 +1347,10 @@ export default function AdminLeadDetailPage() {
               />
             )}
 
+            {activeTab === "invoices" && (
+              <LeadInvoicesTab lead={lead} />
+            )}
+
             {activeTab === "payments" && (
               <LeadPaymentsTab lead={lead} />
             )}
@@ -1343,6 +1358,7 @@ export default function AdminLeadDetailPage() {
 
           {/* ================= ADMIN CONTROL RAIL ================= */}
           <aside className="space-y-4 self-start xl:sticky xl:top-6">
+            <AdminWonDateCorrection lead={lead} user={user} />
             <Card className="overflow-hidden border-gray-200">
               <div className="bg-gray-950 p-4 text-white">
                 <div className="flex items-start justify-between gap-3">
@@ -1701,6 +1717,7 @@ export default function AdminLeadDetailPage() {
       )}
 
       <LeadStageCloseModal
+        canCorrectWonDate={["admin", "super_admin"].includes(String(user?.role || "").toLowerCase())}
         open={stageModal.open}
         newStage={stageModal.newStage}
         saving={stageSaving}

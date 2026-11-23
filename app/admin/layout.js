@@ -12,7 +12,8 @@ import { useAuth } from "@/hooks/useAuth";
 import {
   canAccess,
   canEnterAdminArea,
-  getRequiredPermissionForPath
+  getRequiredPermissionForPath,
+  resolveUserRole
 } from "@/lib/rolePermissions";
 
 export default function AdminLayout({ children }) {
@@ -87,7 +88,7 @@ export default function AdminLayout({ children }) {
   return (
     <AdminScopeProvider>
       <section className="min-h-screen bg-slate-50">
-        <ProductivityPulse />
+        {resolveUserRole(user) !== "telecaller" && <ProductivityPulse />}
         <AdminSidebar
           collapsed={collapsed}
           setCollapsed={setCollapsed}

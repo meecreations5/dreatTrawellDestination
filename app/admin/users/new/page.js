@@ -13,6 +13,7 @@ import {
   Loader2,
   Mail,
   Phone,
+  PhoneCall,
   ShieldCheck,
   User,
   Users
@@ -38,6 +39,7 @@ const labelClass = "text-xs font-medium text-gray-500";
 const errorText = "mt-1 text-xs text-red-600";
 
 function getTeamAccessText(role) {
+  if (role === "telecaller") return "Telecalling workspace only: first-contact calling, outcome logging and qualified agent handover. No Lead, Vendor, Quotation or Finance permissions.";
   if (["employee", "operation_executive"].includes(role)) {
     return "Full operational User Front: Dashboard, Action Center, Travel Agents, Engagements, Meetings, Leads and Destinations. The role changes KPI/workstream accountability and approved Admin modules, not User Front visibility.";
   }
@@ -52,7 +54,8 @@ const roleIcons = {
   operation_executive: Briefcase,
   associate: Handshake,
   partner: Building2,
-  finance: Briefcase
+  finance: Briefcase,
+  telecaller: PhoneCall
 };
 
 export default function AddUserPage() {
@@ -210,7 +213,7 @@ export default function AddUserPage() {
               </div>
 
               <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-                <div className="mb-5"><h2 className="text-base font-semibold text-gray-900">Role</h2><p className="mt-1 text-sm text-gray-500">Role controls Admin access. Every active user automatically gets the normal Team/User workspace.</p></div>
+                <div className="mb-5"><h2 className="text-base font-semibold text-gray-900">Role</h2><p className="mt-1 text-sm text-gray-500">Role controls Admin access. Role controls available workspaces. Telecallers get a dedicated calling workspace.</p></div>
 
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                   {availableRoles.map(role => {

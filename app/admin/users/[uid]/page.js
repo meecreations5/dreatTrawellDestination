@@ -14,6 +14,7 @@ import {
   Loader2,
   Mail,
   Phone,
+  PhoneCall,
   ShieldCheck,
   User,
   Users
@@ -51,7 +52,8 @@ const roleIcons = {
   operation_executive: Briefcase,
   associate: Handshake,
   partner: Building2,
-  finance: Briefcase
+  finance: Briefcase,
+  telecaller: PhoneCall
 };
 
 function normalizeRole(data = {}) {
@@ -59,6 +61,7 @@ function normalizeRole(data = {}) {
 }
 
 function getTeamAccessText(role) {
+  if (role === "telecaller") return "Restricted Telecalling workspace only: contact unassigned agents and hand them to the Relationship / Lead Executive. No Accounts or Quotations access.";
   if (["employee", "operation_executive"].includes(role)) {
     return "Full operational User Front: Dashboard, Action Center, Travel Agents, Engagements, Meetings, Leads and Destinations. The role changes KPI/workstream accountability and approved Admin modules, not User Front visibility.";
   }

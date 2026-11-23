@@ -52,12 +52,13 @@ const ACCESS_ACTION_KEYS = [
   "dashboard.view",
   "destinations.view", "destinations.create", "destinations.edit", "destinations.delete",
   "travel_agents.view", "travel_agents.create", "travel_agents.edit", "travel_agents.change_status", "travel_agents.change_potential", "travel_agents.assign",
+  "telecalling.view", "telecalling.call", "telecalling.assign",
   "engagements.view", "engagements.create", "engagements.edit",
   "meetings.view", "meetings.schedule", "meetings.edit", "meetings.assign_another_user", "meetings.cancel",
   "leads.view", "leads.create", "leads.edit", "leads.assign", "leads.close_won", "leads.close_lost", "leads.reopen", "leads.export",
   "quotations.view", "quotations.create", "quotations.edit", "quotations.send", "quotations.resend", "quotations.delete_draft", "quotations.create_revision",
   "vendors.view", "vendors.create", "vendors.edit",
-  "payments.view", "payments.create", "payments.edit", "payments.approve", "payments.view_vendor_cost", "payments.view_revenue_gp",
+  "payments.view", "payments.create", "payments.edit", "payments.approve", "payments.void", "payments.view_vendor_cost", "payments.view_revenue_gp",
   "reports.view", "reports.export",
   "communications.view", "communications.create", "communications.edit", "communications.send",
   "documents.view", "documents.upload", "documents.edit", "documents.delete",
@@ -72,7 +73,7 @@ const SCOPE_ACTION_KEYS = new Set([
   "meetings.view", "meetings.schedule", "meetings.edit", "meetings.assign_another_user", "meetings.cancel",
   "leads.view", "leads.edit", "leads.assign", "leads.close_won", "leads.close_lost", "leads.reopen", "leads.export",
   "quotations.view", "quotations.create", "quotations.edit", "quotations.send", "quotations.resend", "quotations.delete_draft", "quotations.create_revision",
-  "payments.view", "payments.create", "payments.edit", "payments.approve", "payments.view_vendor_cost", "payments.view_revenue_gp",
+  "payments.view", "payments.create", "payments.edit", "payments.approve", "payments.void", "payments.view_vendor_cost", "payments.view_revenue_gp",
   "reports.view", "reports.export"
 ]);
 
@@ -86,7 +87,7 @@ function normalizeRole(data = {}) {
   const rawRole = String(data.role || "").trim();
   if (rawRole) {
     const role = rawRole.toLowerCase().replace(/[\s-]+/g, "_");
-    if (["super_admin", "admin", "manager", "employee", "operation_executive", "associate", "partner", "finance"].includes(role)) return role;
+    if (["super_admin", "admin", "manager", "employee", "operation_executive", "associate", "partner", "finance", "telecaller"].includes(role)) return role;
     if (role === "operations_executive") return "operation_executive";
     if (["team", "sales"].includes(role)) return "employee";
     return "employee";
@@ -128,6 +129,11 @@ function getRoleActionDefaults(role) {
     return defaults;
   }
 
+  if (normalizedRole === "telecaller") {
+    allowActions(defaults, ["telecalling.view", "telecalling.call", "telecalling.assign", "travel_agents.view"], "all");
+    return defaults;
+  }
+
   // Standard Team/User workspace.
   allowActions(defaults, ["dashboard.view"], "all");
   allowActions(defaults, [
@@ -153,6 +159,7 @@ function getRoleActionDefaults(role) {
   }
 
   if (normalizedRole === "manager") {
+    allowPrefix(defaults, "telecalling", "all");
     ["travel_agents", "engagements", "meetings", "leads", "quotations"].forEach(prefix => allowPrefix(defaults, prefix, "team"));
     allowActions(defaults, ["leads.assign", "meetings.assign_another_user"], "team");
     allowActions(defaults, [
@@ -164,6 +171,7 @@ function getRoleActionDefaults(role) {
 
   if (normalizedRole === "finance") {
     allowPrefix(defaults, "payments", "all");
+    defaults["payments.void"] = { allowed: false, scope: "none" };
     allowPrefix(defaults, "vendors", "all");
     allowActions(defaults, ["reports.view", "reports.export", "quotations.view", "leads.view"], "all");
   }
@@ -365,6 +373,11 @@ async function generateEmployeeId(role, associateType) {
     prefix = "DT-EMP";
   }
 
+  if (role === "telecaller") {
+    counterKey = "telecaller";
+    prefix = "DT-TCL";
+  }
+
   if (role === "operation_executive") {
     counterKey = "operation_executive";
     prefix = "DT-OPE";
@@ -451,6 +464,7 @@ exports.createTeamUser = onCall(async (request) => {
     "manager",
     "employee",
     "operation_executive",
+    "telecaller",
     "associate",
     "partner",
     "finance"
@@ -671,7 +685,12 @@ function serializeOverridesForCompare(overrides = {}) {
 }
 
 exports.updateUserAccess = onCall(async (request) => {
+  // This stage label helps identify unexpected server-side failures without
+  // exposing personal user information to the CRM browser.
+  let updateStage = "authenticate_actor";
+  try {
   const actor = await getLoggedInUser(request.auth);
+  updateStage = "validate_requested_change";
   if (actor.active === false) {
     throw new HttpsError("permission-denied", "Inactive users cannot manage users");
   }
@@ -681,6 +700,7 @@ exports.updateUserAccess = onCall(async (request) => {
   if (!userId) throw new HttpsError("invalid-argument", "User document ID is required");
 
   const targetRef = admin.firestore().collection("users").doc(userId);
+  updateStage = "load_target_user";
   const targetSnap = await targetRef.get();
   if (!targetSnap.exists) throw new HttpsError("not-found", "User not found");
 
@@ -756,6 +776,7 @@ exports.updateUserAccess = onCall(async (request) => {
   // stale duplicate after refresh and make the role appear to roll back.
   const previousEmail = cleanAccessString(previous.email).toLowerCase();
   const previousUid = cleanAccessString(previous.uid);
+  updateStage = "resolve_duplicate_user_profiles";
   const usersSnap = await admin.firestore().collection("users").get();
   const identityDocs = usersSnap.docs.filter(docSnap => {
     if (docSnap.id === userId) return true;
@@ -806,6 +827,7 @@ exports.updateUserAccess = onCall(async (request) => {
     accessUpdatedByUserId: actor.id || ""
   };
 
+  updateStage = "write_user_and_audit_transaction";
   try {
     await admin.firestore().runTransaction(async tx => {
       tx.update(targetRef, payload);
@@ -873,6 +895,7 @@ exports.updateUserAccess = onCall(async (request) => {
     );
   }
 
+  updateStage = "verify_saved_user";
   const persistedSnap = await targetRef.get();
   if (!persistedSnap.exists) {
     throw new HttpsError("failed-precondition", "User could not be verified after save");
@@ -891,6 +914,7 @@ exports.updateUserAccess = onCall(async (request) => {
     throw new HttpsError("failed-precondition", "Role save verification failed. The user record was changed by another legacy path.");
   }
 
+  updateStage = "verify_duplicate_user_profiles";
   const verifySnaps = await Promise.all(identityRefs.map(ref => ref.get()));
   const inconsistentIdentityDoc = verifySnaps.find(docSnap => {
     if (!docSnap.exists) return false;
@@ -923,6 +947,18 @@ exports.updateUserAccess = onCall(async (request) => {
     canonicalAccessVersion: nextAccessVersion,
     roleModelVersion: "2.7.5.8.3"
   };
+  } catch (error) {
+    console.error("updateUserAccess failed", {
+      stage: updateStage,
+      code: error?.code || "unknown",
+      message: error?.message || String(error)
+    });
+    if (error instanceof HttpsError) throw error;
+    throw new HttpsError(
+      "internal",
+      "User update failed on the server. Review the updateUserAccess function logs."
+    );
+  }
 });
 
 /* =========================

@@ -9,7 +9,11 @@
     "lint": "eslint",
     "test:activation": "node --test tests/activation-and-permissions.test.mjs",
     "test:intelligence": "node --test tests/engagement-intelligence.test.mjs",
-    "test:crm": "node --test tests/activation-and-permissions.test.mjs tests/engagement-intelligence.test.mjs tests/engagement-voice.test.mjs"
+    "test:crm": "node --test tests/activation-and-permissions.test.mjs tests/engagement-intelligence.test.mjs tests/engagement-voice.test.mjs",
+    "test:invoices": "node --test tests/invoices.test.mjs",
+    "test:telecalling": "node --test tests/telecalling-and-payment-void.test.mjs",
+    "test:reporting": "node --test tests/monthly-relationship-reporting.test.mjs",
+    "test:all": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "firebase": "^12.7.0",

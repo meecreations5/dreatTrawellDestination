@@ -1,0 +1,21 @@
+# V2.7.5.12.24 changed files relative to DreamTrawell_CRM_Updated
+V2_7_5_12_24_FINANCIAL_SNAPSHOT_SECURITY.md
+V2_7_5_12_24_UNIFIED_BUSINESS_DASHBOARDS.md
+app/(team)/leads/page.js
+app/admin/business-verification/page.js
+app/admin/dashboard/page.js
+app/admin/invoices/page.js
+app/admin/leads/dashboard/page.js
+app/admin/travel-agents/dashboard/page.js
+components/admin/dashboard/ConfirmedBusinessPanel.js
+components/admin/dashboard/RevenueByDestinationChart.js
+components/admin/dashboard/engagements/RelationshipPerformancePanel.js
+components/admin/dashboard/management/ManagementDashboardUi.js
+lib/correctDealWonDate.js
+lib/leadCustomerPayments.js
+lib/reopenLead.js
+lib/reporting/businessIntelligence.mjs
+lib/reporting/relationshipPerformance.mjs
+lib/updateLeadStage.js
+lib/verifyConfirmedBusiness.js
+tests/business-intelligence.test.mjs

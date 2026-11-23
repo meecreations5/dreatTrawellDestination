@@ -854,13 +854,13 @@ function ManagementOverviewTable({ rows, onOpenMetric }) {
     <DashboardTable
       icon={Users}
       title="Team Member Management Overview"
-      description="Lead ownership, revenue and travel-agent engagement performance in one view."
+      description="Lead generation and engagement activity; closures and verified INR gross profit are credited to the closing executive."
       headers={[
         "Team Member",
         "Leads",
-        "Won",
-        "Quotation",
-        "GP",
+        "Deals Closed",
+        "Booked INR",
+        "Expected GP INR",
         "Engagements",
         "First Calls",
         "Last Activity",
@@ -887,27 +887,27 @@ function ManagementOverviewTable({ rows, onOpenMetric }) {
 
           <td className="px-4 py-3 text-right">
             <ClickableTableMetric
-              value={row.wonLeads}
+              value={row.managedWonLeads}
               tone="green"
-              onClick={() => onOpenMetric?.(row, "wonLeads")}
+              onClick={() => onOpenMetric?.(row, "managedWonLeads")}
             />
           </td>
 
           <td className="px-4 py-3 text-right">
             <ClickableTableMetric
-              value={row.quotationValue}
-              display={formatCurrency(row.quotationValue)}
+              value={row.managedBookedInr}
+              display={formatCurrency(row.managedBookedInr)}
               tone="purple"
-              onClick={() => onOpenMetric?.(row, "quotationValue")}
+              onClick={() => onOpenMetric?.(row, "managedBookedInr")}
             />
           </td>
 
           <td className="px-4 py-3 text-right">
             <ClickableTableMetric
-              value={row.grossProfit}
-              display={formatCurrency(row.grossProfit)}
+              value={row.managedGrossProfit}
+              display={formatCurrency(row.managedGrossProfit)}
               tone="emerald"
-              onClick={() => onOpenMetric?.(row, "grossProfit")}
+              onClick={() => onOpenMetric?.(row, "managedGrossProfit")}
             />
           </td>
 
@@ -946,74 +946,21 @@ function ManagementFinanceTable({ rows, onOpenMetric }) {
   return (
     <DashboardTable
       icon={CircleDollarSign}
-      title="Team Finance Overview"
-      description="Revenue, collection, vendor payout and gross profit by team member."
-      headers={[
-        "Team Member",
-        "Quotation Value",
-        "Customer Received",
-        "Vendor Paid",
-        "Gross Profit",
-        "Won Leads",
-        "Score"
-      ]}
-      emptyText="No finance data found."
+      title="Closing Executive · Booked Business"
+      description="Deal Won date-based amounts in INR. Only reconciled snapshots contribute to value, cost and GP; pending bookings are shown separately."
+      headers={["Closing Executive", "Deals Won", "Booked INR", "Vendor Cost INR", "Expected GP INR", "Pending INR Review", "Score"]}
+      emptyText="No verified booked business yet."
       colSpan={7}
     >
       {rows.map(row => (
         <tr key={row.uid || row.email || row.name} className="hover:bg-gray-50">
-          <td className="px-4 py-3 text-left">
-            <div className="font-medium text-gray-900">{row.name}</div>
-            <div className="text-xs text-gray-500">{row.email || "—"}</div>
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.quotationValue}
-              display={formatCurrency(row.quotationValue)}
-              tone="purple"
-              onClick={() => onOpenMetric?.(row, "quotationValue")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.receivedAmount}
-              display={formatCurrency(row.receivedAmount)}
-              tone="green"
-              onClick={() => onOpenMetric?.(row, "receivedAmount")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.vendorPaid}
-              display={formatCurrency(row.vendorPaid)}
-              tone="blue"
-              onClick={() => onOpenMetric?.(row, "vendorPaid")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.grossProfit}
-              display={formatCurrency(row.grossProfit)}
-              tone="emerald"
-              onClick={() => onOpenMetric?.(row, "grossProfit")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right">
-            <ClickableTableMetric
-              value={row.wonLeads}
-              tone="green"
-              onClick={() => onOpenMetric?.(row, "wonLeads")}
-            />
-          </td>
-
-          <td className="px-4 py-3 text-right font-semibold">
-            {row.score}
-          </td>
+          <td className="px-4 py-3 text-left"><div className="font-medium text-gray-900">{row.name}</div><div className="text-xs text-gray-500">{row.email || "—"}</div></td>
+          <td className="px-4 py-3 text-right"><ClickableTableMetric value={row.managedWonLeads} tone="green" onClick={() => onOpenMetric?.(row, "managedWonLeads")}/></td>
+          <td className="px-4 py-3 text-right"><ClickableTableMetric value={row.managedBookedInr} display={formatCurrency(row.managedBookedInr)} tone="purple" onClick={() => onOpenMetric?.(row, "managedBookedInr")}/></td>
+          <td className="px-4 py-3 text-right"><ClickableTableMetric value={row.managedVendorInr} display={formatCurrency(row.managedVendorInr)} tone="blue" onClick={() => onOpenMetric?.(row, "managedVendorInr")}/></td>
+          <td className="px-4 py-3 text-right"><ClickableTableMetric value={row.managedGrossProfit} display={formatCurrency(row.managedGrossProfit)} tone="emerald" onClick={() => onOpenMetric?.(row, "managedGrossProfit")}/></td>
+          <td className="px-4 py-3 text-right"><ClickableTableMetric value={row.managedPendingFinance} tone="amber" onClick={() => onOpenMetric?.(row, "managedPendingFinance")}/></td>
+          <td className="px-4 py-3 text-right font-semibold">{row.score}</td>
         </tr>
       ))}
     </DashboardTable>

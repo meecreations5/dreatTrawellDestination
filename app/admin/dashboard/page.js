@@ -39,6 +39,9 @@ import { WORKSTREAMS, roleWorkstream, workstreamShortLabel } from "@/lib/workstr
 
 /* DASHBOARD COMPONENTS */
 import DashboardKpiCard from "@/components/admin/dashboard/DashboardKpiCard";
+import ConfirmedBusinessPanel from "@/components/admin/dashboard/ConfirmedBusinessPanel";
+import { businessDateKey } from "@/lib/reporting/leadReportingDates.mjs";
+import { summarizeConfirmedBusiness, getBookingFinance, groupConfirmedBusiness, formatInr } from "@/lib/reporting/businessIntelligence.mjs";
 
 /* ENGAGEMENT COMPONENTS */
 import EngagementKpiCard from "@/components/admin/dashboard/engagements/EngagementKpiCard";
@@ -431,11 +434,17 @@ export default function AdminDashboardGraph() {
   }, [periodEngagements, periodTravelAgents]);
 
 
-  const convertedPeriodLeads = useMemo(() => {
-    return getActiveLeads(teamScopedLeads).filter(lead => {
-      return isWonLead(lead) && isInSelectedRangeByDate(getLeadWonDate(lead), rangeWindow);
-    });
-  }, [teamScopedLeads, rangeWindow]);
+  // Canonical booking-date report. A single won lead represents one booking.
+  // Historical INR figures without a verified snapshot are flagged, not guessed.
+  const confirmedBusiness = useMemo(() => summarizeConfirmedBusiness(teamScopedLeads, {
+    from: rangeWindow?.start ? businessDateKey(rangeWindow.start) : '',
+    to: rangeWindow?.end ? businessDateKey(rangeWindow.end) : ''
+  }), [teamScopedLeads, rangeWindow]);
+  const wonLeadIds = useMemo(() => new Set(confirmedBusiness.rows.map(row => row.id)), [confirmedBusiness]);
+  const convertedPeriodLeads = useMemo(() => getActiveLeads(teamScopedLeads).filter(
+    lead => wonLeadIds.has(String(lead.id))
+  ), [teamScopedLeads, wonLeadIds]);
+  const reportableWonLeadIds = useMemo(() => new Set(confirmedBusiness.verified.map(row => row.id)), [confirmedBusiness]);
 
   const lostPeriodLeads = useMemo(() => {
     return getActiveLeads(teamScopedLeads).filter(lead => {
@@ -457,10 +466,10 @@ export default function AdminDashboardGraph() {
   }, [teamScopedLeads, rangeWindow]);
 
   const quoteValuePeriodLeads = useMemo(() => {
-    return getActiveLeads(periodLeads).filter(lead => {
-      return hasQuotationSent(lead) && getLeadQuotationAmount(lead) > 0;
-    });
-  }, [periodLeads]);
+    return getActiveLeads(teamScopedLeads).filter(lead =>
+      hasQuotationSent(lead) && isInSelectedRangeByDate(getQuotationDate(lead), rangeWindow)
+    );
+  }, [teamScopedLeads, rangeWindow]);
 
   /* =========================
      LEAD TOTALS
@@ -543,13 +552,8 @@ export default function AdminDashboardGraph() {
       return sum + getLeadQuotationAmount(lead);
     }, 0);
 
-    const vendorCost = financeLeads.reduce((sum, lead) => {
-      return sum + getLeadVendorCost(lead);
-    }, 0);
-
-    const grossProfit = financeLeads.reduce((sum, lead) => {
-      return sum + getLeadGrossProfit(lead);
-    }, 0);
+    const vendorCost = confirmedBusiness.totals.vendorCostInr;
+    const grossProfit = confirmedBusiness.totals.grossProfitInr;
 
     const quotationGrossProfit = quotationValueLeads.reduce((sum, lead) => {
       return sum + getLeadGrossProfit(lead);
@@ -609,23 +613,11 @@ export default function AdminDashboardGraph() {
       return normalize(lead?.vendorPaymentStatus) === "fully_paid";
     }).length;
 
-    const marginPercent = quotationValue
-      ? Number(((quotationGrossProfit / quotationValue) * 100).toFixed(2))
-      : 0;
-
-    const lockedGrossProfit = convertedPeriodLeads.reduce((sum, lead) => {
-      return sum + getLeadGrossProfit(lead);
-    }, 0);
-
-    const lockedQuotationValue = convertedPeriodLeads.reduce((sum, lead) => {
-      return sum + getLeadQuotationAmount(lead);
-    }, 0);
-
-    const lockedVendorCost = convertedPeriodLeads.reduce((sum, lead) => {
-      return sum + getLeadVendorCost(lead);
-    }, 0);
-
-    const lockedGrossProfitLeads = convertedPeriodLeads.length;
+    const marginPercent = confirmedBusiness.totals.grossMarginPct;
+    const lockedGrossProfit = confirmedBusiness.totals.grossProfitInr;
+    const lockedQuotationValue = confirmedBusiness.totals.sellingInr;
+    const lockedVendorCost = confirmedBusiness.totals.vendorCostInr;
+    const lockedGrossProfitLeads = confirmedBusiness.totals.verifiedWins;
 
 
 
@@ -660,46 +652,11 @@ export default function AdminDashboardGraph() {
       quotationGrossProfit,
       pipelineGrossProfit,
       cashInHand: receivedAmount - vendorPaid,
-      byDestinationRevenue: sumBy(
-        financeLeads,
-        lead => lead.destinationName || "Unknown Destination",
-        getLeadQuotationAmount,
-        formatCurrency
-      ),
-      byDestinationProfit: sumBy(
-        financeLeads,
-        lead => lead.destinationName || "Unknown Destination",
-        getLeadGrossProfit,
-        formatCurrency
-      ),
-      byAgentRevenue: sumBy(
-        financeLeads,
-        lead =>
-          lead.agentName ||
-          lead.agencyName ||
-          lead.travelAgentName ||
-          "Unknown Agent",
-        getLeadQuotationAmount,
-        formatCurrency
-      ),
-      byOwnerRevenue: sumBy(
-        financeLeads,
-        lead => {
-          const owner = getLeadOwner(lead, userMap);
-          return owner.name || "Legacy creator";
-        },
-        getLeadQuotationAmount,
-        formatCurrency
-      ),
-      byAssigneeRevenue: sumBy(
-        financeLeads,
-        lead => {
-          const assignee = getLeadAssignee(lead, userMap);
-          return assignee.name || "Unassigned";
-        },
-        getLeadQuotationAmount,
-        formatCurrency
-      ),
+      byDestinationRevenue: groupConfirmedBusiness(confirmedBusiness, 'destination').map(row => ({name:row.name,count:row.sellingInr,displayCount:formatInr(row.sellingInr)})),
+      byDestinationProfit: groupConfirmedBusiness(confirmedBusiness, 'destination').map(row => ({name:row.name,count:row.grossProfitInr,displayCount:formatInr(row.grossProfitInr)})),
+      byAgentRevenue: groupConfirmedBusiness(confirmedBusiness, 'agentName').map(row => ({name:row.name,count:row.sellingInr,displayCount:formatInr(row.sellingInr)})),
+      byOwnerRevenue: groupConfirmedBusiness(confirmedBusiness, 'executiveName').map(row => ({name:row.name,count:row.sellingInr,displayCount:formatInr(row.sellingInr)})),
+      byAssigneeRevenue: groupConfirmedBusiness(confirmedBusiness, 'executiveName').map(row => ({name:row.name,count:row.sellingInr,displayCount:formatInr(row.sellingInr)})),
       byPaymentStatus: countBy(
         financeLeads,
         lead => lead.customerPaymentStatus || "Not Updated"
@@ -709,7 +666,7 @@ export default function AdminDashboardGraph() {
         lead => lead.vendorPaymentStatus || "Not Updated"
       )
     };
-  }, [periodLeads, userMap, convertedPeriodLeads, quoteValuePeriodLeads]);
+  }, [periodLeads, userMap, convertedPeriodLeads, quoteValuePeriodLeads, confirmedBusiness]);
 
   /* =========================
      VENDOR TOTALS
@@ -1061,6 +1018,9 @@ export default function AdminDashboardGraph() {
           managedQuoteSentLeads: 0,
           managedQuotationValue: 0,
           managedGrossProfit: 0,
+          managedBookedInr: 0,
+          managedVendorInr: 0,
+          managedPendingFinance: 0,
 
           // Travel-agent acquisition and engagement.
           newAgentsAdded: 0,
@@ -1124,13 +1084,10 @@ export default function AdminDashboardGraph() {
       ownerRow.newLeads += 1;
       ownerRow.ownedLeads += 1;
       if (isActiveLead(lead)) ownerRow.activeLeads += 1;
-      if (isWonLead(lead)) ownerRow.wonLeads += 1;
       if (isLostLead(lead)) ownerRow.lostLeads += 1;
-      if (hasQuotationSent(lead)) ownerRow.quoteSentLeads += 1;
       ownerRow.quotationValue += getLeadQuotationAmount(lead);
       ownerRow.receivedAmount += getLeadReceivedAmount(lead);
       ownerRow.vendorPaid += getLeadVendorPaidAmount(lead);
-      ownerRow.grossProfit += getLeadGrossProfit(lead);
       updateLastActivity(ownerRow, lead.lastActivityAt || lead.updatedAt || lead.createdAt);
 
       // Assignee receives workload only; reassignment never changes owner credit.
@@ -1139,13 +1096,37 @@ export default function AdminDashboardGraph() {
         const assigneeRow = ensureMember(assignee);
         assigneeRow.assignedLeads += 1;
         if (isActiveLead(lead)) assigneeRow.assignedActiveLeads += 1;
-        if (isWonLead(lead)) assigneeRow.managedWonLeads += 1;
         if (isLostLead(lead)) assigneeRow.managedLostLeads += 1;
-        if (hasQuotationSent(lead)) assigneeRow.managedQuoteSentLeads += 1;
         assigneeRow.managedQuotationValue += getLeadQuotationAmount(lead);
-        assigneeRow.managedGrossProfit += getLeadGrossProfit(lead);
         updateLastActivity(assigneeRow, lead.lastActivityAt || lead.updatedAt || lead.assignedAt);
       }
+    });
+
+    // Quote sent is credited by the actual quotation dispatch month, not by
+    // enquiry creation. Quote revisions must not add artificial new leads.
+    quoteValuePeriodLeads.forEach(lead => {
+      ensureMember(getLeadOwner(lead, userMap)).quoteSentLeads += 1;
+      if (hasLeadAssignee(lead)) ensureMember(getLeadAssignee(lead, userMap)).managedQuoteSentLeads += 1;
+    });
+
+    // One booked amount on one won lead; period determined by Deal Won date.
+    // Creator has permanent lead attribution, closer has the primary sales credit.
+    convertedPeriodLeads.forEach(lead => {
+      const ownerRow = ensureMember(getLeadOwner(lead, userMap));
+      ownerRow.wonLeads += 1;
+      const finance = getBookingFinance(lead);
+      if (finance.verified) ownerRow.grossProfit += finance.grossProfitInr;
+      const closer = ensureMember({
+        uid: lead.dealWonExecutiveUid || lead.assignedToUid || lead.ownerUid || "",
+        name: lead.dealWonExecutiveName || lead.assignedToName || lead.ownerName || "",
+        email: lead.dealWonExecutiveEmail || ""
+      });
+      closer.managedWonLeads += 1;
+      if (finance.verified) {
+        closer.managedGrossProfit += finance.grossProfitInr;
+        closer.managedBookedInr += finance.sellingInr;
+        closer.managedVendorInr += finance.vendorCostInr;
+      } else closer.managedPendingFinance += 1;
     });
 
     // New travel-agent acquisition credit belongs to the creator of the master record.
@@ -1272,6 +1253,8 @@ export default function AdminDashboardGraph() {
   }, [
     activeUsers,
     periodLeads,
+    convertedPeriodLeads,
+    quoteValuePeriodLeads,
     periodEngagements,
     periodTravelAgents,
     firstCallByNewAgent,
@@ -1290,9 +1273,7 @@ export default function AdminDashboardGraph() {
 
     const quotationRows = quoteValuePeriodLeads;
 
-    const grossProfitRows = convertedPeriodLeads.filter(
-      lead => getLeadGrossProfit(lead) !== 0
-    );
+    const grossProfitRows = convertedPeriodLeads.filter(lead => reportableWonLeadIds.has(String(lead.id)));
 
     const pendingReceivableRows = periodLeads.filter(
       lead => toAmount(lead?.paymentBalance) > 0
@@ -1318,7 +1299,7 @@ export default function AdminDashboardGraph() {
         rows: convertedPeriodLeads,
         type: "lead",
         amountLabel: "Gross Profit",
-        amountGetter: getLeadGrossProfit,
+        amountGetter: lead => getBookingFinance(lead).grossProfitInr ?? 0,
         dateGetter: getLeadWonDate
       },
 
@@ -1382,11 +1363,11 @@ export default function AdminDashboardGraph() {
 
       lockedGrossProfit: {
         title: "Locked Gross Profit",
-        description: "Gross profit locked after leads are marked as Deal Won / Converted / Closed Won.",
-        rows: convertedPeriodLeads,
+        description: "Reconciled INR profit from converted leads won in the selected period. Unverified bookings are excluded.",
+        rows: convertedPeriodLeads.filter(lead => reportableWonLeadIds.has(String(lead.id))),
         type: "lead",
         amountLabel: "Locked GP",
-        amountGetter: getLeadGrossProfit,
+        amountGetter: lead => getBookingFinance(lead).grossProfitInr ?? 0,
         dateGetter: getLeadWonDate,
         summaryCards: [
           {
@@ -1449,7 +1430,8 @@ export default function AdminDashboardGraph() {
     paymentReceivedPeriodLeads,
     attentionSummary.rows,
     financeTotals,
-    range
+    range,
+    reportableWonLeadIds
   ]);
 
   const openLeadMetricDetail = (lead, metricKey) => {
@@ -1527,6 +1509,18 @@ export default function AdminDashboardGraph() {
       return isSameDashboardMember(teamRow, getLeadAssignee(lead, userMap));
     });
 
+    const wonOwnedLeadRows = convertedPeriodLeads.filter(lead =>
+      isSameDashboardMember(teamRow, getLeadOwner(lead, userMap))
+    );
+
+    const wonClosedLeadRows = convertedPeriodLeads.filter(lead =>
+      isSameDashboardMember(teamRow, {
+        uid: lead.dealWonExecutiveUid || lead.assignedToUid || lead.ownerUid || "",
+        email: lead.dealWonExecutiveEmail || "",
+        name: lead.dealWonExecutiveName || lead.assignedToName || lead.ownerName || ""
+      })
+    );
+
     const ownedEngagementRows = engagementRows.filter(item => {
       return isSameDashboardMember(teamRow, getEngagementOwner(item, userMap));
     });
@@ -1572,19 +1566,19 @@ export default function AdminDashboardGraph() {
       quoteSentLeads: {
         title: `${teamRow.name} - Quote Sent Leads`,
         description: "Leads where quotation has been sent.",
-        rows: ownedLeadRows.filter(hasQuotationSent),
+        rows: quoteValuePeriodLeads.filter(lead => isSameDashboardMember(teamRow, getLeadOwner(lead, userMap))),
         type: "lead",
-        amountLabel: "Quotation",
+        amountLabel: "Original quotation amount (currency may vary)",
         amountGetter: getLeadQuotationAmount
       },
 
       wonLeads: {
-        title: `${teamRow.name} - Won Leads`,
-        description: "Converted / deal won leads.",
-        rows: ownedLeadRows.filter(isWonLead),
+        title: `${teamRow.name} - Won Leads (Original Owner)`,
+        description: "Bookings won in this reporting period, attributed to the original lead owner.",
+        rows: wonOwnedLeadRows,
         type: "lead",
-        amountLabel: "Gross Profit",
-        amountGetter: getLeadGrossProfit,
+        amountLabel: "Expected GP (verified INR only)",
+        amountGetter: lead => getBookingFinance(lead).grossProfitInr ?? 0,
         dateGetter: getLeadWonDate
       },
 
@@ -1601,9 +1595,9 @@ export default function AdminDashboardGraph() {
       quotationValue: {
         title: `${teamRow.name} - Quotation Value`,
         description: "Quotation value from leads owned by this team member.",
-        rows: ownedLeadRows.filter(lead => getLeadQuotationAmount(lead) > 0),
+        rows: quoteValuePeriodLeads.filter(lead => isSameDashboardMember(teamRow, getLeadOwner(lead, userMap)) && getLeadQuotationAmount(lead)>0),
         type: "lead",
-        amountLabel: "Quotation",
+        amountLabel: "Original quotation amount (currency may vary)",
         amountGetter: getLeadQuotationAmount
       },
 
@@ -1625,13 +1619,57 @@ export default function AdminDashboardGraph() {
         amountGetter: getLeadVendorPaidAmount
       },
 
-      grossProfit: {
-        title: `${teamRow.name} - Gross Profit`,
-        description: "Gross profit from owned leads.",
-        rows: ownedLeadRows.filter(lead => getLeadGrossProfit(lead) !== 0),
+      managedWonLeads: {
+        title: `${teamRow.name} - Deals Closed`,
+        description: "Actual Deal Won dates in the selected period; primary closing executive attribution.",
+        rows: wonClosedLeadRows,
         type: "lead",
-        amountLabel: "Gross Profit",
-        amountGetter: getLeadGrossProfit,
+        amountLabel: "Booked INR (verified)",
+        amountGetter: lead => getBookingFinance(lead).sellingInr ?? 0,
+        dateGetter: getLeadWonDate
+      },
+      managedBookedInr: {
+        title: `${teamRow.name} - Confirmed Booked Value (INR)`,
+        description: "Verified booked value on bookings closed by this executive. Excludes unreconciled amounts.",
+        rows: wonClosedLeadRows.filter(lead => getBookingFinance(lead).verified),
+        type: "lead",
+        amountLabel: "Booked INR",
+        amountGetter: lead => getBookingFinance(lead).sellingInr ?? 0,
+        dateGetter: getLeadWonDate
+      },
+      managedVendorInr: {
+        title: `${teamRow.name} - Confirmed Vendor Cost (INR)`,
+        description: "Verified vendor cost on bookings closed by this executive.",
+        rows: wonClosedLeadRows.filter(lead => getBookingFinance(lead).verified),
+        type: "lead",
+        amountLabel: "Vendor INR",
+        amountGetter: lead => getBookingFinance(lead).vendorCostInr ?? 0,
+        dateGetter: getLeadWonDate
+      },
+      managedGrossProfit: {
+        title: `${teamRow.name} - Expected GP (INR)`,
+        description: "Expected GP for booked business closed by this executive, verified INR snapshots only.",
+        rows: wonClosedLeadRows.filter(lead => getBookingFinance(lead).verified),
+        type: "lead",
+        amountLabel: "Expected GP INR",
+        amountGetter: lead => getBookingFinance(lead).grossProfitInr ?? 0,
+        dateGetter: getLeadWonDate
+      },
+      managedPendingFinance: {
+        title: `${teamRow.name} - Bookings Pending INR Review`,
+        description: "Booking amounts that still require Finance/Admin reconciliation.",
+        rows: wonClosedLeadRows.filter(lead => !getBookingFinance(lead).verified),
+        type: "lead",
+        dateGetter: getLeadWonDate
+      },
+
+      grossProfit: {
+        title: `${teamRow.name} - Expected Gross Profit (INR)`,
+        description: "Expected gross profit from won leads within the selected confirmation period, original owner attribution. Pending INR snapshots excluded.",
+        rows: wonOwnedLeadRows.filter(lead => getBookingFinance(lead).verified),
+        type: "lead",
+        amountLabel: "Expected GP (INR)",
+        amountGetter: lead => getBookingFinance(lead).grossProfitInr ?? 0,
         showGrossProfitBreakdown: true
       },
 
@@ -1850,199 +1888,13 @@ export default function AdminDashboardGraph() {
         ) : null}
 
 
-        <BusinessPulseCard
-          range={range}
-          financeTotals={financeTotals}
-          leadTotals={leadTotals}
-          vendorTotals={vendorTotals}
-          attentionSummary={attentionSummary}
-          onOpenDetail={openInsight}
-        />
+        <ConfirmedBusinessPanel summary={confirmedBusiness} label="Confirmed Business · Selected Won Period" />
 
-        <section className="grid grid-cols-1 xl:grid-cols-4 gap-4">
-          <ExecutiveKpiCard
-            title="Active Leads"
-            value={leadTotals.activeLeads}
-            helper={`${leadTotals.quoteSentLeads} quotations sent`}
-            icon={LineChart}
-            tone="blue"
-            onClick={() => openInsight("activeLeads")}
-          />
-
-          <ExecutiveKpiCard
-            title="Converted Leads"
-            value={leadTotals.wonLeads}
-            helper={`${leadTotals.lostLeads} lost • ${leadTotals.cancelledInvalidLeads} cancelled / invalid`}
-            icon={CheckCircle2}
-            tone="green"
-            onClick={() => openInsight("convertedLeads")}
-          />
-
-          <ExecutiveKpiCard
-            title="Quotation Value"
-            value={formatCurrency(financeTotals.quotationValue)}
-            helper={`Margin ${financeTotals.marginPercent}%`}
-            icon={IndianRupee}
-            tone="purple"
-            onClick={() => openInsight("quotationValue")}
-          />
-
-          <ExecutiveKpiCard
-            title="Gross Profit"
-            value={formatCurrency(financeTotals.grossProfit)}
-            helper={`${formatCurrency(financeTotals.pipelineGrossProfit)} pipeline GP`}
-            icon={TrendingUp}
-            tone="emerald"
-            onClick={() => openInsight("grossProfit")}
-          />
-        </section>
-
-        <section className="grid grid-cols-1 xl:grid-cols-4 gap-4">
-          <ExecutiveKpiCard
-            title="Locked GP"
-            value={formatCurrency(financeTotals.lockedGrossProfit)}
-            helper={`${financeTotals.lockedGrossProfitLeads} converted leads • ${formatCurrency(financeTotals.lockedVendorCost)} vendor cost`}
-            icon={CheckCircle2}
-            tone="green"
-            onClick={() => openInsight("lockedGrossProfit")}
-          />
-
-          <ExecutiveKpiCard
-            title="Travel Agent Received"
-            value={formatCurrency(financeTotals.receivedAmount)}
-            helper={`${financeTotals.customerFullyPaid} fully paid leads`}
-            icon={Wallet}
-            tone="green"
-            onClick={() => openInsight("customerReceived")}
-          />
-
-          <ExecutiveKpiCard
-            title="Pending TA Collection"
-            value={formatCurrency(financeTotals.pendingReceivable)}
-            helper={financeTotals.pendingReceivable ? "Follow-up required" : "No collection pending"}
-            icon={CreditCard}
-            tone={financeTotals.pendingReceivable ? "amber" : "slate"}
-            onClick={() => openInsight("pendingReceivable")}
-          />
-
-          <ExecutiveKpiCard
-            title="Attention Items"
-            value={attentionSummary.total}
-            helper={`${attentionSummary.critical} critical • ${attentionSummary.high} high`}
-            icon={AlertTriangle}
-            tone={attentionSummary.total ? "red" : "slate"}
-            onClick={() => openInsight("attentionItems")}
-          />
-        </section>
-
-        <section className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-          <DashboardGraphCard
-            title="Finance Health"
-            description="Receivable, received, vendor payout and profit view."
-            icon={CircleDollarSign}
-            tone="purple"
-          >
-            <MiniColumnGraph
-              rows={[
-                {
-                  label: "Quotation",
-                  value: financeTotals.quotationValue,
-                  display: formatCurrency(financeTotals.quotationValue),
-                  tone: "purple"
-                },
-                {
-                  label: "Received",
-                  value: financeTotals.receivedAmount,
-                  display: formatCurrency(financeTotals.receivedAmount),
-                  tone: "green"
-                },
-                {
-                  label: "Vendor Paid",
-                  value: financeTotals.vendorPaid,
-                  display: formatCurrency(financeTotals.vendorPaid),
-                  tone: "blue"
-                },
-                {
-                  label: "Gross Profit",
-                  value: financeTotals.grossProfit,
-                  display: formatCurrency(financeTotals.grossProfit),
-                  tone: "emerald"
-                }
-              ]}
-            />
-          </DashboardGraphCard>
-
-          <DashboardGraphCard
-            title="Pipeline Health"
-            description="Lead movement across assignment, quote and conversion."
-            icon={Layers3}
-            tone="blue"
-          >
-            <MiniColumnGraph
-              rows={[
-                {
-                  label: "Total",
-                  value: leadTotals.total,
-                  display: leadTotals.total,
-                  tone: "slate"
-                },
-                {
-                  label: "Assigned",
-                  value: leadTotals.assignedLeads,
-                  display: leadTotals.assignedLeads,
-                  tone: "blue"
-                },
-                {
-                  label: "Quote Sent",
-                  value: leadTotals.quoteSentLeads,
-                  display: leadTotals.quoteSentLeads,
-                  tone: "purple"
-                },
-                {
-                  label: "Converted",
-                  value: leadTotals.wonLeads,
-                  display: leadTotals.wonLeads,
-                  tone: "green"
-                }
-              ]}
-            />
-          </DashboardGraphCard>
-
-          <DashboardGraphCard
-            title="Risk Signals"
-            description="Items needing team or management attention."
-            icon={AlertTriangle}
-            tone={attentionSummary.total ? "red" : "green"}
-          >
-            <MiniColumnGraph
-              rows={[
-                {
-                  label: "Critical",
-                  value: attentionSummary.critical,
-                  display: attentionSummary.critical,
-                  tone: "red"
-                },
-                {
-                  label: "High",
-                  value: attentionSummary.high,
-                  display: attentionSummary.high,
-                  tone: "orange"
-                },
-                {
-                  label: "Medium",
-                  value: attentionSummary.medium,
-                  display: attentionSummary.medium,
-                  tone: "amber"
-                },
-                {
-                  label: "Vendor",
-                  value: vendorTotals.pendingQuoteLeads,
-                  display: vendorTotals.pendingQuoteLeads,
-                  tone: "purple"
-                }
-              ]}
-            />
-          </DashboardGraphCard>
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <ExecutiveKpiCard title="New Enquiries" value={leadTotals.total} helper="Created in the selected period" icon={LineChart} tone="blue" onClick={() => openInsight("activeLeads")} />
+          <ExecutiveKpiCard title="Quotes Sent" value={leadTotals.quoteSentLeads} helper="Actual quotation dispatch date" icon={IndianRupee} tone="purple" onClick={() => openInsight("quotationValue")} />
+          <ExecutiveKpiCard title="Deals Won" value={leadTotals.wonLeads} helper="Confirmed on the selected dates, including earlier leads" icon={CheckCircle2} tone="green" onClick={() => openInsight("convertedLeads")} />
+          <ExecutiveKpiCard title="Management Attention" value={attentionSummary.total} helper={`${attentionSummary.critical} critical · ${attentionSummary.high} high`} icon={AlertTriangle} tone={attentionSummary.total?"red":"slate"} onClick={() => openInsight("attentionItems")} />
         </section>
 
         <div className="sticky top-20 z-30 bg-white/90 backdrop-blur border border-gray-200 rounded-xl p-1  flex gap-1 overflow-x-auto">
@@ -2081,7 +1933,7 @@ export default function AdminDashboardGraph() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <DashboardKpiCard label="Total Leads" value={leadTotals.total} />
             <DashboardKpiCard label="Quote Sent" value={leadTotals.quoteSentLeads} color="blue" />
-            <DashboardKpiCard label="Margin" value={`${financeTotals.marginPercent}%`} color="purple" />
+            <DashboardKpiCard label="INR snapshots pending" value={confirmedBusiness.totals.pendingWins} color="amber" />
             <DashboardKpiCard label="First Calls" value={engagementTotals.firstCallsCompleted} color="green" />
           </div>
 
@@ -2114,7 +1966,7 @@ export default function AdminDashboardGraph() {
             <MiniBarList
               icon={TrendingUp}
               tone="green"
-              title="Revenue by Destination"
+              title="Confirmed Booked Value by Destination"
               rows={financeTotals.byDestinationRevenue}
             />
             <MiniBarList
@@ -2167,30 +2019,25 @@ export default function AdminDashboardGraph() {
           <SectionHeader
             icon={CircleDollarSign}
             title="Finance Performance"
-            description="Quotation value, receivables, vendor payout and gross profit view."
+            description="Confirmed bookings are tied to Deal Won dates. Payments below are legacy lead-lifetime balances, not monthly cash flow."
           />
 
-          <FinanceFlowCard financeTotals={financeTotals} />
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <DashboardKpiCard label="Quotation Value" value={formatCurrency(financeTotals.quotationValue)} color="purple" />
-            <DashboardKpiCard label="Total Receivable" value={formatCurrency(financeTotals.receivableAmount)} color="blue" />
-            <DashboardKpiCard label="Customer Received" value={formatCurrency(financeTotals.receivedAmount)} color="green" />
-            <DashboardKpiCard label="Pending Receivable" value={formatCurrency(financeTotals.pendingReceivable)} color={financeTotals.pendingReceivable ? "amber" : "gray"} />
+          <ConfirmedBusinessPanel summary={confirmedBusiness} label="Reconciled Booked Business · INR" compact />
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs leading-5 text-amber-900">
+            <b>Collections and payables require transaction-date and currency reconciliation.</b> Existing lead-level payment totals are cumulative and may include amounts in different currencies, so they are intentionally not shown here as monthly INR cash flow. Continue checking actual payment entries in Leads and Accounts until the dated ledger is verified.
           </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <DashboardKpiCard label="Vendor Payable" value={formatCurrency(financeTotals.vendorPayable)} color="blue" />
-            <DashboardKpiCard label="Vendor Paid" value={formatCurrency(financeTotals.vendorPaid)} color="green" />
-            <DashboardKpiCard label="Vendor Balance" value={formatCurrency(financeTotals.vendorBalance)} color={financeTotals.vendorBalance ? "amber" : "gray"} />
-            <DashboardKpiCard label="Margin" value={`${financeTotals.marginPercent}%`} color="purple" />
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+            <DashboardKpiCard label="Deals Won · This Period" value={confirmedBusiness.totals.wins} color="green" />
+            <DashboardKpiCard label="Verified Booked INR" value={formatInr(confirmedBusiness.totals.sellingInr)} color="purple" />
+            <DashboardKpiCard label="Pending INR Review" value={confirmedBusiness.totals.pendingWins} color="amber" />
+            <DashboardKpiCard label="Gross Margin · Verified" value={financeTotals.marginPercent===null?'—':`${financeTotals.marginPercent}%`} color="blue" />
           </div>
 
           <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
             <MiniBarList
               icon={TrendingUp}
               tone="green"
-              title="Revenue by Destination"
+              title="Confirmed Booked Value by Destination"
               rows={financeTotals.byDestinationRevenue}
             />
             <MiniBarList
@@ -2202,7 +2049,7 @@ export default function AdminDashboardGraph() {
             <MiniBarList
               icon={BriefcaseBusiness}
               tone="blue"
-              title="Revenue by Travel Agent"
+              title="Confirmed Booked Value by Travel Agent"
               rows={financeTotals.byAgentRevenue}
             />
           </section>
@@ -2211,7 +2058,7 @@ export default function AdminDashboardGraph() {
             <MiniBarList
               icon={Users}
               tone="purple"
-              title="Revenue by Lead Owner"
+              title="Confirmed Booked Value by Closing Executive"
               rows={financeTotals.byOwnerRevenue}
             />
             <MiniBarList
@@ -2307,9 +2154,9 @@ export default function AdminDashboardGraph() {
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <DashboardKpiCard label="Vendor Cost" value={formatCurrency(financeTotals.vendorCost)} color="blue" />
-            <DashboardKpiCard label="Vendor Paid" value={formatCurrency(financeTotals.vendorPaid)} color="green" />
-            <DashboardKpiCard label="Vendor Balance" value={formatCurrency(financeTotals.vendorBalance)} color={financeTotals.vendorBalance ? "amber" : "gray"} />
+            <DashboardKpiCard label="Cohort Vendor Cost (legacy)" value={formatCurrency(financeTotals.vendorCost)} color="blue" />
+            <DashboardKpiCard label="Cohort Vendor Paid (lifetime)" value={formatCurrency(financeTotals.vendorPaid)} color="green" />
+            <DashboardKpiCard label="Cohort Vendor Balance" value={formatCurrency(financeTotals.vendorBalance)} color={financeTotals.vendorBalance ? "amber" : "gray"} />
             <DashboardKpiCard label="Last Vendor Activity" value={formatDateTime(vendorTotals.lastVendorActivity)} color="purple" />
           </div>
 

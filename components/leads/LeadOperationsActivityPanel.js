@@ -23,6 +23,8 @@ import { collection, onSnapshot, query, where } from "firebase/firestore";
 
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
+import VoiceNoteTextarea from "@/components/engagement/VoiceNoteTextarea";
+import { appendVoiceNote } from "@/lib/engagementVoiceText";
 import { alignToWorkSchedule, DEFAULT_WORK_SCHEDULE } from "@/lib/workSchedule";
 import { subscribeProductivitySettings } from "@/lib/engagementProductivitySettings";
 import {
@@ -213,6 +215,7 @@ function ManualActivityModal({ open, activityType, lead, user, onClose, onSaved 
   const [otherActivityTitle, setOtherActivityTitle] = useState("");
   const [workSchedule, setWorkSchedule] = useState(DEFAULT_WORK_SCHEDULE);
   const [saving, setSaving] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => subscribeProductivitySettings(
@@ -248,6 +251,10 @@ function ManualActivityModal({ open, activityType, lead, user, onClose, onSaved 
 
   const save = async () => {
     setError("");
+    if (voiceBusy) {
+      setError("Finish or resolve the dictated note before saving.");
+      return;
+    }
 
     const dueDate = new Date(dueAt);
     if (!dueAt || Number.isNaN(dueDate.getTime())) {
@@ -474,7 +481,7 @@ function ManualActivityModal({ open, activityType, lead, user, onClose, onSaved 
             <input value={nextAction} onChange={event => setNextAction(event.target.value)} placeholder="Example: Call agent after rate confirmation" className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4">
             <div>
               <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Next Action / Due Date *</label>
               <div className="relative mt-1.5">
@@ -484,14 +491,24 @@ function ManualActivityModal({ open, activityType, lead, user, onClose, onSaved 
             </div>
             <div>
               <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Additional Note</label>
-              <input value={note} onChange={event => setNote(event.target.value)} placeholder="Optional note" className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
+              <div className="mt-1.5">
+                <VoiceNoteTextarea
+                  value={note}
+                  minHeight="80px"
+                  onChange={setNote}
+                  onAppend={text => setNote(prev => appendVoiceNote(prev, text))}
+                  onBusyChange={setVoiceBusy}
+                  disabled={saving}
+                  placeholder="Optional note. Type or dictate in English, Hindi or Marathi."
+                />
+              </div>
             </div>
           </div>
         </div>
 
         <div className="sticky bottom-0 flex justify-end gap-2 border-t border-slate-100 bg-slate-50 px-5 py-4">
           <button type="button" disabled={saving} onClick={() => onClose?.()} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 disabled:opacity-50">Cancel</button>
-          <button type="button" disabled={saving} onClick={save} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
+          <button type="button" disabled={saving || voiceBusy} onClick={save} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
             {saving ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
             Save Activity
           </button>

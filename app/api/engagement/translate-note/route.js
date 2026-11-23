@@ -1,7 +1,8 @@
-// Hindi transcript -> English note. The browser performs speech recognition;
+// Hindi/Marathi transcript -> English note. The browser performs speech recognition;
 // this authenticated endpoint ONLY translates plain text (never audio).
 import { NextResponse } from "next/server";
 import { verifyFirebaseBearerToken } from "@/lib/firebaseAdminServer";
+import { TRANSLATABLE_SOURCES, getTranslationLanguageName } from "@/lib/engagementVoiceText";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,17 +63,18 @@ export async function POST(request) {
   catch { return json({ error: "A valid JSON request is required." }, 400); }
 
   const text = typeof body?.text === "string" ? body.text.trim() : "";
-  if (body?.source !== "hi" || body?.target !== "en") {
-    return json({ error: "Only Hindi-to-English translation is supported." }, 400);
+  const source = body?.source;
+  if (!TRANSLATABLE_SOURCES.includes(source) || body?.target !== "en") {
+    return json({ error: "Only Hindi/Marathi-to-English translation is supported." }, 400);
   }
   if (!text || text.length > MAX_TEXT_LENGTH) {
-    return json({ error: `Hindi transcript must contain 1 to ${MAX_TEXT_LENGTH} characters.` }, 400);
+    return json({ error: `${getTranslationLanguageName(source)} transcript must contain 1 to ${MAX_TEXT_LENGTH} characters.` }, 400);
   }
 
   const apiKey = String(process.env.GOOGLE_CLOUD_TRANSLATION_API_KEY || "").trim();
   if (!apiKey) {
     return json({
-      error: "Hindi-to-English translation has not been configured. Ask your administrator to enable Google Cloud Translation. Your transcript is still available for review."
+      error: `${getTranslationLanguageName(source)}-to-English translation has not been configured. Ask your administrator to enable Google Cloud Translation. Your transcript is still available for review.`
     }, 503);
   }
   if (!permitted(identity.uid)) {
@@ -85,7 +87,7 @@ export async function POST(request) {
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json; charset=utf-8", Accept: "application/json" },
-      body: JSON.stringify({ q: text, source: "hi", target: "en", format: "text" }),
+      body: JSON.stringify({ q: text, source, target: "en", format: "text" }),
       cache: "no-store",
       signal: AbortSignal.timeout(15000)
     });
@@ -93,15 +95,15 @@ export async function POST(request) {
       console.error("Engagement translation service error", { status: response.status });
       return json({ error: response.status === 429
         ? "Translation quota was reached. Please try again later."
-        : "English translation is temporarily unavailable. Your Hindi transcript has been preserved in the form." },
+        : `English translation is temporarily unavailable. Your ${getTranslationLanguageName(source)} transcript has been preserved in the form.` },
       response.status === 429 ? 429 : 502);
     }
     const data = await response.json();
     const translatedText = decodeTranslation(data?.data?.translations?.[0]?.translatedText);
     if (!translatedText) return json({ error: "No English translation was returned. Please try again." }, 502);
-    return json({ translatedText, source: "hi", target: "en" });
+    return json({ translatedText, source, target: "en" });
   } catch (error) {
     console.error("Engagement translation request failed", { name: error?.name });
-    return json({ error: "Translation connection failed. Review your Hindi transcript and retry." }, 503);
+    return json({ error: `Translation connection failed. Review your ${getTranslationLanguageName(source)} transcript and retry.` }, 503);
   }
 }

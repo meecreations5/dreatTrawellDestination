@@ -25,10 +25,13 @@ import {
   RefreshCcw,
   UserRound,
   Wallet,
-  XCircle
+  XCircle,
+  Trash2
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
+import { paymentIsVoided } from "@/lib/paymentVoidCore.mjs";
+import { voidLeadPayment } from "@/lib/paymentVoidService";
 import { useAuth } from "@/hooks/useAuth";
 import { canAccessRecord } from "@/lib/rolePermissions";
 
@@ -300,7 +303,7 @@ function PaymentAmountBlock({ payment }) {
           ${isOutbound ? "text-purple-700" : "text-green-700"}
         `}
       >
-        {isOutbound ? "Paid" : "Received"}
+        {paymentIsVoided(payment) ? "Voided - excluded" : isOutbound ? "Paid" : "Received"}
       </p>
 
       <p className="mt-1 text-lg font-bold text-gray-950">
@@ -335,9 +338,17 @@ function PaymentActions({
   onRejectCustomer,
   onCancelCustomer,
   onMarkVendorPaid,
-  onCancelVendor
+  onCancelVendor,
+  onVoidPayment
 }) {
   const isSaving = savingId === payment.id;
+  if (paymentIsVoided(payment)) return null;
+  const voidButton = onVoidPayment ? (
+    <button type="button" disabled={isSaving} onClick={() => onVoidPayment(payment)}
+      className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50">
+      <Trash2 size={14} /> Void mistaken entry
+    </button>
+  ) : null;
   const isOutbound =
     payment.paymentDirection === PAYMENT_DIRECTION.OUTBOUND;
 
@@ -346,10 +357,11 @@ function PaymentActions({
     const isPaid = payment.status === VENDOR_PAYMENT_STATUS.PAID;
     const isCancelled = payment.status === VENDOR_PAYMENT_STATUS.CANCELLED;
 
-    if (isCancelled) return null;
+    if (isCancelled) return <div className="flex flex-wrap gap-2">{voidButton}</div>;
 
     return (
       <div className="flex flex-wrap gap-2">
+        {voidButton}
         {isPending && onMarkVendorPaid && (
           <button
             type="button"
@@ -395,10 +407,11 @@ function PaymentActions({
   const isCancelled = payment.status === CUSTOMER_PAYMENT_STATUS.CANCELLED;
   const isVerified = payment.status === CUSTOMER_PAYMENT_STATUS.VERIFIED;
 
-  if (isCancelled) return null;
+  if (isCancelled) return <div className="flex flex-wrap gap-2">{voidButton}</div>;
 
   return (
     <div className="flex flex-wrap gap-2">
+      {voidButton}
       {(isPending || isRejected) && onVerifyCustomer && (
         <button
           type="button"
@@ -461,7 +474,8 @@ function PaymentCard({
   onRejectCustomer,
   onCancelCustomer,
   onMarkVendorPaid,
-  onCancelVendor
+  onCancelVendor,
+  onVoidPayment
 }) {
   const isOutbound =
     payment.paymentDirection === PAYMENT_DIRECTION.OUTBOUND;
@@ -485,7 +499,9 @@ function PaymentCard({
                 label={isOutbound ? "Vendor Payment" : "Payment Received"}
               />
 
-              <PaymentStatusBlock payment={payment} />
+              {paymentIsVoided(payment)
+                ? <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-800">Voided</span>
+                : <PaymentStatusBlock payment={payment} />}
 
               <span className="rounded-full border border-white/60 bg-white/80 px-2.5 py-1 text-xs font-semibold text-gray-700">
                 {getPaymentTypeLabel(payment)}
@@ -619,6 +635,13 @@ function PaymentCard({
             </a>
           )}
 
+          {paymentIsVoided(payment) && (
+            <div className="rounded-xl border border-red-100 bg-red-50 p-3 text-xs text-red-800">
+              <p className="font-semibold">This entry is excluded from active payment totals.</p>
+              <p className="mt-1">Reason: {payment.voidReason || "Correction"}</p>
+              <p>Voided by {payment.voidedByName || "Admin"} · {formatDateTime(payment.voidedAt)}</p>
+            </div>
+          )}
           {payment.remark && (
             <InfoLine
               icon={FileText}
@@ -646,6 +669,7 @@ function PaymentCard({
             onCancelCustomer={onCancelCustomer}
             onMarkVendorPaid={onMarkVendorPaid}
             onCancelVendor={onCancelVendor}
+            onVoidPayment={onVoidPayment}
           />
         </div>
       </div>
@@ -666,6 +690,7 @@ export default function PaymentHistoryList({
   const canViewVendorCost = Boolean(user && canAccessRecord(user, "payments.view_vendor_cost", lead, "lead"));
   const canApprovePayment = Boolean(user && canAccessRecord(user, "payments.approve", lead, "lead"));
   const canEditPayment = Boolean(user && canAccessRecord(user, "payments.edit", lead, "lead"));
+  const canVoidPayment = Boolean(user && canAccessRecord(user, "payments.void", lead, "lead"));
 
   const [customerPayments, setCustomerPayments] = useState([]);
   const [vendorPayments, setVendorPayments] = useState([]);
@@ -759,13 +784,16 @@ export default function PaymentHistoryList({
     return () => unsub();
   }, [leadId, canViewVendorCost]);
 
-  const allPayments = useMemo(() => {
-    return [...customerPayments, ...vendorPayments].sort(sortPaymentsByLatest);
-  }, [customerPayments, vendorPayments]);
+  const activeCustomerPayments = useMemo(() => customerPayments.filter(p => !paymentIsVoided(p)), [customerPayments]);
+  const activeVendorPayments = useMemo(() => vendorPayments.filter(p => !paymentIsVoided(p)), [vendorPayments]);
+  const voidedPayments = useMemo(() => [...customerPayments, ...vendorPayments].filter(paymentIsVoided).sort(sortPaymentsByLatest), [customerPayments, vendorPayments]);
+  const allPayments = useMemo(() => [...activeCustomerPayments, ...activeVendorPayments].sort(sortPaymentsByLatest), [activeCustomerPayments, activeVendorPayments]);
 
   const filteredPayments = useMemo(() => {
-    if (filter === "customer") return customerPayments.sort(sortPaymentsByLatest);
-    if (filter === "vendor") return vendorPayments.sort(sortPaymentsByLatest);
+    if (filter === "customer") return [...activeCustomerPayments].sort(sortPaymentsByLatest);
+    if (filter === "vendor") return [...activeVendorPayments].sort(sortPaymentsByLatest);
+
+    if (filter === "voided") return canVoidPayment ? voidedPayments : [];
 
     if (filter === "pending") {
       return allPayments.filter(payment => {
@@ -777,7 +805,7 @@ export default function PaymentHistoryList({
     }
 
     return allPayments;
-  }, [allPayments, customerPayments, vendorPayments, filter]);
+  }, [allPayments, activeCustomerPayments, activeVendorPayments, voidedPayments, filter, canVoidPayment]);
 
   const loading = loadingCustomer || loadingVendor;
 
@@ -897,6 +925,22 @@ export default function PaymentHistoryList({
     }
   };
 
+  const handleVoidPayment = async payment => {
+    if (!canVoidPayment || savingId) return;
+    const currency = payment.currency || "INR";
+    const party = getPartyName(payment);
+    const shown = formatMoney(payment.amount, currency);
+    if (!window.confirm(`VOID PAYMENT ENTRY?\n\n${getPaymentTitle(payment)}\n${party}\n${shown}\nTransaction: ${payment.transactionRef || "Not provided"}\n\nThis removes the entry from active totals and reverses its invoice allocation. It does NOT reverse any bank transfer.`)) return;
+    const reason = window.prompt("Mandatory reason (at least 8 characters):", "Payment entered by mistake");
+    if (!reason?.trim()) return;
+    setSavingId(payment.id); setError("");
+    try {
+      await voidLeadPayment({ leadId, paymentId: payment.id, direction: payment.paymentDirection === PAYMENT_DIRECTION.OUTBOUND ? "vendor" : "customer", reason, user });
+      onUpdated?.();
+    } catch (err) { setError(err?.message || "Unable to void payment."); }
+    finally { setSavingId(""); }
+  };
+
   return (
     <div className="space-y-4">
       {/* HEADER */}
@@ -927,7 +971,7 @@ export default function PaymentHistoryList({
             <FilterButton
               active={filter === "customer"}
               label="Received"
-              count={customerPayments.length}
+              count={activeCustomerPayments.length}
               onClick={() => setFilter("customer")}
             />
 
@@ -935,10 +979,17 @@ export default function PaymentHistoryList({
               <FilterButton
                 active={filter === "vendor"}
                 label="Vendor Paid"
-                count={vendorPayments.length}
+                count={activeVendorPayments.length}
                 onClick={() => setFilter("vendor")}
               />
             )}
+
+            {canVoidPayment && <FilterButton
+              active={filter === "voided"}
+              label="Voided (Audit)"
+              count={voidedPayments.length}
+              onClick={() => setFilter("voided")}
+            />}
 
             <FilterButton
               active={filter === "pending"}
@@ -987,6 +1038,7 @@ export default function PaymentHistoryList({
               onCancelCustomer={canEditPayment ? handleCancelCustomer : null}
               onMarkVendorPaid={canApprovePayment ? handleMarkVendorPaid : null}
               onCancelVendor={canEditPayment ? handleCancelVendor : null}
+              onVoidPayment={canVoidPayment ? handleVoidPayment : null}
             />
           ))}
         </div>

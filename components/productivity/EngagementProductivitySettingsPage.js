@@ -13,6 +13,7 @@ import {
 import { PRODUCTIVITY_PULSE_TEST_EVENT } from "@/components/productivity/ProductivityPulse";
 
 const ROLE_OPTIONS = [
+  ["telecaller", "Telecaller (optional)"],
   ["employee", "Engagement / Relationship Executive"],
   ["operation_executive", "Lead & Operations Executive"],
   ["manager", "Manager"],

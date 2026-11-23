@@ -21,7 +21,9 @@ import {
   ListChecks,
   UserCheck,
   CalendarClock,
-  ListTodo
+  ListTodo,
+  Receipt,
+  PhoneCall
 } from "lucide-react";
 
 export const adminSidebar = [
@@ -37,6 +39,13 @@ export const adminSidebar = [
     icon: ListTodo,
     href: "/admin/action-center",
     permission: "admin.dashboard"
+  },
+
+  {
+    label: "Telecalling",
+    icon: PhoneCall,
+    href: "/admin/telecalling",
+    permission: "admin.telecalling"
   },
 
   {
@@ -153,6 +162,13 @@ export const adminSidebar = [
         permission: "vendors.create"
       }
     ]
+  },
+
+  {
+    label: "Accounts & Invoicing",
+    icon: Receipt,
+    href: "/admin/invoices",
+    permission: "admin.invoices"
   },
 
   {

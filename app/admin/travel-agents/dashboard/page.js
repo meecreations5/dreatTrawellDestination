@@ -46,6 +46,8 @@ import {
 import { useAuth } from "@/hooks/useAuth";
 import { useAdminScope } from "@/components/admin/AdminScopeProvider";
 import { matchesAdminDateScope } from "@/lib/adminScope";
+import { getDealWonEventDate } from "@/lib/reporting/leadReportingDates.mjs";
+import { getBookingFinance, formatInr } from "@/lib/reporting/businessIntelligence.mjs";
 import AdminGuard from "@/components/AdminGuard";
 
 import AssignTravelAgentModal from "@/components/travel-agents/AssignTravelAgentModal";
@@ -669,6 +671,21 @@ export default function TravelAgentDashboardPage() {
     return map;
   }, [filteredLeads]);
 
+  // Booking-date wins are independent of enquiry-created date. The agent's
+  // enquiry count above still uses the selected lead-creation period.
+  const periodWonLeadsByAgent = useMemo(() => {
+    const map = {};
+    leads.forEach(lead => {
+      if (!isWonLead(lead) || lead.isDeleted===true || lead.deleted===true || lead.deletedAt) return;
+      if (!matchesAdminDateScope(getDealWonEventDate(lead), scope.dateRange, scope.dateFrom, scope.dateTo)) return;
+      const agentId = getLeadAgentId(lead);
+      if (!agentId) return;
+      if (!map[agentId]) map[agentId]=[];
+      if (!map[agentId].some(item=>item.id===lead.id)) map[agentId].push(lead);
+    });
+    return map;
+  }, [leads, scope.dateRange, scope.dateFrom, scope.dateTo]);
+
   const leadAgentMap = useMemo(() => {
     const map = {};
 
@@ -718,16 +735,15 @@ export default function TravelAgentDashboardPage() {
   const enrichedAgents = useMemo(() => {
     return agents.map(agent => {
       const agentLeads = leadMapByAgent[agent.id] || [];
-      const wonLeads = agentLeads.filter(isWonLead);
+      const wonLeads = periodWonLeadsByAgent[agent.id] || [];
       const lostLeads = agentLeads.filter(isLostLead);
 
       const agentTransactions = transactionMapByAgent[agent.id] || [];
       const lastTransaction = agentTransactions[0] || null;
 
-      const revenue = wonLeads.reduce(
-        (sum, lead) => sum + getLeadRevenue(lead),
-        0
-      );
+      const revenue = wonLeads.reduce((sum, lead) => sum + (getBookingFinance(lead).sellingInr || 0), 0);
+      const expectedGp = wonLeads.reduce((sum, lead) => sum + (getBookingFinance(lead).grossProfitInr || 0), 0);
+      const pendingAmounts = wonLeads.filter(lead => !getBookingFinance(lead).verified).length;
 
       const transactionValue = agentTransactions.reduce(
         (sum, transaction) => sum + getTransactionAmount(transaction),
@@ -763,7 +779,9 @@ export default function TravelAgentDashboardPage() {
         wonLeads: wonLeads.length,
         lostLeads: lostLeads.length,
         revenue,
-        conversion: percentage(wonLeads.length, agentLeads.length),
+        expectedGp,
+        pendingAmounts,
+        conversion: percentage(agentLeads.filter(isWonLead).length, agentLeads.length),
         transactionCount: agentTransactions.length,
         transactionValue,
         lastTransaction,
@@ -781,7 +799,7 @@ export default function TravelAgentDashboardPage() {
           : "No Transaction"
       };
     });
-  }, [agents, leadMapByAgent, transactionMapByAgent, userLookup]);
+  }, [agents, leadMapByAgent, periodWonLeadsByAgent, transactionMapByAgent, userLookup]);
 
   const filteredAgents = useMemo(() => {
     const search = normalizeText(filters.search);
@@ -953,10 +971,9 @@ export default function TravelAgentDashboardPage() {
       0
     );
 
-    const totalRevenue = filteredAgents.reduce(
-      (sum, agent) => sum + agent.revenue,
-      0
-    );
+    const totalRevenue = filteredAgents.reduce((sum, agent) => sum + agent.revenue, 0);
+    const totalExpectedGp = filteredAgents.reduce((sum, agent) => sum + agent.expectedGp, 0);
+    const pendingAmounts = filteredAgents.reduce((sum, agent) => sum + agent.pendingAmounts, 0);
 
     return {
       totalAgents,
@@ -974,7 +991,10 @@ export default function TravelAgentDashboardPage() {
       wonLeads,
       lostLeads,
       totalRevenue,
-      conversion: percentage(wonLeads, totalLeads)
+      totalExpectedGp,
+      pendingAmounts,
+      // Different event cohorts: never divide period wins by period new enquiries as a conversion rate.
+      conversion: null
     };
   }, [filteredAgents]);
 
@@ -1448,8 +1468,8 @@ export default function TravelAgentDashboardPage() {
 
                     <p className="mt-1 max-w-3xl text-sm text-blue-100">
                       {isManagement
-                        ? "Monitor assignment, city distribution, transactions, revenue, risk and agent performance."
-                        : "Track your assigned agents, transactions, leads, revenue, risk and priorities."}
+                        ? "Monitor agent assignments, confirmed booked INR, relationship engagement and follow-ups."
+                        : "Track assigned agents, bookings, verified INR value, risks and priorities."}
                     </p>
                   </div>
                 </div>
@@ -1700,17 +1720,17 @@ export default function TravelAgentDashboardPage() {
             />
 
             <KpiCard
-              label={isManagement ? "Revenue" : "My Revenue"}
-              value={formatCurrency(summary.totalRevenue)}
+              label={isManagement ? "Confirmed Booked INR" : "My Confirmed Booked INR"}
+              value={formatInr(summary.totalRevenue)}
               icon={<IndianRupee size={18} />}
               tone="purple"
             />
 
             <KpiCard
-              label={isManagement ? "Conversion" : "My Conversion"}
-              value={`${summary.conversion}%`}
+              label="Expected GP · Verified INR"
+              value={formatInr(summary.totalExpectedGp)}
               icon={<TrendingUp size={18} />}
-              tone="blue"
+              tone="green"
             />
           </div>
 
@@ -1720,6 +1740,8 @@ export default function TravelAgentDashboardPage() {
             <KpiCard label="Business Shut Down" value={summary.businessShutAgents} icon={<Building2 size={18} />} tone={summary.businessShutAgents ? "amber" : "green"} />
             <KpiCard label="Visible Records" value={summary.totalAgents} icon={<Users size={18} />} tone="blue" />
           </div>
+
+          {summary.pendingAmounts>0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">{summary.pendingAmounts} confirmed booking(s) need INR cost/value verification. The booked value and expected GP above contain only reconciled bookings; they are not totals for every Won record.</div>}
 
           {/* CITY + TRANSACTION PANELS */}
           <div className="grid gap-4 lg:grid-cols-2">
@@ -1747,8 +1769,8 @@ export default function TravelAgentDashboardPage() {
           {isManagement && (
             <div className="grid gap-4 lg:grid-cols-2">
               <BarPanel
-                title="Revenue by Assigned User"
-                subtitle="Top assignees by won deal revenue"
+                title="Booked INR by Current Agent Assignee"
+                subtitle="Current agent assignment, not original closing executive credit. Verified bookings by Deal Won date."
                 data={revenueByAssignee}
                 valueFormatter={formatCurrency}
               />
@@ -1760,8 +1782,8 @@ export default function TravelAgentDashboardPage() {
               />
 
               <BarPanel
-                title="Revenue by Category"
-                subtitle="A+ / A / B / C partner contribution"
+                title="Booked INR by Current Agent Category"
+                subtitle="Current agent category. Booked value uses actual Deal Won date and verified INR."
                 data={revenueByCategory}
                 valueFormatter={formatCurrency}
               />
@@ -1783,7 +1805,7 @@ export default function TravelAgentDashboardPage() {
                 </h2>
 
                 <p className="mt-1 text-sm text-slate-500">
-                  Ranked by revenue from won leads.
+                  Ranked by reconciled booked INR from leads won in the selected period. Unverified values are excluded.
                 </p>
               </div>
 
@@ -2413,7 +2435,7 @@ function CityWiseAgentPanel({ data, valueFormatter }) {
             City-wise Travel Agents
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            Agent distribution by city with revenue and lead volume.
+            Agent distribution by city with verified booked INR and lead volume.
           </p>
         </div>
       </div>
@@ -2456,7 +2478,7 @@ function CityWiseAgentPanel({ data, valueFormatter }) {
                 </div>
 
                 <div className="rounded-lg bg-white p-2">
-                  <p className="text-slate-400">Revenue</p>
+                  <p className="text-slate-400">Booked INR</p>
                   <p className="mt-1 font-semibold text-slate-800">
                     {valueFormatter(item.revenue)}
                   </p>

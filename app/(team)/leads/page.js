@@ -1,6 +1,8 @@
 "use client";
+import { isCurrentWon, getDealWonEventDate, getLeadCreatedEventDate, isWithinBusinessDates } from "@/lib/reporting/leadReportingDates.mjs";
 
 import { useEffect, useMemo, useState } from "react";
+import { summarizeConfirmedBusiness, formatInr } from "@/lib/reporting/businessIntelligence.mjs";
 import Link from "next/link";
 import {
   collection,
@@ -221,43 +223,8 @@ const getNormalizedLeadStage = lead =>
     .replaceAll("-", "_")
     .replaceAll(" ", "_");
 
-const isDealWonLead = lead => {
-  if (
-    lead.dealWon === true ||
-    lead.businessGenerated === true ||
-    lead.isBusinessGenerated === true ||
-    lead.converted === true ||
-    lead.isConverted === true ||
-    lead.bookingConfirmed === true
-  ) {
-    return true;
-  }
-
-  if (
-    lead.dealWonAt ||
-    lead.businessGeneratedAt ||
-    lead.convertedAt ||
-    lead.bookingConfirmedAt ||
-    lead.closedWonAt
-  ) {
-    return true;
-  }
-
-  const stage = getNormalizedLeadStage(lead);
-
-  return [
-    "won",
-    "converted",
-    "booked",
-    "confirmed",
-    "closed_won",
-    "booking_confirmed",
-    "business_generated",
-    "package_confirmed",
-    "travel_confirmed",
-    "finalized"
-  ].includes(stage);
-};
+// A reopened lead cannot remain a current win due only to stale convertedAt.
+const isDealWonLead = lead => isCurrentWon(lead);
 
 const isDealLostLead = lead => {
   if (
@@ -778,24 +745,17 @@ export default function LeadDashboardPage() {
   /* =========================
      FILTERED LEADS
   ========================== */
-  const filteredLeads = useMemo(() => {
+  // Keep the selectable enquiry cohort separate from period-specific won events.
+  // The latter must not be filtered by the lead's creation month.
+  const scopeFilteredLeads = useMemo(() => {
     if (dateRangeError) return [];
-
     const searchText = normalize(filters.search);
-    const fromDate = getStartOfDay(filters.dateFrom);
-    const toDate = getEndOfDay(filters.dateTo);
-
     return leads.filter(lead => {
-      const createdDate = getValidDate(lead.createdAt);
       const followUp = getFollowUpBucket(lead);
 
       const createdByMe = isLeadCreatedByUser(lead, user);
       const assignedToMe = isLeadAssignedToUser(lead, user);
       const assignedByMe = isLeadAssignedByUser(lead, user);
-
-      if ((fromDate || toDate) && !createdDate) return false;
-      if (fromDate && createdDate < fromDate) return false;
-      if (toDate && createdDate > toDate) return false;
 
       if (filters.ownership === "created_by_me" && !createdByMe) {
         return false;
@@ -850,6 +810,26 @@ export default function LeadDashboardPage() {
       return true;
     });
   }, [leads, filters, dateRangeError, user]);
+
+  const filteredLeads = useMemo(() => {
+    if (dateRangeError) return [];
+    if (!filters.dateFrom && !filters.dateTo) return scopeFilteredLeads;
+    return scopeFilteredLeads.filter(lead =>
+      isWithinBusinessDates(getLeadCreatedEventDate(lead), filters.dateFrom, filters.dateTo)
+    );
+  }, [scopeFilteredLeads, filters.dateFrom, filters.dateTo, dateRangeError]);
+
+  const bookedBusiness = useMemo(() => summarizeConfirmedBusiness(scopeFilteredLeads, {
+    from: filters.dateFrom, to: filters.dateTo
+  }), [scopeFilteredLeads, filters.dateFrom, filters.dateTo]);
+
+  const dealsWonInPeriod = useMemo(() => {
+    if (dateRangeError) return 0;
+    return scopeFilteredLeads.filter(lead =>
+      isDealWonLead(lead) &&
+      isWithinBusinessDates(getDealWonEventDate(lead), filters.dateFrom, filters.dateTo)
+    ).length;
+  }, [scopeFilteredLeads, filters.dateFrom, filters.dateTo, dateRangeError]);
 
   /* =========================
      SUMMARY
@@ -931,7 +911,8 @@ export default function LeadDashboardPage() {
       createdByMe: createdByMeCount,
       assignedToMe: assignedToMeCount,
       assignedByMe: assignedByMeCount,
-      dealWon: dealWonCount,
+      dealWon: dealsWonInPeriod,
+      dealWonFromEnquiryCohort: dealWonCount,
       dealLost: dealLostCount,
       wonRate,
       lostRate,
@@ -944,7 +925,7 @@ export default function LeadDashboardPage() {
       ownerRows: toSorted(ownerMap).slice(0, 5),
       sourceRows: toSorted(sourceMap).slice(0, 5)
     };
-  }, [filteredLeads, user]);
+  }, [filteredLeads, user, dealsWonInPeriod]);
 
   const recentLeads = useMemo(() => {
     return filteredLeads.slice(0, 6);
@@ -1264,7 +1245,7 @@ export default function LeadDashboardPage() {
         )}
 
         {/* ================= MAIN KPI GRID ================= */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3">
+        <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7 gap-3">
           <KpiCard
             icon={Target}
             label="Total User Leads"
@@ -1301,8 +1282,16 @@ export default function LeadDashboardPage() {
             icon={Trophy}
             label="Deal Won"
             value={summary.dealWon}
-            helper={`${summary.wonRate}% of selected leads`}
+            helper="By actual confirmation date, not enquiry date"
             tone="emerald"
+          />
+
+          <KpiCard
+            icon={CheckCircle2}
+            label="Won from Enquiry Cohort"
+            value={summary.dealWonFromEnquiryCohort}
+            helper={`${summary.wonRate}% of leads created in selected period`}
+            tone="blue"
           />
 
           <KpiCard
@@ -1312,6 +1301,20 @@ export default function LeadDashboardPage() {
             helper={`${summary.lostRate}% of selected leads`}
             tone="red"
           />
+        </section>
+
+        {/* Same booking-date totals as Management; access is limited to leads in this user's existing scope. */}
+        <section className="rounded-2xl border border-blue-100 bg-white p-4 shadow-sm">
+          <h2 className="text-sm font-bold text-slate-900">Confirmed Business · Your Lead Scope</h2>
+          <p className="mt-1 text-xs text-slate-500">Deals won by actual confirmation date, including older enquiries. INR amounts only include reconciled closing snapshots. These are not monthly payments.</p>
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[
+              ['Bookings Won',bookedBusiness.totals.wins],
+              ['Booked Value · INR',formatInr(bookedBusiness.totals.sellingInr)],
+              ['Expected GP · INR',formatInr(bookedBusiness.totals.grossProfitInr)],
+              ['INR verification pending',bookedBusiness.totals.pendingWins]
+            ].map(([label,value])=><div key={label} className="rounded-xl bg-blue-50 p-3"><p className="text-xs text-slate-600">{label}</p><p className="mt-2 text-lg font-bold tabular-nums text-slate-900">{value}</p></div>)}
+          </div>
         </section>
 
         {/* ================= HEALTH KPI GRID ================= */}

@@ -11,6 +11,7 @@ import {
   loginWithMicrosoft,
 } from "@/lib/auth";
 import { useAuth } from "@/hooks/useAuth";
+import { resolveUserRole } from "@/lib/rolePermissions";
 
 export default function LoginPage() {
   const { user, loading } = useAuth();
@@ -26,7 +27,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (mounted && !loading && user) {
-      router.replace("/dashboard");
+      router.replace(resolveUserRole(user) === "telecaller" ? "/telecalling" : "/dashboard");
     }
   }, [mounted, user, loading, router]);
 
@@ -45,7 +46,7 @@ export default function LoginPage() {
         return;
       }
 
-      router.replace("/dashboard");
+      router.replace(resolveUserRole(loggedInUser) === "telecaller" ? "/telecalling" : "/dashboard");
     } catch (err) {
       setError(getLoginErrorMessage(err));
     } finally {

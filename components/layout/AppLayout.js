@@ -8,10 +8,11 @@ import { useAuth } from "@/hooks/useAuth";
 import { signOut } from "firebase/auth";
 import { APP_NAV } from "@/config/appNavigation";
 import { auth } from "@/lib/firebase";
-import { canAccess, getRequiredPermissionForPath } from "@/lib/rolePermissions";
+import { canAccess, getRequiredPermissionForPath, resolveUserRole } from "@/lib/rolePermissions";
 import { getTitleFromAppNav } from "@/lib/getTitleFromAppNav";
 import { LogOut, ArrowLeft } from "lucide-react";
 import ProductivityPulse from "@/components/productivity/ProductivityPulse";
+import HandoffBell from "@/components/handoffs/HandoffBell";
 
 export default function AppLayout({ children }) {
   const pathname = usePathname();
@@ -25,7 +26,10 @@ export default function AppLayout({ children }) {
 
   const visibleNav = useMemo(() => {
     if (!user) return [];
+    const isTelecaller = resolveUserRole(user) === "telecaller";
     return APP_NAV.filter(module =>
+      (!isTelecaller || ["telecalling", "profile"].includes(module.id)) &&
+      (module.id !== "my-handoffs" || ["employee", "operation_executive"].includes(resolveUserRole(user))) &&
       module.showInNav && (!module.permission || canAccess(user, module.permission))
     );
   }, [user]);
@@ -61,10 +65,16 @@ export default function AppLayout({ children }) {
     setMounted(true);
   }, []);
 
+  const telecallerTeamPathAllowed = pathname === "/telecalling" ||
+    pathname === "/profile" || pathname?.startsWith("/profile/");
+
   useEffect(() => {
     if (loading) return;
     if (!user) router.replace("/login");
-  }, [user, loading, router]);
+    else if (resolveUserRole(user) === "telecaller" && !telecallerTeamPathAllowed) {
+      router.replace("/telecalling");
+    }
+  }, [user, loading, router, telecallerTeamPathAllowed]);
 
   const handleLogout = async () => {
     await signOut(auth);
@@ -135,6 +145,12 @@ export default function AppLayout({ children }) {
     );
   }
 
+  if (resolveUserRole(user) === "telecaller" && !telecallerTeamPathAllowed) {
+    // Telecallers can use the Team Telecalling tab and Profile only.
+    // Never mount restricted Team dashboard / lead content while redirecting.
+    return <main className="flex min-h-screen items-center justify-center bg-slate-50 p-6 text-sm text-slate-500">Opening Telecalling Workspace...</main>;
+  }
+
   if (!hasRouteAccess) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
@@ -149,7 +165,8 @@ export default function AppLayout({ children }) {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex">
-      <ProductivityPulse />
+      {resolveUserRole(user) !== "telecaller" && <ProductivityPulse />}
+      <div className="fixed right-5 top-5 z-50 hidden md:block"><HandoffBell user={user}/></div>
 
       {/* ================= DESKTOP FLOATING ICON RAIL ================= */}
       <aside
@@ -310,6 +327,7 @@ export default function AppLayout({ children }) {
               {/* RIGHT */}
               {user && (
                 <div className="flex items-center gap-2">
+                  <HandoffBell user={user}/>
                   {user.isAdmin && (
                     <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-50 text-red-600">
                       Admin
