@@ -10,6 +10,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { canAccess, canAccessAdminModule, resolveUserRole } from "@/lib/rolePermissions";
 import { TELECALL_OUTCOMES, getTelecallOutcome, isAgentUnassigned, isAgentContactable } from "@/lib/telecallingCore.mjs";
 import { recordTelecall, handoffTelecalledAgent } from "@/lib/telecallingService";
+import { buildTelecallingActivityLists, followUpBucket, sortTelecallingList, telecallingTimeMs } from "@/lib/telecallingActivity.mjs";
 import VoiceNoteTextarea from "@/components/engagement/VoiceNoteTextarea";
 import { appendVoiceNote } from "@/lib/engagementVoiceText";
 import { getPreferredTelecallingContact, getTelecallingContacts, getTelecallingContactSearchText, hasTelecallingPhone, telephoneHref, emailHref } from "@/lib/telecallingContacts.mjs";
@@ -38,6 +39,11 @@ export default function TelecallingWorkspace() {
   const [handoffNotice, setHandoffNotice] = useState("");
   const [copyNotice, setCopyNotice] = useState("");
   const [search, setSearch] = useState("");
+  const [saveNotice, setSaveNotice] = useState("");
+  const [calledAgentIds, setCalledAgentIds] = useState([]);
+  const [activityError, setActivityError] = useState("");
+  const [followUpScope, setFollowUpScope] = useState("all");
+  const [now, setNow] = useState(() => new Date());
   const [phoneFilter, setPhoneFilter] = useState("with_phone");
   const [view, setView] = useState("queue");
   const [activeId, setActiveId] = useState("");
@@ -73,22 +79,52 @@ export default function TelecallingWorkspace() {
     }, err => console.warn("Telecaller handover status unavailable:", err?.message || err));
   }, [authLoading, isTelecaller, user?.uid]);
 
-  const queue = useMemo(() => agents.filter(a => isAgentUnassigned(a) && isAgentContactable(a)), [agents]);
+  // My Calls includes earlier calls, not only the user's most recent call for
+  // an agent. A query on the user's existing engagement records needs no new
+  // collection or composite index. If rules deny it, show an honest warning
+  // and fall back to the agent's last-caller snapshot.
+  useEffect(() => {
+    if (authLoading || !mayView || !user?.uid) return;
+    setCalledAgentIds([]);
+    setActivityError("");
+    return onSnapshot(query(collection(db, "engagements"), where("createdByUid", "==", user.uid)), snap => {
+      setCalledAgentIds([...new Set(snap.docs.map(d => d.data())
+        .filter(row => row.source === "telecalling" && row.agentId)
+        .map(row => String(row.agentId)))]);
+      setActivityError("");
+    }, err => setActivityError(`Full My Calls history is unavailable (${err?.code || "permission error"}). Showing agents where you are the last caller. Ask Admin to verify read access to your own Engagement records.`));
+  }, [authLoading, mayView, user?.uid]);
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const activity = useMemo(() => buildTelecallingActivityLists({
+    agents, userUid: user?.uid, calledAgentIds,
+    adminView: ["admin", "super_admin", "manager"].includes(resolveUserRole(user))
+  }), [agents, user?.uid, calledAgentIds, user]);
+  const { queue, called, followups, interested, excluded } = activity;
   const handed = useMemo(() => agents.filter(a =>
     !isAgentUnassigned(a) && !!a.telecallerHandoffByUid &&
     (!isTelecaller || a.telecallerHandoffByUid === user?.uid)
   ), [agents, isTelecaller, user?.uid]);
-  const source = view === "handed" ? handed : queue;
+  const source = ({ queue, called, followups, interested, handed, excluded })[view] || queue;
   const withPhoneCount = useMemo(() => source.filter(hasTelecallingPhone).length, [source]);
-  const filtered = useMemo(() => source.filter(a => {
+  const filtered = useMemo(() => sortTelecallingList(source.filter(a => {
     const hasPhone = hasTelecallingPhone(a);
     const phoneMatch = phoneFilter === "all" || (phoneFilter === "with_phone" ? hasPhone : !hasPhone);
-    return phoneMatch && getTelecallingContactSearchText(a).includes(search.trim().toLowerCase());
-  }).sort((a,b) => {
-    const dateA = a.telecallerLastCallAt?.toMillis?.() || 0;
-    const dateB = b.telecallerLastCallAt?.toMillis?.() || 0;
-    return dateA - dateB || nameOf(a).localeCompare(nameOf(b));
-  }), [source, search, phoneFilter]);
+    const dueMatch = view !== "followups" || followUpScope === "all" || followUpBucket(a, now) === followUpScope;
+    return phoneMatch && dueMatch && getTelecallingContactSearchText(a).includes(search.trim().toLowerCase());
+  }), view), [source, search, phoneFilter, view, followUpScope, now]);
+
+  const switchView = next => {
+    setView(next);
+    setActiveId("");
+    setFollowUpScope("all");
+    // All scheduled actions remain visible even when a number was removed.
+    setPhoneFilter(["followups", "called", "excluded"].includes(next) ? "all" : "with_phone");
+  };
   const agent = agents.find(item => item.id === activeId);
   const agentContacts = agent ? getTelecallingContacts(agent) : [];
   const preferredContact = agent ? getPreferredTelecallingContact(agent) : {};
@@ -102,9 +138,14 @@ export default function TelecallingWorkspace() {
     managerName: agent.assignedToName
   }) : "";
   const whatsappUrl = canPrepareMessage ? buildTelecallerHandoverWhatsAppUrl({ mobile: handoverPhone, message: handoverMessage }) : "";
-  const qualified = queue.filter(a => a.telecallerQualification === "qualified").length;
+  const qualified = interested.length;
   const untouched = queue.filter(a => !a.telecallerLastCallAt).length;
-  const dueNow = queue.filter(a => a.telecallerFollowUpAt && (a.telecallerFollowUpAt.toMillis?.() || new Date(a.telecallerFollowUpAt).getTime()) <= Date.now()).length;
+  const dueNow = followups.filter(a => (telecallingTimeMs(a.telecallerFollowUpAt) ?? Infinity) <= now.getTime()).length;
+  const followUpCounts = {
+    overdue: followups.filter(a => followUpBucket(a, now) === "overdue").length,
+    today: followups.filter(a => followUpBucket(a, now) === "today").length,
+    upcoming: followups.filter(a => followUpBucket(a, now) === "upcoming").length
+  };
 
   const chooseAgent = id => {
     setActiveId(id);
@@ -121,8 +162,27 @@ export default function TelecallingWorkspace() {
     event.preventDefault(); if (!agent || saving || voiceBusy) return;
     setSaving(true); setError("");
     try {
-      await recordTelecall({ agentId: agent.id, spocIndex: Number(form.spocIndex), outcome: form.outcome, summary: form.summary, followUpAt: form.followUpAt, user });
+      const savedOutcome = form.outcome;
+      const savedFollowUp = form.followUpAt;
+      await recordTelecall({ agentId: agent.id, spocIndex: Number(form.spocIndex), outcome: savedOutcome, summary: form.summary, followUpAt: savedFollowUp, user });
+      setCalledAgentIds(ids => [...new Set([...ids, String(agent.id)])]);
       setForm(prev => ({ ...prev, outcome: "", summary: "", followUpAt: "" }));
+      if (savedFollowUp || (["no_answer", "busy", "switched_off"].includes(savedOutcome) && telecallingTimeMs(agent.telecallerFollowUpAt) != null)) {
+        switchView("followups");
+        setSaveNotice(savedFollowUp
+          ? "Call saved. The scheduled follow-up is in Follow-ups. The agent remains unassigned until you complete a handover."
+          : "Call saved. The previous follow-up remains scheduled because the call did not connect. Open Follow-ups to reschedule the next attempt.");
+      } else if (["not_interested", "invalid_number"].includes(savedOutcome)) {
+        switchView("excluded");
+        setSaveNotice("Call saved. This agent is in Excluded and will not appear in the callable queue.");
+      } else if (savedOutcome === "interested") {
+        switchView("interested");
+        setSaveNotice("Interested call saved. The agent is in Interested - Pending Assignment and My Calls.");
+      } else {
+        switchView("called");
+        setSaveNotice("Call saved under My Calls. The agent remains unassigned and can be called again.");
+      }
+      setActiveId(agent.id);
     } catch (err) { setError(err.message || "Call could not be saved."); }
     finally { setSaving(false); }
   };
@@ -132,7 +192,9 @@ export default function TelecallingWorkspace() {
     setSaving(true); setError("");
     try {
       await handoffTelecalledAgent({ agentId: agent.id, assigneeUid: form.assigneeUid, reason: form.reason, user });
-      setView("handed");
+      switchView("handed");
+      setActiveId(agent.id);
+      setSaveNotice("");
       setHandoffNotice("Agent assigned successfully. The executive now has a new notification in My Handoffs. Review the separate WhatsApp introduction for the travel agent.");
       setCopyNotice("");
     } catch (err) { setError(err.message || "Could not assign travel agent."); }
@@ -156,7 +218,7 @@ export default function TelecallingWorkspace() {
       <header>
         <p className="text-xs font-semibold uppercase tracking-[.18em] text-blue-700">Relationship Activation</p>
         <h1 className="mt-1 text-2xl font-semibold text-slate-950">Telecalling Workspace</h1>
-        <p className="mt-1 text-sm text-slate-600">Call unassigned travel agents, record real connection outcomes, then hand interested partners to a Relationship / Lead Executive.</p>
+        <p className="mt-1 text-sm text-slate-600">Call unassigned agents, keep your own call history and scheduled follow-ups visible, and hand interested partners to a Relationship Executive.</p>
       </header>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
@@ -165,20 +227,29 @@ export default function TelecallingWorkspace() {
           { label:"Never called", value:untouched, icon:Clock3 },
           { label:"Interested - ready to hand over", value:qualified, icon:UserRoundCheck },
           { label:"Handed over", value:handed.length, icon:CheckCircle2 },
-          { label:"Follow-ups due", value:dueNow, icon:Clock3 }
+          { label:"Follow-ups due now", value:dueNow, icon:Clock3 }
         ].map(k => <div key={k.label} className="rounded-2xl border border-blue-100 bg-white p-4 shadow-sm"><k.icon size={18} className="text-blue-700"/><div className="mt-2 text-2xl font-bold text-slate-900">{k.value}</div><p className="mt-1 text-xs text-slate-500">{k.label}</p></div>)}
       </div>
 
       {error && <div role="alert" className="flex gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800"><AlertCircle size={17}/>{error}</div>}
       {handoffNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{handoffNotice}</div>}
+      {saveNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{saveNotice}</div>}
+      {activityError && <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">{activityError}</div>}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_390px]">
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex flex-col gap-3 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex gap-2">
-              <button onClick={()=>{setView("queue");setActiveId("");}} className={`rounded-lg px-3 py-2 text-sm font-semibold ${view==="queue"?"bg-blue-700 text-white":"bg-slate-100 text-slate-700"}`}>Call queue</button>
-              <button onClick={()=>{setView("handed");setActiveId("");}} className={`rounded-lg px-3 py-2 text-sm font-semibold ${view==="handed"?"bg-blue-700 text-white":"bg-slate-100 text-slate-700"}`}>Handed over</button>
-            </div>
+            <nav className="flex flex-wrap gap-2" aria-label="Telecalling activity views">
+              {[
+                ["queue", "Call queue", queue.length],
+                ["called", "My Calls", called.length],
+                ["followups", "Follow-ups", followups.length],
+                ["interested", "Interested - Pending Assignment", interested.length],
+                ["handed", "Handed over", handed.length],
+                ["excluded", "Excluded", excluded.length]
+              ].map(([key, label, count]) => <button key={key} type="button" onClick={() => switchView(key)} aria-current={view === key ? "page" : undefined}
+                className={`rounded-lg px-3 py-2 text-xs font-semibold sm:text-sm ${view === key ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>{label} ({count})</button>)}
+            </nav>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
               <label className="block text-xs font-semibold text-slate-600">Contact number
                 <select aria-label="Filter agents by contact number" className={`${inputClass} mt-1 sm:min-w-[185px]`} value={phoneFilter} onChange={e => { setPhoneFilter(e.target.value); setActiveId(""); }}>
@@ -190,7 +261,11 @@ export default function TelecallingWorkspace() {
               <label className="relative"><Search size={16} className="absolute left-3 top-3 text-slate-400"/><input aria-label="Search travel agents" className={`${inputClass} pl-9`} placeholder="Search agent, city or phone" value={search} onChange={e=>setSearch(e.target.value)} /></label>
             </div>
           </div>
-          <p className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-xs text-slate-600" role="status">Showing {filtered.length} of {source.length} agents · {withPhoneCount} with a saved callable number</p>
+          {view === "followups" && <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-blue-50/50 px-4 py-2" aria-label="Follow-up due date filters">
+            {[["all", "All scheduled", followups.length], ["overdue", "Overdue", followUpCounts.overdue], ["today", "Due today", followUpCounts.today], ["upcoming", "Upcoming", followUpCounts.upcoming]]
+              .map(([key, label, count]) => <button key={key} type="button" onClick={() => setFollowUpScope(key)} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${followUpScope === key ? "bg-blue-700 text-white" : "border border-blue-100 bg-white text-blue-700"}`}>{label} ({count})</button>)}
+          </div>}
+          <p className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-xs text-slate-600" role="status">Showing {filtered.length} of {source.length} agents · {withPhoneCount} with a saved callable number{view === "followups" ? " · Select a due agent to record the next call or reschedule" : ""}</p>
           <div className="max-h-[70vh] overflow-y-auto" aria-label="Telecalling agent list">
             {loading ? <div className="p-8 text-sm text-slate-500">Loading agents...</div> : !filtered.length ? <div className="p-8 text-sm text-slate-500">{phoneFilter === "with_phone" ? "No agents with a saved callable number match your search. Choose All agents or Missing phone number to review the other records." : phoneFilter === "missing_phone" ? "No agents missing a phone number match your search." : "No matching agents."}</div> : filtered.map(item => {
               const contact = getPreferredTelecallingContact(item);
@@ -198,6 +273,7 @@ export default function TelecallingWorkspace() {
               const location = item.city || item.address?.city || "—";
               const phoneLink = isAgentContactable(item) ? telephoneHref(contact.phone) : "";
               const emailLink = emailHref(contact.email);
+              const dueStatus = view === "followups" ? followUpBucket(item, now) : "none";
               return <div key={item.id} className={`border-b border-slate-100 p-4 transition hover:bg-blue-50 ${activeId === item.id ? "bg-blue-50" : "bg-white"}`}>
                 <button type="button" onClick={()=>chooseAgent(item.id)} aria-label={`View contact details for ${nameOf(item)}`} className="w-full rounded-lg text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">
                   <div className="flex items-start justify-between gap-3">
@@ -205,13 +281,14 @@ export default function TelecallingWorkspace() {
                       <p className="font-semibold text-slate-900">{nameOf(item)}</p>
                       <p className="mt-1 text-xs text-slate-500">{location} · {item.agentCode || "Travel agent"}</p>
                     </div>
-                    <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${item.telecallerQualification === "qualified" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{view === "handed" ? "Assigned" : item.telecallerQualification === "qualified" ? "Interested" : "Unassigned"}</span>
+                    <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${item.telecallerQualification === "qualified" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{!isAgentUnassigned(item) ? "Assigned" : dueStatus === "overdue" ? "Overdue" : dueStatus === "today" ? "Due today" : dueStatus === "upcoming" ? "Upcoming" : ["not_interested", "invalid_number"].includes(item.telecallerLastOutcome) ? "Excluded" : item.telecallerQualification === "qualified" ? "Interested" : "Unassigned"}</span>
                   </div>
                   <p className="mt-2 text-sm font-medium text-slate-800">Contact: {contact.name || "Not recorded"}{contactCount > 1 ? ` · ${contactCount} contact options` : ""}</p>
                   <p className="mt-1 text-sm text-slate-700">Phone: <span className="font-semibold text-slate-900">{contact.phone || "Not recorded"}</span>{contact.kind === "agency" ? " · Agency / office" : contact.kind === "extra" ? " · Additional contact" : ""}</p>
                   {contact.email && <p className="mt-1 break-all text-xs text-slate-600">Email: {contact.email}</p>}
-                  <p className="mt-2 text-xs text-slate-500">{item.telecallerLastOutcome ? `Last call: ${getTelecallOutcome(item.telecallerLastOutcome)?.label || item.telecallerLastOutcome}` : "Not contacted"} · {displayDate(item.telecallerLastCallAt)}{item.telecallerFollowUpAt ? ` · Follow-up: ${displayDate(item.telecallerFollowUpAt)}` : ""}</p>
-                  {view === "handed" && <p className="mt-1 text-xs font-medium text-blue-700">Assigned to {item.assignedToName || item.assignedToEmail || "team member"}{isTelecaller && (() => { const related = myHandovers.find(h => h.agentId === item.id); return related ? ` · ${handoffStatus(related) === "contacted" ? "First contact completed" : handoffStatus(related) === "accepted" ? "Accepted by executive" : "New assignment sent"}` : ""; })()}</p>}
+                  <p className="mt-2 text-xs text-slate-500">{item.telecallerLastOutcome ? `Last call: ${getTelecallOutcome(item.telecallerLastOutcome)?.label || item.telecallerLastOutcome}` : "Not contacted"} · {displayDate(item.telecallerLastCallAt)}{telecallingTimeMs(item.telecallerFollowUpAt) != null ? ` · Follow-up: ${new Date(telecallingTimeMs(item.telecallerFollowUpAt)).toLocaleString("en-IN", {day:"2-digit",month:"short",year:"numeric",hour:"numeric",minute:"2-digit"})}` : ""}</p>
+                  {(["followups", "called", "interested", "excluded"].includes(view)) && item.telecallerLastSummary && <p className="mt-1 line-clamp-2 text-xs text-slate-600">Last note: {item.telecallerLastSummary}</p>}
+                  {!isAgentUnassigned(item) && <p className="mt-1 text-xs font-medium text-blue-700">Assigned to {item.assignedToName || item.assignedToEmail || "team member"}{isTelecaller && (() => { const related = myHandovers.find(h => h.agentId === item.id); return related ? ` · ${handoffStatus(related) === "contacted" ? "First contact completed" : handoffStatus(related) === "accepted" ? "Accepted by executive" : "New assignment sent"}` : ""; })()}</p>}
                 </button>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   {phoneLink ? <a href={phoneLink} aria-label={`Call ${nameOf(item)} at ${contact.phone}`} className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50"><PhoneCall size={14}/> Call {contact.phone}</a> : <span className="text-xs text-slate-500">{!isAgentContactable(item) ? "Calling restricted by agent status" : "No valid phone number saved"}</span>}
@@ -239,9 +316,9 @@ export default function TelecallingWorkspace() {
                 {contact.email && <p className="mt-1 break-all text-xs text-slate-700">Email: {emailHref(contact.email) ? <a className="text-blue-700 underline" href={emailHref(contact.email)}>{contact.email}</a> : contact.email}</p>}
               </div>)}
             </section>
-            {view === "handed" ? <div className="space-y-4">
+            {!isAgentUnassigned(agent) ? <div className="space-y-4">
               <div className="rounded-xl bg-blue-50 p-3 text-sm text-blue-900">Assigned to <b>{agent.assignedToName || "team member"}</b>. The Relationship Executive will handle ongoing enquiries and follow-ups.</div>
-              {canPrepareMessage ? <section className="space-y-3 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3" aria-label="WhatsApp handover message">
+              {view === "handed" && canPrepareMessage ? <section className="space-y-3 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3" aria-label="WhatsApp handover message">
                 <div className="flex items-center gap-2 text-sm font-semibold text-emerald-900"><MessageCircle size={17}/> WhatsApp relationship handover</div>
                 <p className="text-xs text-slate-600">Review the message and choose the correct contact before opening WhatsApp.</p>
                 {agent.spocs?.length > 1 && <label className="block text-xs font-medium text-slate-600">Send to contact<select className={`${inputClass} mt-1`} value={form.spocIndex} onChange={e => { setForm(prev => ({ ...prev, spocIndex: e.target.value })); setCopyNotice(""); }}>
@@ -253,9 +330,9 @@ export default function TelecallingWorkspace() {
                 <button type="button" onClick={copyMessage} className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"><Copy size={15}/> Copy message</button>
                 {copyNotice && <p role="status" className="text-xs text-slate-600">{copyNotice}</p>}
                 <p className="text-xs text-slate-500">This opens a prefilled WhatsApp chat. Press Send in WhatsApp. Opening the chat does not mean the message was sent.</p>
-              </section> : <p className="rounded-xl border border-amber-100 bg-amber-50 p-3 text-xs text-amber-900">WhatsApp handover is unavailable: confirm the assignment, the Relationship Manager's name and the agent's WhatsApp preference.</p>}
+              </section> : view === "handed" ? <p className="rounded-xl border border-amber-100 bg-amber-50 p-3 text-xs text-amber-900">WhatsApp handover is unavailable: confirm the assignment, the Relationship Manager's name and the agent's WhatsApp preference.</p> : null}
             </div> : <>
-              {mayCall && <form onSubmit={saveCall} className="space-y-3 border-t border-slate-100 pt-4">
+              {mayCall && isAgentContactable(agent) && <form onSubmit={saveCall} className="space-y-3 border-t border-slate-100 pt-4">
                 <h3 className="text-sm font-semibold text-slate-900">Record call</h3>
                 {agent.spocs?.length > 1 && <label className="block text-xs font-medium text-slate-600">Contact person<select className={`${inputClass} mt-1`} value={form.spocIndex} onChange={e=>setForm({...form,spocIndex:e.target.value})}>{agent.spocs.map((s,i)=><option key={i} value={String(i)}>{s.name || `Contact ${i+1}`}</option>)}</select></label>}
                 <label className="block text-xs font-medium text-slate-600">Call outcome<select required className={`${inputClass} mt-1`} value={form.outcome} onChange={e=>setForm({...form,outcome:e.target.value})}><option value="">Select outcome</option>{TELECALL_OUTCOMES.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select></label>
@@ -266,10 +343,12 @@ export default function TelecallingWorkspace() {
                     onBusyChange={setVoiceBusy}
                     placeholder="What did the agent say? Destination interest, requirements, objections..." />
                 </div>
-                <label className="block text-xs font-medium text-slate-600">Follow-up date (optional)<input type="datetime-local" className={`${inputClass} mt-1`} value={form.followUpAt} onChange={e=>setForm({...form,followUpAt:e.target.value})}/></label>
+                <label className="block text-xs font-medium text-slate-600">Next follow-up date and time {form.outcome === "follow_up" ? "(required)" : "(optional)"}<input type="datetime-local" required={form.outcome === "follow_up"} className={`${inputClass} mt-1`} value={form.followUpAt} onChange={e=>setForm({...form,followUpAt:e.target.value})}/></label>
+                <p className="text-xs leading-5 text-slate-500">Saving a dated call adds it to Follow-ups, even without assignment. A subsequent connected call without a new date closes the earlier reminder; no answer or busy without a new date keeps the existing reminder.</p>
                 <button disabled={saving || voiceBusy} className={`${buttonClass} w-full`} type="submit">{saving?<Loader2 size={16} className="animate-spin"/>:<PhoneCall size={16}/>} Save call</button>
               </form>}
-              {mayAssign && <form onSubmit={handoff} className="space-y-3 border-t border-slate-100 pt-4"><h3 className="text-sm font-semibold text-slate-900">Handover to team</h3><p className="text-xs text-slate-500">Available after a successful connected call with an interested agent. Existing assignments cannot be overwritten here.</p><label className="block text-xs font-medium text-slate-600">Relationship / Lead Executive<select className={`${inputClass} mt-1`} required value={form.assigneeUid} onChange={e=>setForm({...form,assigneeUid:e.target.value})}><option value="">Select team member</option>{executives.map(u=><option key={u.id} value={u.id}>{u.name || u.displayName || u.email}</option>)}</select></label><label className="block text-xs font-medium text-slate-600">Handover note<input className={`${inputClass} mt-1`} required value={form.reason} onChange={e=>setForm({...form,reason:e.target.value})} placeholder="Interested in Dubai, follow up next week" /></label><button disabled={saving || agent.telecallerQualification !== "qualified" || !executives.length} className={`${buttonClass} w-full`} type="submit"><UserRoundCheck size={16}/> Assign qualified agent</button></form>}
+              {mayAssign && isAgentContactable(agent) && <form onSubmit={handoff} className="space-y-3 border-t border-slate-100 pt-4"><h3 className="text-sm font-semibold text-slate-900">Handover to team</h3><p className="text-xs text-slate-500">Available after a successful connected call with an interested agent. Existing assignments cannot be overwritten here.</p><label className="block text-xs font-medium text-slate-600">Relationship / Lead Executive<select className={`${inputClass} mt-1`} required value={form.assigneeUid} onChange={e=>setForm({...form,assigneeUid:e.target.value})}><option value="">Select team member</option>{executives.map(u=><option key={u.id} value={u.id}>{u.name || u.displayName || u.email}</option>)}</select></label><label className="block text-xs font-medium text-slate-600">Handover note<input className={`${inputClass} mt-1`} required value={form.reason} onChange={e=>setForm({...form,reason:e.target.value})} placeholder="Interested in Dubai, follow up next week" /></label><button disabled={saving || agent.telecallerQualification !== "qualified" || !executives.length} className={`${buttonClass} w-full`} type="submit"><UserRoundCheck size={16}/> Assign qualified agent</button></form>}
+              {!isAgentContactable(agent) && <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">This agent is excluded from further Telecalling. The saved call remains visible in My Calls and Excluded for audit.</p>}
             </>}
           </div>}
         </aside>
